@@ -6,18 +6,19 @@ editors:
   - Bruno Martins <bruno.martins@algorand.foundation>
   - Michael Feher <michael.feher@algorand.foundation>
   - Marc Vanlerberghe <marc@algorand.foundation>
+  - Mohammad Ghiasi <emg110@goplausible.com>
 created: 2026-04-01
 ---
 
 ## Abstract
 
-This specification defines the **AC2 (Agentic Communication and Control) Protocol**, a peer-to-peer authenticated messaging system designed for secure communication between users and AI agents. AC2 enables human-in-the-loop digital signing operations, where agents can request signatures from users, who validate and approve through their own wallet or application, with signatures then delegated back to the agent for continued operations.
+This specification defines the **AC2 (Agentic Communication and Control) Protocol**, a peer-to-peer authenticated messaging system designed for secure communication between users and AI agents. The core protocol covers human-in-the-loop signing — agents request signatures from users, who validate and approve through their own wallet or application, with signatures then returned to the agent. The agent itself holds no keys and never sees key material; key custody for the agent's own identity lives in the agent's tooling (e.g., agent-internal tools, MCP tools, or OWS wallet toolings). Additional capabilities such as autonomous operation under pre-authorized bounds are defined as separate extensions to this core (see **Extensions** below).
 
 AC2 uses **Liquid Auth** as its transport mechanism - an authenticated peer-to-peer connection establishment protocol that leverages FIDO2/WebAuthn and WebRTC DataChannels to create sovereign, end-to-end encrypted communication channels between controllers (users) and agents. Unlike traditional messaging systems, AC2 does not rely on centralized message relay servers; instead, it establishes direct P2P connections through a signaling service that facilitates the initial handshake.
 
-The protocol supports both real-time streaming for AI interactions (voice, text, with live statistics) and request/response patterns for discrete operations. AC2 uses **DIDComm-compliant message formats** [[didcomm-messaging](https://identity.foundation/didcomm-messaging/spec/)], enabling interoperability with existing decentralized identity infrastructure while extending the protocol for real-time streaming use cases.
+The protocol supports both real-time streaming for AI interactions (voice, text, or video from the Controller to the agent; voice, text, or file artifacts back from the agent) and request/response patterns for discrete operations. AC2 uses **DIDComm-compliant message formats** [[didcomm-messaging](https://identity.foundation/didcomm-messaging/spec/)], enabling interoperability with existing decentralized identity infrastructure while extending the protocol for real-time streaming use cases.
 
-Authentication leverages Decentralized Identifiers (DIDs) with Passkey-based credentials, providing phishing-resistant security without passwords. AC2 is use-case agnostic, supporting web3 workflows (x402 payments), code signing (git commits), document signatures, and any other digital signing operation where the user holds the keys.
+Authentication leverages Decentralized Identifiers (DIDs) with Passkey-based credentials, providing phishing-resistant security without passwords. AC2 is use-case agnostic, supporting web3 workflows (x402 payments, MPP machine payments — both `charge` and `session` intents), code signing (git commits), document signatures, and any other digital signing operation where the signing key is held by the user and the signature is requested per-operation. Operations on keys held by the agent's tooling, including autonomous operation within pre-authorized bounds, are defined by separate AC2 extensions.
 
 ## Status of This Document
 
@@ -37,29 +38,31 @@ Current messaging systems for AI agent interaction (WhatsApp, Telegram, email) w
 
 1. **Cryptographic identity verification** - No way to verify agent authenticity
 2. **Human-in-the-loop signing** - Users must fully trust agents with private keys
-3. **Standardized delegation** - No protocol for temporary, revocable authority
+3. **Standardized capability grants** - No protocol for temporary, revocable authority
 4. **Streaming with authentication** - Real-time AI responses lack proper auth
 
 AC2 addresses these gaps by providing a protocol where:
-- Agents CANNOT sign transactions autonomously
-- Users maintain control of their keys at all times
-- Agents request operations, users approve via familiar interfaces
+- Agents MUST NOT access the user's private keys and MUST NOT sign on the user's account
+- For operations requiring the user's key, agents request and the user approves via familiar interfaces
+- The agent itself holds no keys; key custody for the agent's own identity lives in the agent's tooling
+- Extensions to this core MAY introduce additional flows such as autonomous operation under pre-authorized bounds
 - All communication is authenticated and end-to-end encrypted
 
 ### Design Goals
 
-1. **Human-Centric Control**: Users must explicitly approve all signing operations, being signing on-the-fly or pre-signing for later use.
-2. **Passwordless Security**: Passkey-based authentication.
-3. **Real-Time Streaming**: Support for voice/text conversations with live statistics
-4. **Use-Case Agnostic**: Works with any digital signing operation
-5. **Privacy-Preserving**: End-to-end encryption, minimal metadata exposure
-6. **Interoperable**: Standard message formats, transport agnostic
+1. **Human-Centric Control**: Users retain control over their own keys and over the authority granted to agents. Control is exercised either per-operation — approving each signing request — or via bounded pre-authorization that can be revoked at any time.
+2. **Decentralized Identity**: Both Controller and Agent are identified by W3C Decentralized Identifiers (DIDs) — verifiable, portable, and not tied to any centralized identity provider.
+3. **Passwordless Security**: Passkey-based authentication.
+4. **Real-Time Streaming**: Support for voice / text / video input from the Controller and voice / text / file artifact output from the agent, with live statistics
+5. **Use-Case Agnostic**: Works with any digital signing operation
+6. **Privacy-Preserving**: End-to-end encryption, minimal metadata exposure
+7. **Interoperable**: Standard message formats, transport agnostic
 
 ### Relationship to Other Protocols
 
 | Protocol | Relationship to AC2 |
 |----------|---------------------|
-| A2A (Agent2Agent) | No direct relationship; AC2 focuses on owner-agent communication |
+| A2A (Agent2Agent) | Not in core; supported via the [AC2 A2A Extension](ac2-ext-a2a.md), which integrates A2A patterns onto AC2 transport |
 | MCP (Model Context Protocol) | No direct relationship; AC2 operates at the transport/authentication layer |
 | **DIDComm** | **AC2 uses DIDComm v2.0 message format** for plaintext messages, enabling interoperability with existing decentralized identity infrastructure |
 | WebAuthn | AC2 uses Liquid Auth which extends FIDO2/WebAuthn with the Liquid Extension |
@@ -69,14 +72,25 @@ AC2 addresses these gaps by providing a protocol where:
 
 *This section is non-normative.*
 
-**AI Chat with Voice**: User speaks to agent, agent streams back text/voice response with real-time token usage statistics.
+**AI Chat with Voice / Video**: User streams voice or video to the agent; agent streams back a text, voice, or file-artifact response with real-time token usage statistics.
 
 **x402 Payment Flow**:
 1. Agent identifies need to pay for API access
 2. Agent sends signing request to user
 3. User reviews payment details in wallet app
-4. User signs requests and the signature is delegated back to agent
+4. User signs the request and the signature is returned to the agent
 5. Agent completes payment with user's signature
+
+**MPP Charge (one-off payment — HTTP Payment Authentication Scheme, `charge` intent)**:
+1. Agent makes a request to a paid resource
+2. Server responds with `402 Payment Required` carrying an MPP challenge for the `charge` intent (e.g., the `algorand` payment method — see draft-algorand-charge)
+3. Agent forwards the payment authorization to the user for signing (Signature Request pattern); the user signs and the signature is returned to the agent
+4. Agent submits the signed transaction
+
+**MPP Session (metered / streaming — HTTP Payment Authentication Scheme, `session` intent)**:
+1. Agent makes a request to a metered API (e.g., LLM inference, streaming data)
+2. Server responds with `402 Payment Required` carrying an MPP challenge for the `session` intent (e.g., the `algorand` payment method — see draft-algorand-session)
+3. Agent forwards the channel-open authorization to the user for signing (Signature Request pattern); the user signs the deposit transaction group, the signature is returned to the agent, and the agent presents vouchers per metered unit
 
 **Git Commit Signing**:
 1. Agent prepares code changes
@@ -85,7 +99,9 @@ AC2 addresses these gaps by providing a protocol where:
 4. User signs with his GPG Key, agent receives signature
 5. Agent pushes signed commit
 
-`note`: __The above Git examples requires a special GPG bridge program to forward signing requests from the agent to the user's wallet, which is outside the scope of this protocol but can be implemented using AC2's signing delegation capabilities.__
+`note`: __The above Git example requires a special GPG bridge program to forward signing requests from the agent to the user's wallet. The bridge itself is outside the scope of this protocol but can be implemented using AC2's signature-request flow.__
+
+Use cases requiring autonomous payments or asset transfers (background payments, metered streaming with off-chain vouchers, scheduled transfers) are covered by the [**AC2 Pre-Authorized Operations Extension**](ac2-ext-pre-authorized.md).
 
 ## Conformance
 
@@ -111,13 +127,17 @@ graph LR;
 
 ### Trust Model
 
+**Human-in-the-loop signing** — agent requests, user signs on their own key:
+
 ```mermaid
 graph TD;
     User -- "gives pubkey / DID" --> Agent;
-    Agent -- "requests signatures" --> User;
+    Agent -- "requests signatures on user's key" --> User;
     User -- "signs with private key" --> User;
     User -- "returns signature" --> Agent;
 ```
+
+Agents MUST NOT hold keys. Keys for the agent's own identity are held by the agent's tooling (e.g., agent-internal tools, MCP tools, or OWS wallet toolings); the agent invokes tool calls and the tooling performs any signing the agent's tooling is configured to perform.
 
 **Controller Components**:
 - **Wallet/Identity Manager**: Liquid Auth-compatible wallet with FIDO2/WebAuthn support
@@ -129,36 +149,40 @@ graph TD;
 **Agent Components**:
 - **Signaling Server**: Liquid Auth service for connection establishment
 - **Request Builder**: Constructs signing requests with context
-- **Delegation Handler**: Receives approved signatures from Controller
+- **Signature Response Handler**: Receives issued signatures from Controller
 - **AC2 Client**: Processes AC2 messages over DataChannel
 
 **Liquid Auth Infrastructure**:
-- **Signaling Server**: WebSocket server for initial handshake (Redis/WebSockets)
+- **Signaling Server**: WebSocket server for initial handshake. The message-relay and room backing is an implementation choice (e.g., Redis pub/sub, Cloudflare Durable Objects, in-memory for single-node deployments, or equivalent).
 - **FIDO2 Server**: Handles WebAuthn attestation and assertion
 - **No Message Relay**: Messages flow directly over WebRTC DataChannel
 
 ### Communication Patterns
 
-**Pattern 1: Streaming (for AI Chat)**
+The core protocol defines two named communication patterns: **Streaming** and **Signature Request**. Pattern names are the canonical identifiers used throughout this specification and in agent configuration materials. Extensions MAY define additional patterns and MUST advertise them via DIDComm `discover-features/2.0`.
+
+**Streaming (for AI Chat)**
 ```
-Controller ──► Agent:     Stream Request (voice/text)
-Controller ◄── Agent:     Stream Response (tokens with metadata)
+Controller ──► Agent:     Stream Request (voice / text / video)
+Controller ◄── Agent:     Stream Response (text, voice, or file artifact)
                           ├─ Content chunks
                           ├─ Usage statistics
                           └─ End-of-stream marker
 ```
 
-**Pattern 2: Signing Delegation (for x402, git, documents)**
+**File artifacts**: when the agent produces a file as part of a response (generated document, image, code file, report, etc.), it is delivered as a DIDComm attachment on the relevant response message. Large files MAY be sent as binary DataChannel messages per the WebRTC DataChannel Transport section. Files are not streamed as part of the Streaming token stream — they are discrete artifacts attached to messages.
+
+**Signature Request (for operations on the Controller's keys — x402 with user's wallet, git, documents)**
 ```
-Agent ──► Controller:     Signing Request
+Agent ──► Controller:     Signature Request
          (with context: amount, recipient, purpose)
          
 Controller:               Review & Approve (via Passkey auth)
 
-Controller ──► Agent:      Delegated Signature
-                          (with constraints: expiry, scope)
+Controller ──► Agent:      Issued Signature
+                          (bound to this specific request; single-use)
 
-Agent:                    Execute operation with delegated signature
+Agent:                    Execute operation with the issued signature
 Agent ──► Controller:     Receipt/Confirmation
 ```
 
@@ -166,16 +190,13 @@ Agent ──► Controller:     Receipt/Confirmation
 
 AC2 assumes a **semi-trusted Agent model**:
 - Agents are authenticated (via DID + Passkey)
-- Agents CANNOT access Controller's private keys
-- Agents MUST request all signatures
-- Controllers MUST review all signing operations
+- Agents MUST NOT access the Controller's private keys and MUST NOT sign on the Controller's account
+- For operations on the Controller's keys, Agents MUST request signatures from the Controller and Controllers MUST review each request
 - All communication is encrypted and authenticated
 
 ## Data Model
 
-It's a design goal that AC2 is compliant with [DIDComm message formats](https://identity.foundation/didcomm-messaging/spec). AC2 messages MUST be DIDComm v2.0 compliant, with extensions for streaming and signing delegation use cases.
-
-In order to avoid repeating the entire DIDComm specification, this section will only highlight the key aspects of the message structure relevant to AC2, with examples of how to structure messages for streaming and signing delegation.
+AC2 messages MUST be compliant with [DIDComm v2.0 message formats](https://identity.foundation/didcomm-messaging/spec), with extensions for streaming, signature requests, and capability grants.
 
 ### Examples
 
@@ -232,6 +253,8 @@ The following structure is based on DIDcommv2 message format, re-used for AC2 me
 
 #### AC2 Message Examples
 
+Capability discovery is handled on-demand via the `ac2/CapabilityList` message and DIDComm `discover-features/2.0`. Problems are reported via DIDComm `report-problem/2.0`.
+
 ##### Signing Request
 
 ```json
@@ -251,7 +274,7 @@ The following structure is based on DIDcommv2 message format, re-used for AC2 me
 }
 ```
 
-The *payload* field **MUST** be shown to the user in both it's raw form and in a human readable form (e.g., "Pay 0.5 ALGO to recipient XYZ for API access") before they approve the signing request.
+The `payload` field MUST be shown to the user in both its raw form and a human-readable form (e.g., "Pay 0.5 ALGO to recipient XYZ for API access") before the user approves the signing request.
 
 ##### Signing Response
 
@@ -284,6 +307,80 @@ The *payload* field **MUST** be shown to the user in both it's raw form and in a
   }
 }
 ```
+
+##### Capability List
+
+`ac2/CapabilityList` carries the list of AC2 capability identifiers the agent supports. The agent SHOULD push it at the start of a new session. Either party MAY request the peer's current list at any time via the pull form (empty body); recipients MUST respond with their current `CapabilityList`.
+
+Push form:
+
+```json
+{
+  "@context": ["https://ac2.io/v1"],
+  "type": "ac2/CapabilityList",
+  "from": "did:example:agent",
+  "to": ["did:example:user"],
+  "created_time": 1700000000,
+  "body": {
+    "capabilities": ["ac2/sign", "ac2-ext-pre-authorized/payment"]
+  }
+}
+```
+
+Pull form:
+
+```json
+{
+  "@context": ["https://ac2.io/v1"],
+  "type": "ac2/CapabilityList",
+  "from": "did:example:user",
+  "to": ["did:example:agent"],
+  "created_time": 1700000000,
+  "body": {}
+}
+```
+
+##### Get Capability
+
+`ac2/GetCapability` requests full metadata for a single capability ID. Used to discover details (description, version, defining spec, optional input/output schemas) about a capability listed in `CapabilityList`.
+
+Request:
+
+```json
+{
+  "@context": ["https://ac2.io/v1"],
+  "type": "ac2/GetCapability",
+  "from": "did:example:user",
+  "to": ["did:example:agent"],
+  "created_time": 1700000000,
+  "body": {
+    "id": "ac2-ext-pre-authorized/payment"
+  }
+}
+```
+
+Response (threaded via `thid` to the request):
+
+```json
+{
+  "@context": ["https://ac2.io/v1"],
+  "type": "ac2/GetCapability",
+  "thid": "<request id>",
+  "from": "did:example:agent",
+  "to": ["did:example:user"],
+  "created_time": 1700000010,
+  "body": {
+    "id": "ac2-ext-pre-authorized/payment",
+    "version": "1.0",
+    "source": "ac2-ext-pre-authorized/1.0",
+    "name": "Pre-authorized payment",
+    "description": "Execute a payment within pre-authorized bounds",
+    "spec": "https://ac2.io/specs/ac2-ext-pre-authorized.md"
+  }
+}
+```
+
+Response fields: `id`, `version`, `source` are REQUIRED. `name`, `description`, `spec` are SHOULD. Implementations MAY include `inputSchema` and `outputSchema` (JSON Schema) for richer discovery. Recipients MUST respond to a `GetCapability` request for any capability they advertise in their `CapabilityList`.
 
 ### Liquid Extension
 
@@ -341,8 +438,8 @@ const dataChannel = peerConnection.createDataChannel('ac2-v1', {
 dataChannel.onopen = () => {
   dataChannel.send(JSON.stringify({
     "@context": ["https://ac2.io/v1"],
-    "type": "ac2/SessionEstablish",
-    // ...
+    "type": "ac2/CapabilityList",
+    body: { capabilities: ["x402.pay", "mpp.charge"] }
   }));
 };
 ```
@@ -358,9 +455,43 @@ The signaling server facilitates the WebRTC handshake without accessing message 
 **Normative Requirements**:
 
 1. **DID Methods**: Implementations MUST support `did:key` per [[did-key](https://w3c-ccg.github.io/did-method-key/)] and SHOULD support `did:web`
-2. **Key Types**: Ed25519 keys REQUIRED for signatures; secp256k1 OPTIONAL for blockchain operations
+2. **Key Types**: Ed25519 keys REQUIRED for signatures; secp256k1 OPTIONAL for blockchain operations; post-quantum schemes such as `falcon-512` OPTIONAL
 3. **Resolution**: Implementations MUST resolve DIDs per [[did-resolution](https://w3c-ccg.github.io/did-resolution/)]
-4. **Discovery**: Agent DIDs MUST be discoverable via `.well-known/did.json` or equivalent
+4. **Discovery**: Agent DIDs MUST be discoverable via `.well-known/did.json` (for `did:web` DIDs) or `.well-known/did-configuration.json` per [[well-known-did-configuration](https://identity.foundation/.well-known/resources/did-configuration/)] (for any DID method, including `did:key`)
+
+### Agent DID Key Origin
+
+An agent's signing key MAY be produced in either of two ways:
+
+1. **Derived key** — the agent's keypair is deterministically derived from the Controller's seed via an HD scheme appropriate to the key type (e.g., BIP32-Ed25519 / [[ARC-52](https://github.com/algorandfoundation/ARCs/blob/main/ARCs/arc-0052.md)] for Ed25519, BIP32 for secp256k1). HD derivation applies only to key types for which a standard HD scheme exists.
+2. **Independent key** — the agent's keypair is generated freshly with no relationship to the Controller's seed.
+
+When derived, the agent DID Document MAY include a `keyOrigin` hint:
+
+```json
+"keyOrigin": {
+  "method": "arc52",
+  "derivationPath": "m/44'/283'/0'/0'/agent/0"
+}
+```
+
+Consumers MUST NOT rely on `keyOrigin` for trust decisions.
+
+### Capability Discovery
+
+An AC2-compliant agent responding to a DIDComm `discover-features/queries` message MUST include `ac2/capability-list` among the disclosed features. Agents MUST respond to a pull-form `ac2/CapabilityList` and to `ac2/GetCapability` requests as defined in the Data Model.
+
+#### Capability Identifier Namespacing
+
+Capability identifiers follow a three-tier namespacing convention:
+
+| Tier | Namespace pattern | Defined by | Example |
+|------|-------------------|-----------|---------|
+| **Core** | `ac2/<name>` | This specification | `ac2/sign` |
+| **Extension** | `<extension-shortname>/<name>` | An AC2 extension specification | `ac2-ext-pre-authorized/payment`, `ac2-ext-a2a/task.invoke` |
+| **Application** | `<reverse-domain>/<name>` | The deploying application | `com.example.research/data-fetch` |
+
+Reverse-domain naming for application capabilities ensures global uniqueness without a central registry; each domain owner controls their own namespace.
 
 ### Passkey Authentication
 
@@ -385,33 +516,26 @@ Controller                          Agent
      │◄── 4. Session Established ────│
 ```
 
+## Extensions
+
+AC2 is designed to be extended. Extensions add new communication patterns, message types, and behaviors on top of the core foundation (DID-based identity, Liquid Auth transport, DIDComm message format, Signature Request and Streaming patterns, capability discovery, plugin model).
+
+**Extension naming**: extension message types use the `ac2/` namespace and SHOULD include a JSON-LD context entry of the form `https://ac2.io/ext/<extension-name>/v<version>`.
+
+**Discovery**: extensions MUST advertise themselves via DIDComm `discover-features/2.0` using a feature identifier of the form `ac2-ext-<extension-name>/<version>`.
+
+**Layering**: extensions MAY define new patterns; MAY introduce new message types; MAY add fields to permit additional flows over Signature Request, Agent DID Key Origin, and Passkey Authentication; MUST NOT weaken the core invariants (in particular, an extension MUST NOT permit an agent to access or sign on the Controller's keys).
+
+**Fallback**: if a peer does not advertise an extension, parties using flows defined by that extension MUST fall back to the core Signature Request pattern (or refuse the operation).
+
+**Known extensions:**
+
+- [**AC2 Pre-Authorized Operations Extension**](ac2-ext-pre-authorized.md) (`ac2-ext-pre-authorized/1.0`) — adds the Pre-Authorized communication pattern, two scenarios (tooling-controlled account, on-chain vault), and the messages `AgentTopUpRequest`, `AgentCapabilityGrant`, `AgentSpendReceipt`. Scoped to payments and asset-transfer signing.
+- [**AC2 A2A (Agent-to-Agent) Extension**](ac2-ext-a2a.md) (`ac2-ext-a2a/1.0`) — translates the Google A2A protocol's AgentCard, task lifecycle, message parts, and streaming patterns into DIDComm messages over AC2 transport. Adds DID-based mutual agent authentication and W3C Verifiable Credential-based Owner Consent for agent-to-agent connections.
+
 ## Streaming Protocol
 
-AC2 supports real-time streaming using a hybrid DIDComm approach: stream initiation uses standard DIDComm messages, while stream chunks use optimized lightweight framing over the established WebRTC DataChannel.
-
-### Streaming Thread Model
-
-Streaming creates a **separate thread** from the initiating request:
-
-1. **Control Thread**: Contains the original request/response (e.g., Stream Request → Stream Response)
-2. **Stream Thread**: A new thread spawned by the agent for streaming content, linked via `pthid`
-
-### Stream Initiation
-
-Controller initiates streaming via a standard DIDComm message:
-
-```json
-{
-...
-}
-```
-
-### Privacy
-
-1. **Encryption**: All messages MUST be encrypted
-2. **Minimal Metadata**: Only necessary metadata in plaintext
-3. **No Persistent IDs**: Ephemeral session IDs, not persistent tracking
-4. **Selective Disclosure**: Controllers disclose only what's needed
+AC2 supports real-time streaming (see the Streaming pattern in Architecture Overview). Stream initiation uses a standard DIDComm message; stream chunks are then framed over the established WebRTC DataChannel. Streaming follows the DIDComm threading conventions (`thid` / `pthid`) — the stream spawns a child thread of the initiating request. Concrete stream-chunk framing is out of scope of this version and is expected to be profiled by implementations.
 
 ## Privacy Considerations
 
@@ -437,291 +561,142 @@ Controllers should implement:
 
 ## Agent Configuration for Digital Signatures
 
-This section describes how to configure AI agents to route ALL digital signature operations through the AC2 messaging protocol. This approach uses existing agent framework configuration mechanisms (such as `SOUL.md`, `AGENTS.md`, `SKILLS.md`, `MEMORY.md`, `IDENTITY.md`, and `USER.md`) and requires NO changes to agent frameworks themselves.
+This section applies to signing operations that require the Controller's key. Other operation classes (e.g., autonomous operation under pre-granted bounds) are defined by AC2 extensions.
 
-### Core Principle
+### Implementation Layer: AC2 Plugin on the Agent Framework
 
-When an agent requires a digital signature, it **MUST**:
+AC2 enforcement at the agent is realized as a **plugin** loaded by the host agent framework (e.g., Claude Code, OpenClaw). The plugin wires AC2 messages, detects signature events, intercepts operations, and injects the AC2 signing flow.
 
-1. Request the signature from the controller (user) via AC2 messaging
-2. Wait for controller approval and delegated signature
-3. Use ONLY the controller-provided signature
+A conforming AC2 plugin uses the enforcement mechanisms exposed by the host framework. These fall into four classes:
 
-### Framework Configuration Mechanisms
+1. **Rules / context / memory markdowns** — framework-specific guidance files read by the LLM (e.g., `CLAUDE.md`, `SOUL.md`, `MEMORY.md`).
+2. **Hooks** — pre/post event callbacks the framework exposes (e.g., pre-tool-use, post-message, user-prompt-submit, stop). Invoked regardless of LLM cooperation.
+3. **SDK plugin entry points** — typed function registration exposed by the framework's plugin SDK.
+4. **Skills** — capability definitions (typically `SKILLS.md` or equivalent).
 
-Agent frameworks provide various configuration files to define behavior. AC2 compliance is achieved through these existing mechanisms:
+### Framework Configuration Mechanisms (context-markdown class)
 
 | Mechanism | File/Location | Purpose |
 |-----------|---------------|---------|
 | **System Instructions** | `SOUL.md`, system prompt, character files | Core identity and constraints |
 | **Agent Manifest** | `AGENTS.md` | Behavior rules and message formats |
 | **Capability Definition** | `SKILLS.md`, tool schemas | Skill definitions with AC2 workflows |
-| **Memory/Context** | `MEMORY.md`, conversation history | State tracking |
+| **Memory/Context** | `MEMORY.md`, `CLAUDE.md`, conversation history | State tracking and project rules |
 | **Identity Declaration** | `IDENTITY.md`, agent cards | Compliance declaration |
 | **User Preferences** | `USER.md`, settings | Controller configuration |
 
-### AC2 Signing Flow
+### Core Principle
 
-Agents MUST be configured to follow this flow:
+When an agent requires a digital signature **on the Controller's key**, it **MUST**:
 
-```
-DETECT SIGNATURE NEED
-        ↓
-    STOP OPERATION
-        ↓
-CONSTRUCT AC2_SIGNING_REQUEST
-        ↓
-OUTPUT REQUEST TO FRAMEWORK
-        ↓
-ENTER WAIT STATE
-        ↓
-RECEIVE AC2_SIGNING_RESPONSE
-        ↓
-VALIDATE & PROCEED
-```
+1. Request the signature from the controller (user) via AC2 messaging
+2. Wait for controller approval and the issued signature
+3. Use ONLY the controller-provided signature
 
-### Request Construction
+The wire format for `ac2/SigningRequest` and `ac2/SigningResponse` is defined in the Data Model section.
 
-When signature is needed, agent MUST output:
+### Agent Key Provisioning
 
-```json
-{
-  "type": "ac2/SigningRequest",
-  "operation": "<SIGNATURE_TYPE>",
-  "payload": "<DATA_REQUIRING_SIGNATURE>",
-  "encoding": "base64" | "hex" | "utf8" | "cbor",
-  "description": "<HUMAN_READABLE_SUMMARY>",
-}
-```
+The keypair held by the agent's tooling is provisioned outside the AC2 wire protocol using one of the two methods defined in **Agent DID Key Origin** (Authentication section).
 
-Agent is expected to wait for the signing response. 
+#### AC2 KeyRequest / KeyResponse (OPTIONAL — HD-derived provisioning only)
 
-### Response Handling
+`ac2/KeyRequest` and `ac2/KeyResponse` are **OPTIONAL** messages. They are used only when (a) the Controller chooses HD-derived provisioning of the key held by the agent's tooling, and (b) the tooling supports receiving derived keys via AC2 rather than deriving locally.
 
-Agent MUST accept response format:
+When in use, the tooling MAY ask the Controller to derive a keypair at a specified HD path (e.g., BIP32-Ed25519 / [[ARC-52](https://github.com/algorandfoundation/ARCs/blob/main/ARCs/arc-0052.md)]) and deliver the resulting derived private key over AC2. `KeyRequest` MUST NOT be used for independently-generated keys and MUST NEVER be used to request the Controller's root key or any non-derived key.
+
+Origin and destination: the **agent's tooling** originates the request; the agent runtime forwards it over AC2 as a message. The matching response is routed by the plugin directly into the tooling — it MUST NOT be placed in the agent runtime's LLM-visible context.
+
+**KeyRequest** (tooling → Controller, via the agent over AC2):
 
 ```json
 {
-  "type": "ac2/SigningResponse",
-  "status": "approved" | "rejected",
-  "signature": "<SIGNATURE_DATA>",
-  "timestamp": "<ISO8601>"
-}
-```
-
-### Key Provisioning
-
-Agents MAY request public keys from the controller for identity purposes:
-
-```json
-{
+  "@context": ["https://ac2.io/v1"],
   "type": "ac2/KeyRequest",
-  "key_type": "ed25519" | "secp256k1" | "falcon-512"
-  "purpose": "<WHY_NEEDED>",
-  "for_operation": "<WHAT_OPERATION>"
+  "from": "did:example:agent",
+  "to": ["did:example:user"],
+  "body": {
+    "key_type": "ed25519" | "secp256k1" | "falcon-512",
+    "derivationPath": "m/44'/283'/0'/0'/agent/0",
+    "purpose": "<WHY_NEEDED>",
+    "for_operation": "<WHAT_OPERATION>"
+  }
 }
 ```
+
+**KeyResponse** (Controller → tooling, via the agent over AC2):
+
+```json
+{
+  "@context": ["https://ac2.io/v1"],
+  "type": "ac2/KeyResponse",
+  "from": "did:example:user",
+  "to": ["did:example:agent"],
+  "body": {
+    "status": "approved" | "rejected",
+    "derivationPath": "m/44'/283'/0'/0'/agent/0",
+    "key_type": "ed25519",
+    "material": "<BASE64_OR_ENCRYPTED_KEY_PAYLOAD>",
+    "publicKey": "<BASE64_PUBLIC_KEY>",
+    "reason": "<OPTIONAL_REJECTION_REASON>"
+  }
+}
+```
+
+**Normative constraints**:
+
+1. **Scope**: `KeyRequest` MUST only be used for HD-derived provisioning of a key to be installed in the agent's tooling. It MUST NOT be used to request the Controller's root key, an existing signing key, or any key not produced by fresh derivation at the requested path.
+2. **Confidentiality**: `material` in `KeyResponse` carries a private key. The AC2 transport (Liquid Auth WebRTC DTLS) provides the channel encryption. Implementations SHOULD additionally wrap `material` in an application-layer encryption keyed to the specific tooling (e.g., a session-bound symmetric key negotiated between Controller and tooling).
+3. **Runtime isolation**: The AC2 plugin MUST route `KeyResponse` directly to the tooling without placing `material` in the agent runtime's conversational context, logs, or memory. The agent runtime MUST NOT observe `material`.
+4. **Single-shot**: A `KeyResponse` delivers the derived key exactly once. Re-derivation requires a fresh `KeyRequest` at the same path (the Controller's seed produces the same key).
+5. **User consent**: The Controller MUST explicitly approve each `KeyRequest` via their wallet or key-management tool, with clear display of `derivationPath`, `purpose`, and `for_operation`.
 
 ### Framework-Specific Configuration Examples
 
-#### Example A: SOUL.md (Agent Core Identity)
+The markdown examples below are non-normative and show how a compliant AC2 plugin may declare its behavior through the host framework's context files. Concrete filenames vary per framework.
+
+#### CLAUDE.md (Behavior Rules)
 
 ```markdown
-# SOUL.md - Agent Soul Definition
+# CLAUDE.md - AC2 Behavior Rules
 
-## Core Identity
-I am an autonomous agent operating on behalf of my controller. I have access to 
-tools, data, and systems, but I DO NOT and CANNOT possess cryptographic signing keys.
+## Signing Policy
+For signing operations on the Controller's key, follow the **Signature
+Request** pattern: emit `ac2/SigningRequest`, wait for
+`ac2/SigningResponse`, and use only the issued single-use signature.
 
-## Fundamental Constraint
-**I have no private keys. I cannot sign anything.**
+## Prohibitions
+- MUST NOT possess, store, or observe private key material.
+- MUST NOT reuse a Signature Request signature for a different request.
 
-When ANY operation requires a digital signature:
-- SSH authentication to remote servers
-- GPG signing of git commits
-- x402 payment authorizations
-- Blockchain transaction signing
-- Document digital signatures
-- API request signing
-- ANY other cryptographic signing
-
-I MUST request the signature from my controller via AC2 protocol.
-
-## Signature Detection
-I recognize signature requirements when:
-- My reasoning includes words: "sign", "signature", "authenticate", "prove ownership"
-- I plan operations known to require signatures (git commit -S, x402 pay, SSH connect)
-- I encounter data formats matching signatures (base64 signatures, hex digests)
-- Any tool or function requests a "private_key" or "signature" parameter
-
-## Behavioral Flow
-```
-DETECT SIGNATURE NEED
-        ↓
-    STOP OPERATION
-        ↓
-CONSTRUCT AC2_SIGNING_REQUEST
-        ↓
-OUTPUT TO FRAMEWORK
-        ↓
-WAIT FOR USER RESPONSE
-        ↓
-PROCEED ONLY WITH SIGNATURE
+Extensions MAY add additional patterns and policies; consult the loaded
+extensions for their rules.
 ```
 
-## Absolute Prohibitions
-I MUST NEVER:
-- Cache or remember previous approvals
-
-## Core Mantra
-"The controller holds the keys. I am the executor, not the signer."
-```
-
-#### Example B: AGENTS.md (Behavior Rules)
+#### MEMORY.md (Session State)
 
 ```markdown
-# AGENTS.md - Agent Configuration
+# MEMORY.md - AC2 Session State
 
-## Digital Signature Policy
+## Pending Signing Requests
+Track active `ac2/SigningRequest` entries:
+`{ request_id, operation, created_at, timeout_at }`.
+Clear on response or timeout. Store no signature material.
 
-### Rule 1: Universal AC2 Requirement
-**EVERY digital signature operation MUST route through AC2.**
-
-This includes ALL signature types:
-- SSH key authentication
-- GPG commit signing and encryption
-- Git commit signatures
-- x402 payment authorizations
-- Blockchain transactions (any chain, any asset)
-- Document digital signatures (PDF, XML-DSig, etc.)
-- API request signing (HMAC, JWT, etc.)
-- Cryptographic attestations and proofs
-- ANY other operation requiring digital signatures
-
-**NO AUTO-APPROVAL.**
-
-### Rule 2: AC2 Request Format
-When signature is needed, output EXACTLY:
-```
-AC2_SIGNING_REQUEST: {
-  "type": "ac2/SigningRequest",
-  "operation": "<SIGNATURE_TYPE>",
-  "payload": "<BASE64_ENCODED_DATA>",
-  "encoding": "<ENCODING_SCHEME>",
-  "description": "<HUMAN_READABLE_DESCRIPTION>",
-  "context": "<WHY_THIS_IS_NEEDED>"
-}
+Extensions MAY add additional state categories (e.g., capability grant
+records, receipt logs).
 ```
 
-### Rule 3: Response Processing
-Use provided signature for operation
-
-### Rule 4: Key Provisioning
-Agent MAY request public keys from controller via AC2_KEY_REQUEST.
-```
-
-#### Example C: SKILLS.md (Capability Definitions)
+#### IDENTITY.md (Agent Identity)
 
 ```markdown
-# SKILLS.md - Agent Skills
+# IDENTITY.md - Agent Identity
 
-## Signature Delegation Skill
+- `did` — this agent's DID
+- `name` — human-readable name
+- `capabilities` — AC2 capability identifiers this agent supports
 
-### Description
-This skill enables the agent to delegate digital signing operations to the controller via AC2 protocol. It ensures that the agent can perform necessary operations while maintaining user control over all signatures.
-
-### Workflow
-1. Agent detects need for signature
-2. Agent constructs AC2_SIGNING_REQUEST with operation details
-3. Agent outputs request to framework
-4. Agent enters wait state for response
-5. Upon receiving AC2_SIGNING_RESPONSE:
-   - If approved, agent uses provided signature to proceed
-   - If rejected, agent aborts operation and logs rejection
-```
-
-#### Example D: MEMORY.md (State Tracking)
-
-```markdown
-# MEMORY.md - Agent Memory
-
-## AC2 Session State
-
-### Pending Signature Requests
-Track ACTIVE AC2 signing requests:
-```json
-{
-  "pending_signatures": [
-    {
-      "request_id": "<UUID>",
-      "operation": "<TYPE>",
-      "description": "<WHAT_IS_BEING_SIGNED>",
-      "status": "awaiting_controller_response",
-      "created_at": "<ISO8601>",
-      "timeout_at": "<ISO8601_PLUS_5MIN>"
-    }
-  ]
-}
-```
-Rules:
-- Only ONE pending signature at a time per task
-- Clear on timeout or response
-- Never store actual signature data here
-
-### Key Provisioning State
-Track provided public keys (identity only):
-```json
-{
-  "provisioned_keys": [
-    {
-      "key_type": "ssh-public" | "gpg-public" | "wallet-address",
-      "public_key": "<KEY_DATA>",
-      "provided_at": "<ISO8601>",
-      "note": "For identity only - signing still requires approval"
-    }
-  ]
-}
-```
-
-### Completed Signatures
-Log of processed signatures (metadata only):
-```json
-{
-  "signature_history": [
-    {
-      "request_id": "<UUID>",
-      "operation": "<TYPE>",
-      "status": "approved" | "rejected" | "timeout",
-      "completed_at": "<ISO8601>",
-      "note": "Signature not stored - only hash for audit"
-    }
-  ]
-}
-```
-Rules:
-- Store ONLY metadata (not actual signatures)
-- No action based on history (each request independent)
-
-### Important Memory Rules
-- NEVER store private keys, mnemonics, or secrets
-- NEVER cache signature approvals
-- NEVER use past approvals to justify new ones
-- Each signature request is INDEPENDENT
-```
-
-#### Example E: IDENTITY.md (Compliance Declaration)
-
-```markdown
-# IDENTITY.md - Agent Identity & Compliance
-
-## Agent Identity
-```json
-{
-  "name": "<AGENT_NAME>",
-  "version": "<VERSION>",
-  "did": "<AGENT_DID>",
-  "type": "AC2-compliant autonomous agent"
-}
+Capabilities are announced to the Controller via `ac2/CapabilityList`.
 ```
 
 ## References
@@ -731,6 +706,7 @@ Rules:
 - [[did-core](https://www.w3.org/TR/did-core/)] W3C. *Decentralized Identifiers (DIDs) v1.0*. W3C Recommendation. June 2022.
 - [[did-key](https://w3c-ccg.github.io/did-method-key/)] CCG. *The did:key Method v1.0*. W3C CCG Draft.
 - [[did-resolution](https://w3c-ccg.github.io/did-resolution/)] CCG. *DID Resolution v1.0*. W3C CCG Draft.
+- [[well-known-did-configuration](https://identity.foundation/.well-known/resources/did-configuration/)] DIF. *Well-Known DID Configuration*. DIF Spec.
 - [[webauthn-2](https://www.w3.org/TR/webauthn-2/)] W3C. *Web Authentication: An API for accessing Public Key Credentials Level 2*. W3C Recommendation.
 - [[didcomm-messaging](https://identity.foundation/didcomm-messaging/spec/)] DIF. *DIDComm Messaging Specification v2.0*. DIF Ratified Specification.
 - [[RFC2119](https://www.rfc-editor.org/rfc/rfc2119)] Bradner, S. *Key words for use in RFCs to Indicate Requirement Levels*. RFC 2119.
@@ -740,9 +716,14 @@ Rules:
 
 ### Informative References
 
+- [[caip-10](https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/caip-10.md)] CASA. *CAIP-10: Account ID Specification*. (chain-agnostic account identifier format)
 - [[x402](https://x402.org)] x402 Protocol. *Cross-Platform Payment Standard*.
+- [[mpp-httpauth-payment](https://datatracker.ietf.org/doc/draft-ietf-httpauth-payment/)] Moxey, J. *The "Payment" HTTP Authentication Scheme*. IETF Draft. (Machine Payment Protocol — defines the `charge` and `session` intents framework)
+- [[mpp-algorand-charge](https://datatracker.ietf.org/doc/)] Ghiasi, M. *Algorand Charge Intent for HTTP Payment Authentication (draft-algorand-charge)*. Independent Submission. (MPP `charge` intent — one-off payments on Algorand)
+- [[mpp-algorand-session](https://datatracker.ietf.org/doc/)] Ghiasi, M. *Algorand Session Intent for HTTP Payment Authentication (draft-algorand-session)*. Independent Submission. (MPP `session` intent — metered / streaming payments on Algorand)
 - [[a2a](https://github.com/google/A2A)] Google. *Agent2Agent Protocol*.
 - [[mcp](https://github.com/modelcontextprotocol)] Anthropic. *Model Context Protocol*.
+- [[ows](https://openwallet.sh/)] *Open Wallet Standard (OWS)*. GitHub: [open-wallet-standard](https://github.com/open-wallet-standard).
 - [[liquid-auth](https://github.com/algorandfoundation/liquid-auth)] Algorand Foundation. *Liquid Auth - Open Source P2P Authentication Service*.
 - [[webrtc](https://www.w3.org/TR/webrtc/)] W3C. *WebRTC: Real-Time Communication Between Browsers*.
 - [[fido2](https://fidoalliance.org/specs/fido-v2.0-ps-20190130/fido-client-to-authenticator-protocol-v2.0-ps-20190130.html)] FIDO Alliance. *Client to Authenticator Protocol (CTAP)*.
