@@ -12,13 +12,13 @@ created: 2026-04-01
 
 ## Abstract
 
-This specification defines the **AC2 (Agentic Communication and Control) Protocol**, a peer-to-peer authenticated messaging system designed for secure communication between users and AI agents. AC2 enables two classes of agent operations: (1) **human-in-the-loop signing**, where agents request signatures from users, who validate and approve through their own wallet or application, with signatures then returned to the agent; and (2) **pre-authorized autonomous operations**, where the agent acts within capabilities the user has granted in advance by invoking its tooling (e.g., agent-internal tools, MCP tools, or OWS wallet toolings) — the tooling produces signatures on keys it holds, not on the user's keys. In all cases the agent itself holds no keys and never sees key material. AC2 never delegates signatures — only capabilities (the right to perform specific intents).
+This specification defines the **AC2 (Agentic Communication and Control) Protocol**, a peer-to-peer authenticated messaging system designed for secure communication between users and AI agents. The core protocol covers human-in-the-loop signing — agents request signatures from users, who validate and approve through their own wallet or application, with signatures then returned to the agent. The agent itself holds no keys and never sees key material; key custody for the agent's own identity lives in the agent's tooling (e.g., agent-internal tools, MCP tools, or OWS wallet toolings). Additional capabilities such as autonomous operation under pre-authorized bounds are defined as separate extensions to this core (see **Extensions** below).
 
 AC2 uses **Liquid Auth** as its transport mechanism - an authenticated peer-to-peer connection establishment protocol that leverages FIDO2/WebAuthn and WebRTC DataChannels to create sovereign, end-to-end encrypted communication channels between controllers (users) and agents. Unlike traditional messaging systems, AC2 does not rely on centralized message relay servers; instead, it establishes direct P2P connections through a signaling service that facilitates the initial handshake.
 
 The protocol supports both real-time streaming for AI interactions (voice, text, or video from the Controller to the agent; voice, text, or file artifacts back from the agent) and request/response patterns for discrete operations. AC2 uses **DIDComm-compliant message formats** [[didcomm-messaging](https://identity.foundation/didcomm-messaging/spec/)], enabling interoperability with existing decentralized identity infrastructure while extending the protocol for real-time streaming use cases.
 
-Authentication leverages Decentralized Identifiers (DIDs) with Passkey-based credentials, providing phishing-resistant security without passwords. AC2 is use-case agnostic, supporting web3 workflows (x402 payments, MPP machine payments — both `charge` and `session` intents), code signing (git commits), document signatures, and any other digital signing operation — whether the signing key is held by the user and the signature is requested per-operation, or held by the agent's tooling and invoked within capabilities the user has granted in advance.
+Authentication leverages Decentralized Identifiers (DIDs) with Passkey-based credentials, providing phishing-resistant security without passwords. AC2 is use-case agnostic, supporting web3 workflows (x402 payments, MPP machine payments — both `charge` and `session` intents), code signing (git commits), document signatures, and any other digital signing operation where the signing key is held by the user and the signature is requested per-operation. Operations on keys held by the agent's tooling, including autonomous operation within pre-authorized bounds, are defined by separate AC2 extensions.
 
 ## Status of This Document
 
@@ -43,25 +43,26 @@ Current messaging systems for AI agent interaction (WhatsApp, Telegram, email) w
 
 AC2 addresses these gaps by providing a protocol where:
 - Agents MUST NOT access the user's private keys and MUST NOT sign on the user's account
-- Users retain unilateral control — either by approving each operation on-the-fly, or by granting bounded, revocable pre-authorization for the agent to invoke its tooling, which signs on keys the tooling holds (the agent itself holds no keys)
 - For operations requiring the user's key, agents request and the user approves via familiar interfaces
-- For pre-authorized autonomous operations, agents act within the agreed bounds and MUST emit a receipt for every operation
+- The agent itself holds no keys; key custody for the agent's own identity lives in the agent's tooling
+- Extensions to this core MAY introduce additional flows such as autonomous operation under pre-authorized bounds
 - All communication is authenticated and end-to-end encrypted
 
 ### Design Goals
 
 1. **Human-Centric Control**: Users retain control over their own keys and over the authority granted to agents. Control is exercised either per-operation — approving each signing request — or via bounded pre-authorization that can be revoked at any time.
-2. **Passwordless Security**: Passkey-based authentication.
-3. **Real-Time Streaming**: Support for voice / text / video input from the Controller and voice / text / file artifact output from the agent, with live statistics
-4. **Use-Case Agnostic**: Works with any digital signing operation
-5. **Privacy-Preserving**: End-to-end encryption, minimal metadata exposure
-6. **Interoperable**: Standard message formats, transport agnostic
+2. **Decentralized Identity**: Both Controller and Agent are identified by W3C Decentralized Identifiers (DIDs) — verifiable, portable, and not tied to any centralized identity provider.
+3. **Passwordless Security**: Passkey-based authentication.
+4. **Real-Time Streaming**: Support for voice / text / video input from the Controller and voice / text / file artifact output from the agent, with live statistics
+5. **Use-Case Agnostic**: Works with any digital signing operation
+6. **Privacy-Preserving**: End-to-end encryption, minimal metadata exposure
+7. **Interoperable**: Standard message formats, transport agnostic
 
 ### Relationship to Other Protocols
 
 | Protocol | Relationship to AC2 |
 |----------|---------------------|
-| A2A (Agent2Agent) | No direct relationship; AC2 focuses on owner-agent communication |
+| A2A (Agent2Agent) | Not in core; supported via the [AC2 A2A Extension](ac2-ext-a2a.md), which integrates A2A patterns onto AC2 transport |
 | MCP (Model Context Protocol) | No direct relationship; AC2 operates at the transport/authentication layer |
 | **DIDComm** | **AC2 uses DIDComm v2.0 message format** for plaintext messages, enabling interoperability with existing decentralized identity infrastructure |
 | WebAuthn | AC2 uses Liquid Auth which extends FIDO2/WebAuthn with the Liquid Extension |
@@ -83,19 +84,13 @@ AC2 addresses these gaps by providing a protocol where:
 **MPP Charge (one-off payment — HTTP Payment Authentication Scheme, `charge` intent)**:
 1. Agent makes a request to a paid resource
 2. Server responds with `402 Payment Required` carrying an MPP challenge for the `charge` intent (e.g., the `algorand` payment method — see draft-algorand-charge)
-3. Flow matches x402: human-in-the-loop signing (**Signature Request** pattern), or pre-authorized signing through the agent's tooling (**Pre-Authorized** pattern)
-4. Agent submits the signed transaction and emits an AC2 receipt
-
-`note`: __The MPP `charge` intent and x402 serve the same role — a single on-chain settlement per request. An AC2 agent can handle either with the same patterns.__
+3. Agent forwards the payment authorization to the user for signing (Signature Request pattern); the user signs and the signature is returned to the agent
+4. Agent submits the signed transaction
 
 **MPP Session (metered / streaming — HTTP Payment Authentication Scheme, `session` intent)**:
 1. Agent makes a request to a metered API (e.g., LLM inference, streaming data)
 2. Server responds with `402 Payment Required` carrying an MPP challenge for the `session` intent (e.g., the `algorand` payment method — see draft-algorand-session)
-3. For human-in-the-loop use: agent forwards the channel-open authorization to the user for signing (**Signature Request** pattern); the user signs the deposit transaction group, the signature is returned to the agent, and the agent presents vouchers per metered unit
-4. For pre-authorized use: the user has pre-funded a channel or vault in advance (**Pre-Authorized** pattern); the agent opens the MPP session and signs incremental vouchers through its tooling without round-tripping the user
-5. Agent emits receipts over AC2 for the session open and, in the pre-authorized case, for each voucher issuance
-
-`note`: __MPP's session/voucher model is a particularly natural fit for pre-authorized autonomous operation — the pre-funded channel is the authority bound, and off-chain vouchers are the incremental claims against it.__
+3. Agent forwards the channel-open authorization to the user for signing (Signature Request pattern); the user signs the deposit transaction group, the signature is returned to the agent, and the agent presents vouchers per metered unit
 
 **Git Commit Signing**:
 1. Agent prepares code changes
@@ -106,19 +101,7 @@ AC2 addresses these gaps by providing a protocol where:
 
 `note`: __The above Git example requires a special GPG bridge program to forward signing requests from the agent to the user's wallet. The bridge itself is outside the scope of this protocol but can be implemented using AC2's signature-request flow.__
 
-**Autonomous API Payment (Pre-Authorized)**:
-1. User grants the agent a bounded, revocable payment authority — either by topping up an account controlled by the agent's tooling (agentic-tooling-controlled account), or by depositing into a smart contract vault bound to the agent's account with a cap and validity window
-2. Agent encounters an x402 Payment Required response from a paid API
-3. Agent causes the payment to be signed and submitted using the account or vault it has authority over — no user round-trip
-4. Agent emits an AC2 receipt to the user describing the payment
-5. If the authorization is exhausted or revoked, the agent either falls back to the human-in-the-loop flow or halts
-
-**Autonomous Data Signing (Pre-Authorized)**:
-1. The agent's tooling exposes a signing capability (e.g., a JWT signer, a non-payment Algorand transaction signer, an attestation signer) whose scope has been configured by the user in advance
-2. Agent invokes the tooling, which signs the artifact, without user round-trip
-3. Agent emits an AC2 receipt describing the operation
-
-Operations outside the tooling's pre-configured scope fall back to the human-in-the-loop flow.
+Use cases requiring autonomous payments or asset transfers (background payments, metered streaming with off-chain vouchers, scheduled transfers) are covered by the [**AC2 Pre-Authorized Operations Extension**](ac2-ext-pre-authorized.md).
 
 ## Conformance
 
@@ -154,18 +137,7 @@ graph TD;
     User -- "returns signature" --> Agent;
 ```
 
-**Pre-authorized autonomous operation** — agent invokes tooling that signs within bounds granted by the user:
-
-```mermaid
-graph TD;
-    User -- "grants bounded authority (top-up or vault deposit)" --> AgentTooling;
-    Agent -- "invokes tool call for operation within bounds" --> AgentTooling;
-    AgentTooling -- "signs with a key held by the tooling" --> AgentTooling;
-    Agent -- "emits receipt" --> User;
-    User -- "may revoke at any time" --> AgentTooling;
-```
-
-Agents MUST NOT hold keys. Keys are held by the agent's tooling (e.g., agent-internal tools, MCP tools, or OWS wallet toolings); the agent invokes tool calls and the tooling performs any signing.
+Agents MUST NOT hold keys. Keys for the agent's own identity are held by the agent's tooling (e.g., agent-internal tools, MCP tools, or OWS wallet toolings); the agent invokes tool calls and the tooling performs any signing the agent's tooling is configured to perform.
 
 **Controller Components**:
 - **Wallet/Identity Manager**: Liquid Auth-compatible wallet with FIDO2/WebAuthn support
@@ -187,7 +159,7 @@ Agents MUST NOT hold keys. Keys are held by the agent's tooling (e.g., agent-int
 
 ### Communication Patterns
 
-AC2 defines three named communication patterns. Pattern names are the canonical identifiers used throughout this specification and in agent configuration materials. Numbers (1, 2, 3) are ordering hints only and MUST NOT be used as identifiers in agent instructions.
+The core protocol defines two named communication patterns: **Streaming** and **Signature Request**. Pattern names are the canonical identifiers used throughout this specification and in agent configuration materials. Extensions MAY define additional patterns and MUST advertise them via DIDComm `discover-features/2.0`.
 
 **Streaming (for AI Chat)**
 ```
@@ -214,32 +186,12 @@ Agent:                    Execute operation with the issued signature
 Agent ──► Controller:     Receipt/Confirmation
 ```
 
-**Pre-Authorized (for background payments, metered services, tool-scoped data signing)**
-```
-[Prior]  Controller has granted bounded, revocable authority:
-         - Scenario A: Controller topped up an account the agent's
-           tooling controls (agentic-tooling-controlled account)
-         - Scenario B: Controller deposited into an on-chain vault
-           bound to the agent's account with a cap + validity window
-         - For non-payment signing: Controller configured the agent's
-           tooling with signing capabilities scoped in advance
-
-Agent:                    Invoke tooling to sign and execute the
-                          operation within the pre-authorized bounds
-                          (no user round-trip)
-
-Agent ──► Controller:     Spend Receipt / Operation Receipt
-                          (required for every operation)
-```
-
 ### Security Model
 
 AC2 assumes a **semi-trusted Agent model**:
 - Agents are authenticated (via DID + Passkey)
 - Agents MUST NOT access the Controller's private keys and MUST NOT sign on the Controller's account
 - For operations on the Controller's keys, Agents MUST request signatures from the Controller and Controllers MUST review each request
-- For pre-authorized autonomous operations, Agents act only within the bounds the Controller has granted in advance, signing on keys held by the agent's tooling; Agents MUST emit a receipt for every such operation
-- Controllers retain unilateral revocation of pre-authorized bounds at any time
 - All communication is encrypted and authenticated
 
 ## Data Model
@@ -356,20 +308,9 @@ The `payload` field MUST be shown to the user in both its raw form and a human-r
 }
 ```
 
-#### Pre-Authorized Operation Messages
-
-AC2 recognizes two scenarios in which the Controller may grant the agent bounded authority to act autonomously:
-
-- **Scenario A — Agentic-tooling-controlled account.** The agent has authority over an account whose keys are held by the agent's tooling. The Controller funds this account by responding to a wallet URI exchanged over AC2. The enforcement of the cap is off-chain: the Controller tops up only what they are willing to grant.
-- **Scenario B — On-chain vault.** The Controller deposits into a smart contract with a cap, validity window, and the agent's account bound as the sole authorized spender. The contract's design, methods, and on-chain enforcement are defined by a chain-specific companion specification and are out of scope for AC2.
-
-For non-payment data signing, the extent of autonomous authority is defined by the pre-configured signing capabilities exposed by the agent's tooling.
-
-`ac2/AgentSpendReceipt` MUST be sent by the agent for every pre-authorized operation.
-
 ##### Capability List
 
-`ac2/CapabilityList` carries the list of AC2 capability identifiers the agent supports. It is sent by the agent at the start of a session (push form) and MAY be requested by either party at any time (pull form, empty body).
+`ac2/CapabilityList` carries the list of AC2 capability identifiers the agent supports. The agent SHOULD push it at the start of a new session. Either party MAY request the peer's current list at any time via the pull form (empty body); recipients MUST respond with their current `CapabilityList`.
 
 Push form:
 
@@ -381,7 +322,7 @@ Push form:
   "to": ["did:example:user"],
   "created_time": 1700000000,
   "body": {
-    "capabilities": ["x402.pay", "mpp.charge", "mpp.session.voucher"]
+    "capabilities": ["ac2/sign", "ac2-ext-pre-authorized/payment"]
   }
 }
 ```
@@ -399,74 +340,47 @@ Pull form:
 }
 ```
 
-##### Agent Top-Up Request (Scenario A)
+##### Get Capability
 
-Sent by the agent to request funding of its tooling-controlled account. The `topUpUri` uses the wallet URI scheme defined for the target chain (e.g., ARC-26 for Algorand).
+`ac2/GetCapability` requests full metadata for a single capability ID. Used to discover details (description, version, defining spec, optional input/output schemas) about a capability listed in `CapabilityList`.
 
-```json
-{
-  "@context": ["https://ac2.io/v1"],
-  "type": "ac2/AgentTopUpRequest",
-  "from": "did:example:agent",
-  "to": ["did:example:user"],
-  "created_time": 1700000000,
-  "expires_time": 1700003600,
-  "body": {
-    "reason": "Balance below threshold for pending x402 payments",
-    "chain": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
-    "asset": { "id": "31566704", "symbol": "USDC" },
-    "currentBalance": "1500000",
-    "requestedAmount": "10000000",
-    "topUpUri": "algorand://AGENT_ACCOUNT_ADDRESS?amount=10000000&asset=31566704"
-  }
-}
-```
-
-##### Agent Capability Grant (Scenario B)
-
-Sent by the Controller to grant the agent a bounded capability backed by an on-chain vault. The `vaultPointer` is a chain-agnostic identifier (e.g., CAIP-10 style) resolvable to the vault's chain, address, and parameters. Cap, window, and state are read from the vault, not from this message.
+Request:
 
 ```json
 {
   "@context": ["https://ac2.io/v1"],
-  "type": "ac2/AgentCapabilityGrant",
+  "type": "ac2/GetCapability",
   "from": "did:example:user",
   "to": ["did:example:agent"],
   "created_time": 1700000000,
   "body": {
-    "capabilities": ["mpp.charge", "mpp.session.voucher"],
-    "vaultPointer": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=/app/987654321/vault/NTRZR6HGMMZGYMJKUNVNLKLA427ACAVIPFNC6JHA5XNBQQHW7MWA",
-    "note": "LLM inference budget for April"
+    "id": "ac2-ext-pre-authorized/payment"
   }
 }
 ```
 
-##### Agent Spend Receipt
-
-Sent by the agent after every pre-authorized operation — payment or non-payment signing. Required.
+Response (threaded via `thid` to the request):
 
 ```json
 {
   "@context": ["https://ac2.io/v1"],
-  "type": "ac2/AgentSpendReceipt",
+  "type": "ac2/GetCapability",
+  "thid": "<request id>",
   "from": "did:example:agent",
   "to": ["did:example:user"],
-  "created_time": 1700001000,
+  "created_time": 1700000010,
   "body": {
-    "operation": "mpp.session.voucher",
-    "chain": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
-    "asset": { "id": "31566704", "symbol": "USDC" },
-    "amount": "25000",
-    "recipient": "MERCHANT_ACCOUNT_ADDRESS",
-    "txid": "ALGORAND_TX_ID",
-    "context": "Voucher issued for LLM inference — 1000 tokens"
+    "id": "ac2-ext-pre-authorized/payment",
+    "version": "1.0",
+    "source": "ac2-ext-pre-authorized/1.0",
+    "name": "Pre-authorized payment",
+    "description": "Execute a payment within pre-authorized bounds",
+    "spec": "https://ac2.io/specs/ac2-ext-pre-authorized.md"
   }
 }
 ```
 
-For non-payment signing, `operation` describes the signing category (e.g., `"jwt.sign"`, `"attestation.sign"`) and `chain`/`asset`/`amount`/`recipient` are omitted; `context` describes what was signed in human-readable form.
-
-Wherever a message in this specification carries an `amount`, it MUST be accompanied by a top-level `chain` ([[caip-2](https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/caip-2.md)] identifier) and an `asset` identifying the unit. For native chain tokens, `asset.id` uses the chain's zero / native identifier (e.g., `"0"` for ALGO). `symbol` is display-only.
+Response fields: `id`, `version`, `source` are REQUIRED. `name`, `description`, `spec` are SHOULD. Implementations MAY include `inputSchema` and `outputSchema` (JSON Schema) for richer discovery. Recipients MUST respond to a `GetCapability` request for any capability they advertise in their `CapabilityList`.
 
 ### Liquid Extension
 
@@ -565,7 +479,19 @@ Consumers MUST NOT rely on `keyOrigin` for trust decisions.
 
 ### Capability Discovery
 
-An AC2-compliant agent responding to a DIDComm `discover-features/queries` message MUST include `ac2/capability-list` among the disclosed features.
+An AC2-compliant agent responding to a DIDComm `discover-features/queries` message MUST include `ac2/capability-list` among the disclosed features. Agents MUST respond to a pull-form `ac2/CapabilityList` and to `ac2/GetCapability` requests as defined in the Data Model.
+
+#### Capability Identifier Namespacing
+
+Capability identifiers follow a three-tier namespacing convention:
+
+| Tier | Namespace pattern | Defined by | Example |
+|------|-------------------|-----------|---------|
+| **Core** | `ac2/<name>` | This specification | `ac2/sign` |
+| **Extension** | `<extension-shortname>/<name>` | An AC2 extension specification | `ac2-ext-pre-authorized/payment`, `ac2-ext-a2a/task.invoke` |
+| **Application** | `<reverse-domain>/<name>` | The deploying application | `com.example.research/data-fetch` |
+
+Reverse-domain naming for application capabilities ensures global uniqueness without a central registry; each domain owner controls their own namespace.
 
 ### Passkey Authentication
 
@@ -589,6 +515,23 @@ Controller                          Agent
      │                               │
      │◄── 4. Session Established ────│
 ```
+
+## Extensions
+
+AC2 is designed to be extended. Extensions add new communication patterns, message types, and behaviors on top of the core foundation (DID-based identity, Liquid Auth transport, DIDComm message format, Signature Request and Streaming patterns, capability discovery, plugin model).
+
+**Extension naming**: extension message types use the `ac2/` namespace and SHOULD include a JSON-LD context entry of the form `https://ac2.io/ext/<extension-name>/v<version>`.
+
+**Discovery**: extensions MUST advertise themselves via DIDComm `discover-features/2.0` using a feature identifier of the form `ac2-ext-<extension-name>/<version>`.
+
+**Layering**: extensions MAY define new patterns; MAY introduce new message types; MAY add fields to permit additional flows over Signature Request, Agent DID Key Origin, and Passkey Authentication; MUST NOT weaken the core invariants (in particular, an extension MUST NOT permit an agent to access or sign on the Controller's keys).
+
+**Fallback**: if a peer does not advertise an extension, parties using flows defined by that extension MUST fall back to the core Signature Request pattern (or refuse the operation).
+
+**Known extensions:**
+
+- [**AC2 Pre-Authorized Operations Extension**](ac2-ext-pre-authorized.md) (`ac2-ext-pre-authorized/1.0`) — adds the Pre-Authorized communication pattern, two scenarios (tooling-controlled account, on-chain vault), and the messages `AgentTopUpRequest`, `AgentCapabilityGrant`, `AgentSpendReceipt`. Scoped to payments and asset-transfer signing.
+- [**AC2 A2A (Agent-to-Agent) Extension**](ac2-ext-a2a.md) (`ac2-ext-a2a/1.0`) — translates the Google A2A protocol's AgentCard, task lifecycle, message parts, and streaming patterns into DIDComm messages over AC2 transport. Adds DID-based mutual agent authentication and W3C Verifiable Credential-based Owner Consent for agent-to-agent connections.
 
 ## Streaming Protocol
 
@@ -618,7 +561,7 @@ Controllers should implement:
 
 ## Agent Configuration for Digital Signatures
 
-This section applies to signing operations that require the Controller's key. Pre-authorized autonomous operations are specified separately (see the Pre-Authorized pattern and the Pre-Authorized Operation Messages in the Data Model).
+This section applies to signing operations that require the Controller's key. Other operation classes (e.g., autonomous operation under pre-granted bounds) are defined by AC2 extensions.
 
 ### Implementation Layer: AC2 Plugin on the Agent Framework
 
@@ -718,20 +661,16 @@ The markdown examples below are non-normative and show how a compliant AC2 plugi
 # CLAUDE.md - AC2 Behavior Rules
 
 ## Signing Policy
-Every signing operation falls into one of two named patterns:
-
-- **Signature Request** — the signing key belongs to the Controller
-  (wallet / SSH / GPG / identity keys). Emit `ac2/SigningRequest`, wait
-  for `ac2/SigningResponse`, and use only the issued single-use
-  signature.
-- **Pre-Authorized** — the operation is covered by an active capability
-  grant. Invoke the agent's tooling within the grant's bounds, then
-  emit `ac2/AgentSpendReceipt`.
+For signing operations on the Controller's key, follow the **Signature
+Request** pattern: emit `ac2/SigningRequest`, wait for
+`ac2/SigningResponse`, and use only the issued single-use signature.
 
 ## Prohibitions
 - MUST NOT possess, store, or observe private key material.
 - MUST NOT reuse a Signature Request signature for a different request.
-- MUST NOT act outside the bounds of an active capability grant.
+
+Extensions MAY add additional patterns and policies; consult the loaded
+extensions for their rules.
 ```
 
 #### MEMORY.md (Session State)
@@ -744,14 +683,8 @@ Track active `ac2/SigningRequest` entries:
 `{ request_id, operation, created_at, timeout_at }`.
 Clear on response or timeout. Store no signature material.
 
-## Capability Grants
-Record of active `ac2/AgentCapabilityGrant` entries from the Controller:
-`{ grant_id, backing_pointer, chain, asset, cap, valid_until, revoked }`.
-Authoritative state lives in the backing mechanism (vault, tooling
-account, signing scope).
-
-## Receipts
-Append-only log of emitted `ac2/AgentSpendReceipt` (metadata only).
+Extensions MAY add additional state categories (e.g., capability grant
+records, receipt logs).
 ```
 
 #### IDENTITY.md (Agent Identity)
