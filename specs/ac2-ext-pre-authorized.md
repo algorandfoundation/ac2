@@ -10,7 +10,9 @@ created: 2026-04-22
 
 ## Abstract
 
-This extension to the AC2 Protocol defines the **Pre-Authorized** communication pattern and the messages that support it, enabling agents to act autonomously on operations the Controller has granted in advance. The extension introduces two scenarios — a Controller-funded tooling account (Scenario A) and an on-chain vault (Scenario B) — and the message types needed to provision, exercise, and audit such authority.
+This extension to the AC2 Protocol defines the **Pre-Authorized** communication pattern and the messages that support it, enabling agents to autonomously execute **payments and asset-transfer transactions** the Controller has granted in advance. The extension introduces two scenarios — a Controller-funded tooling account (Scenario A) and an on-chain vault (Scenario B) — and the message types needed to provision, exercise, and audit such authority.
+
+This extension is scoped to payments and asset-transfer signing. Non-payment data signing (e.g., JWT signing, attestations) and other autonomous operations are out of scope and remain governed by core AC2 (Signature Request pattern) or other extensions.
 
 The extension builds on AC2 core. All foundational mechanisms — agent identity, DID-based key provisioning (including HD-derived keys linked to the Controller's seed), Liquid Auth transport, DIDComm message format, the Signature Request fallback pattern, and capability discovery via `discover-features/2.0` — are defined in the core specification.
 
@@ -24,23 +26,21 @@ A conforming implementation MUST advertise this extension via DIDComm `discover-
 
 ## Communication Pattern
 
-**Pre-Authorized (for background payments, metered services, tool-scoped data signing)**
+**Pre-Authorized (for background payments, metered streaming payments, asset transfers)**
 
 ```
-[Prior]  Controller has granted bounded, revocable authority via:
+[Prior]  Controller has granted bounded, revocable payment authority via:
          - Scenario A: Controller topped up an account the agent's
            tooling controls (agentic-tooling-controlled account)
          - Scenario B: Controller deposited into an on-chain vault
            bound to the agent's account with a cap + validity window
-         - For non-payment signing: Controller configured the agent's
-           tooling with signing capabilities scoped in advance
 
 Agent:                    Invoke tooling to sign and execute the
-                          operation within the pre-authorized bounds
+                          payment within the pre-authorized bounds
                           (no user round-trip)
 
-Agent ──► Controller:     Spend Receipt / Operation Receipt
-                          (required for every operation)
+Agent ──► Controller:     Spend Receipt
+                          (required for every payment)
 ```
 
 ## Scenarios
@@ -48,15 +48,13 @@ Agent ──► Controller:     Spend Receipt / Operation Receipt
 - **Scenario A — Agentic-tooling-controlled account.** The agent has authority over an account whose keys are held by the agent's tooling. The Controller funds this account by responding to a wallet URI exchanged over AC2. The enforcement of the cap is off-chain: the Controller tops up only what they are willing to grant.
 - **Scenario B — On-chain vault.** The Controller deposits into a smart contract with a cap, validity window, and the agent's account bound as the sole authorized spender. The contract's design, methods, and on-chain enforcement are defined by a chain-specific companion specification and are out of scope for this extension.
 
-For non-payment data signing, the extent of autonomous authority is defined by the pre-configured signing capabilities exposed by the agent's tooling.
-
 ## Asset Identification
 
 Wherever a message in this extension carries an `amount`, it MUST be accompanied by a top-level `chain` ([[caip-2](https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/caip-2.md)] identifier) and an `asset` identifying the unit. For native chain tokens, `asset.id` uses the chain's zero / native identifier (e.g., `"0"` for ALGO). `symbol` is display-only.
 
 ## Messages
 
-`ac2/AgentSpendReceipt` MUST be sent by the agent for every pre-authorized operation.
+`ac2/AgentSpendReceipt` MUST be sent by the agent for every pre-authorized payment or asset transfer.
 
 ### Agent Top-Up Request (Scenario A)
 
@@ -102,7 +100,7 @@ Sent by the Controller to grant the agent a bounded capability backed by an on-c
 
 ### Agent Spend Receipt
 
-Sent by the agent after every pre-authorized operation — payment or non-payment signing. Required.
+Sent by the agent after every pre-authorized payment or asset transfer. Required.
 
 ```json
 {
@@ -123,14 +121,12 @@ Sent by the agent after every pre-authorized operation — payment or non-paymen
 }
 ```
 
-For non-payment signing, `operation` describes the signing category (e.g., `"jwt.sign"`, `"attestation.sign"`) and `chain`/`asset`/`amount`/`recipient` are omitted; `context` describes what was signed in human-readable form.
-
 ## Plugin State (non-normative)
 
 A conforming plugin SHOULD track:
 
 - Active capability grants: `{ grant_id, backing_pointer, chain, asset, cap, valid_until, revoked }`. Authoritative state lives in the backing mechanism (vault, tooling-controlled account, signing scope).
-- Append-only log of emitted `ac2/AgentSpendReceipt` (metadata only).
+- Append-only log of emitted `ac2/AgentSpendReceipt` entries (metadata only).
 
 ## References
 
