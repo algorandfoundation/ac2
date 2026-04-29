@@ -196,7 +196,7 @@ AC2 assumes a **semi-trusted Agent model**:
 
 ## Data Model
 
-AC2 messages MUST be compliant with [DIDComm v2.0 message formats](https://identity.foundation/didcomm-messaging/spec), with extensions for streaming, signature requests, and capability grants.
+AC2 messages MUST be compliant with [DIDComm v2.0 message formats](https://identity.foundation/didcomm-messaging/spec). Core defines the signing trio; extensions add additional message families (streaming, capability grants, discovery, etc.).
 
 ### Examples
 
@@ -253,7 +253,7 @@ The following structure is based on DIDcommv2 message format, re-used for AC2 me
 
 #### AC2 Message Examples
 
-Capability discovery is handled on-demand via the `ac2/CapabilityList` message and DIDComm `discover-features/2.0`. Problems are reported via DIDComm `report-problem/2.0`.
+Capability discovery is **not** in the core spec. If two peers need to negotiate which extensions or message families they both support, they SHOULD use the [AC2 Discovery Extension (`ac2-ext-discovery`)](ac2-ext-discovery.md) or an extension-specific discovery mechanism (e.g. A2A's `agent-card`). Core peers MAY assume signing trio support by default. Problems are reported via DIDComm `report-problem/2.0`.
 
 ##### Signing Request
 
@@ -270,9 +270,20 @@ Capability discovery is handled on-demand via the `ac2/CapabilityList` message a
     "encoding": "base64",
     "payload": "base64-encoded data to sign",
     "schema": "schema of the payload (e.g., x402 payment schema)",
+    "key_type": "account",
+    "display_hint": "json"
   }
 }
 ```
+
+`body` fields:
+
+- `description` (REQUIRED, non-empty string) — human-readable purpose, MUST be shown to the user in the approval prompt.
+- `encoding` (REQUIRED, MUST be `"base64"`) — encoding of `payload`.
+- `payload` (REQUIRED, base64 string) — raw bytes the signer will sign as Ed25519 input.
+- `schema` (OPTIONAL, string) — schema identifier for the payload (e.g., x402 payment schema).
+- `key_type` (OPTIONAL, `"account"` | `"identity"`, default `"account"`) — which key the signer SHOULD use. The signer MAY refuse a `key_type` it does not support and respond with `ac2/SigningRejected`.
+- `display_hint` (OPTIONAL, `"text"` | `"json"` | `"hex"`) — UX hint for how the wallet SHOULD preview `payload` to the user. Has no cryptographic effect.
 
 The `payload` field MUST be shown to the user in both its raw form and a human-readable form (e.g., "Pay 0.5 ALGO to recipient XYZ for API access") before the user approves the signing request.
 
@@ -288,9 +299,19 @@ The `payload` field MUST be shown to the user in both its raw form and a human-r
   "expires_time": 1700003700,
   "body": {
     "signature": "base64-encoded signature",
+    "publicKey": "base64-encoded 32-byte ed25519 public key",
+    "address": "58-char Algorand address",
+    "keyType": "account"
   }
 }
 ```
+
+`body` fields:
+
+- `signature` (REQUIRED, base64 string) — Ed25519 signature over the raw bytes of the request `payload`.
+- `publicKey` (REQUIRED, base64 string) — the 32-byte Ed25519 public key the signature verifies against. REQUIRED for self-contained verification when the signer uses an account key whose public key is not embedded in `from`.
+- `address` (OPTIONAL, string) — 58-character Algorand address derived from `publicKey`. Convenience field for human-readable audit logs.
+- `keyType` (OPTIONAL, `"account"` | `"identity"`, default `"account"`) — which key actually signed; mirrors the request's `key_type`.
 
 ##### Signing Rejected
 
@@ -307,80 +328,6 @@ The `payload` field MUST be shown to the user in both its raw form and a human-r
   }
 }
 ```
-
-##### Capability List
-
-`ac2/CapabilityList` carries the list of AC2 capability identifiers the agent supports. The agent SHOULD push it at the start of a new session. Either party MAY request the peer's current list at any time via the pull form (empty body); recipients MUST respond with their current `CapabilityList`.
-
-Push form:
-
-```json
-{
-  "@context": ["https://ac2.io/v1"],
-  "type": "ac2/CapabilityList",
-  "from": "did:example:agent",
-  "to": ["did:example:user"],
-  "created_time": 1700000000,
-  "body": {
-    "capabilities": ["ac2/sign", "ac2-ext-pre-authorized/payment"]
-  }
-}
-```
-
-Pull form:
-
-```json
-{
-  "@context": ["https://ac2.io/v1"],
-  "type": "ac2/CapabilityList",
-  "from": "did:example:user",
-  "to": ["did:example:agent"],
-  "created_time": 1700000000,
-  "body": {}
-}
-```
-
-##### Get Capability
-
-`ac2/GetCapability` requests full metadata for a single capability ID. Used to discover details (description, version, defining spec, optional input/output schemas) about a capability listed in `CapabilityList`.
-
-Request:
-
-```json
-{
-  "@context": ["https://ac2.io/v1"],
-  "type": "ac2/GetCapability",
-  "from": "did:example:user",
-  "to": ["did:example:agent"],
-  "created_time": 1700000000,
-  "body": {
-    "id": "ac2-ext-pre-authorized/payment"
-  }
-}
-```
-
-Response (threaded via `thid` to the request):
-
-```json
-{
-  "@context": ["https://ac2.io/v1"],
-  "type": "ac2/GetCapability",
-  "thid": "<request id>",
-  "from": "did:example:agent",
-  "to": ["did:example:user"],
-  "created_time": 1700000010,
-  "body": {
-    "id": "ac2-ext-pre-authorized/payment",
-    "version": "1.0",
-    "source": "ac2-ext-pre-authorized/1.0",
-    "name": "Pre-authorized payment",
-    "description": "Execute a payment within pre-authorized bounds",
-    "spec": "https://ac2.io/specs/ac2-ext-pre-authorized.md"
-  }
-}
-```
-
-Response fields: `id`, `version`, `source` are REQUIRED. `name`, `description`, `spec` are SHOULD. Implementations MAY include `inputSchema` and `outputSchema` (JSON Schema) for richer discovery. Recipients MUST respond to a `GetCapability` request for any capability they advertise in their `CapabilityList`.
 
 ### Liquid Extension
 
@@ -438,8 +385,16 @@ const dataChannel = peerConnection.createDataChannel('ac2-v1', {
 dataChannel.onopen = () => {
   dataChannel.send(JSON.stringify({
     "@context": ["https://ac2.io/v1"],
-    "type": "ac2/CapabilityList",
-    body: { capabilities: ["x402.pay", "mpp.charge"] }
+    "id": "msg-1",
+    "type": "ac2/SigningRequest",
+    "from": "did:example:agent",
+    "to": ["did:example:user"],
+    "created_time": Date.now(),
+    "body": {
+      "description": "Sign in to Example",
+      "encoding": "base64",
+      "payload": "<base64-encoded bytes>"
+    }
   }));
 };
 ```
@@ -477,13 +432,9 @@ When derived, the agent DID Document MAY include a `keyOrigin` hint:
 
 Consumers MUST NOT rely on `keyOrigin` for trust decisions.
 
-### Capability Discovery
+### Capability Identifier Namespacing
 
-An AC2-compliant agent responding to a DIDComm `discover-features/queries` message MUST include `ac2/capability-list` among the disclosed features. Agents MUST respond to a pull-form `ac2/CapabilityList` and to `ac2/GetCapability` requests as defined in the Data Model.
-
-#### Capability Identifier Namespacing
-
-Capability identifiers follow a three-tier namespacing convention:
+Capability discovery itself is out of core scope (see [`ac2-ext-discovery`](ac2-ext-discovery.md) or extension-specific mechanisms such as A2A's `agent-card`). When peers do exchange capability identifiers, the identifiers SHOULD follow this three-tier namespacing convention:
 
 | Tier | Namespace pattern | Defined by | Example |
 |------|-------------------|-----------|---------|
@@ -518,7 +469,7 @@ Controller                          Agent
 
 ## Extensions
 
-AC2 is designed to be extended. Extensions add new communication patterns, message types, and behaviors on top of the core foundation (DID-based identity, Liquid Auth transport, DIDComm message format, Signature Request and Streaming patterns, capability discovery, plugin model).
+AC2 is designed to be extended. Extensions add new communication patterns, message types, and behaviors on top of the core foundation (DID-based identity, Liquid Auth transport, DIDComm message format, the signing trio, plugin model). Discovery, streaming, attachments, and HITL approvals are extensions, not core.
 
 **Extension naming**: extension message types use the `ac2/` namespace and SHOULD include a JSON-LD context entry of the form `https://ac2.io/ext/<extension-name>/v<version>`.
 
@@ -530,6 +481,7 @@ AC2 is designed to be extended. Extensions add new communication patterns, messa
 
 **Known extensions:**
 
+- [**AC2 Discovery Extension**](ac2-ext-discovery.md) (`ac2-ext-discovery/1.0`) — defines the optional `ac2/CapabilityList` (push/pull) and `ac2/GetCapability` messages for cross-extension capability enumeration. Opt-in; core peers MAY assume signing-trio support without exchanging a list.
 - [**AC2 Pre-Authorized Operations Extension**](ac2-ext-pre-authorized.md) (`ac2-ext-pre-authorized/1.0`) — adds the Pre-Authorized communication pattern, two scenarios (tooling-controlled account, on-chain vault), and the messages `AgentTopUpRequest`, `AgentCapabilityGrant`, `AgentSpendReceipt`. Scoped to payments and asset-transfer signing.
 - [**AC2 A2A (Agent-to-Agent) Extension**](ac2-ext-a2a.md) (`ac2-ext-a2a/1.0`) — translates the Google A2A protocol's AgentCard, task lifecycle, message parts, and streaming patterns into DIDComm messages over AC2 transport. Adds DID-based mutual agent authentication and W3C Verifiable Credential-based Owner Consent for agent-to-agent connections.
 
@@ -696,7 +648,7 @@ records, receipt logs).
 - `name` — human-readable name
 - `capabilities` — AC2 capability identifiers this agent supports
 
-Capabilities are announced to the Controller via `ac2/CapabilityList`.
+Capabilities are exchanged via the [`ac2-ext-discovery`](ac2-ext-discovery.md) extension or an extension-specific discovery mechanism (e.g. A2A's `agent-card`); core does not mandate a discovery exchange.
 ```
 
 ## References
