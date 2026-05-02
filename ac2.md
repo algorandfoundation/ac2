@@ -196,7 +196,7 @@ AC2 assumes a **semi-trusted Agent model**:
 
 ## Data Model
 
-AC2 messages MUST be compliant with [DIDComm v2.0 message formats](https://identity.foundation/didcomm-messaging/spec). Core defines the signing trio; extensions add additional message families (streaming, capability grants, discovery, etc.).
+AC2 messages MUST be compliant with [DIDComm v2.0 message formats](https://identity.foundation/didcomm-messaging/spec). Core defines the signing trio and the streaming initiation message; extensions add additional message families (capability grants, discovery, attachments, etc.).
 
 ### Examples
 
@@ -218,6 +218,8 @@ The following structure is based on DIDcommv2 message format, re-used for AC2 me
   }
 }
 ```
+
+`created_time` and `expires_time` are integer **Unix timestamps in seconds** (per [DIDComm v2 §3.2](https://identity.foundation/didcomm-messaging/spec/#message-headers)). Implementations MUST NOT emit milliseconds.
 
 ![DIDComm Message Structure](https://identity.foundation/didcomm-messaging/spec/#plaintext-message-structure)
 
@@ -299,9 +301,9 @@ The `payload` field MUST be shown to the user in both its raw form and a human-r
   "expires_time": 1700003700,
   "body": {
     "signature": "base64-encoded signature",
-    "publicKey": "base64-encoded 32-byte ed25519 public key",
+    "public_key": "base64-encoded 32-byte ed25519 public key",
     "address": "58-char Algorand address",
-    "keyType": "account"
+    "key_type": "account"
   }
 }
 ```
@@ -309,9 +311,11 @@ The `payload` field MUST be shown to the user in both its raw form and a human-r
 `body` fields:
 
 - `signature` (REQUIRED, base64 string) — Ed25519 signature over the raw bytes of the request `payload`.
-- `publicKey` (REQUIRED, base64 string) — the 32-byte Ed25519 public key the signature verifies against. REQUIRED for self-contained verification when the signer uses an account key whose public key is not embedded in `from`.
-- `address` (OPTIONAL, string) — 58-character Algorand address derived from `publicKey`. Convenience field for human-readable audit logs.
-- `keyType` (OPTIONAL, `"account"` | `"identity"`, default `"account"`) — which key actually signed; mirrors the request's `key_type`.
+- `public_key` (REQUIRED, base64 string) — the 32-byte Ed25519 public key the signature verifies against. REQUIRED for self-contained verification when the signer uses an account key whose public key is not embedded in `from`.
+- `address` (OPTIONAL, string) — 58-character Algorand address derived from `public_key`. Convenience field for human-readable audit logs.
+- `key_type` (OPTIONAL, `"account"` | `"identity"`, default `"account"`) — which key actually signed; mirrors the request's `key_type`.
+
+**Naming convention.** All AC2 message body fields use **`snake_case`** for consistency with DIDComm v2 envelope headers. Implementations MUST NOT emit `camelCase` variants of these fields.
 
 ##### Signing Rejected
 
@@ -389,7 +393,7 @@ dataChannel.onopen = () => {
     "type": "ac2/SigningRequest",
     "from": "did:example:agent",
     "to": ["did:example:user"],
-    "created_time": Date.now(),
+    "created_time": Math.floor(Date.now() / 1000),
     "body": {
       "description": "Sign in to Example",
       "encoding": "base64",
@@ -426,9 +430,11 @@ When derived, the agent DID Document MAY include a `keyOrigin` hint:
 ```json
 "keyOrigin": {
   "method": "arc52",
-  "derivationPath": "m/44'/283'/0'/0'/agent/0"
+  "derivationPath": "m/44'/283'/1'/0/0"
 }
 ```
+
+Path indices are numeric per BIP32/BIP44; non-numeric segments are not allowed. The example reserves account index `1'` for agent keys (vs. `0'` for the Controller's own keys), so funds and signing scopes stay segregated.
 
 Consumers MUST NOT rely on `keyOrigin` for trust decisions.
 
@@ -469,7 +475,7 @@ Controller                          Agent
 
 ## Extensions
 
-AC2 is designed to be extended. Extensions add new communication patterns, message types, and behaviors on top of the core foundation (DID-based identity, Liquid Auth transport, DIDComm message format, the signing trio, plugin model). Discovery, streaming, attachments, and HITL approvals are extensions, not core.
+AC2 is designed to be extended. Extensions add new communication patterns, message types, and behaviors on top of the core foundation (DID-based identity, Liquid Auth transport, DIDComm message format, the signing trio, the streaming pattern, plugin model). Discovery, attachments, and HITL approvals are extensions, not core. The streaming **pattern** is core (see *Communication Patterns* and *Streaming Protocol*); concrete stream-chunk **framing** is implementation-profiled.
 
 **Extension naming**: extension message types use the `ac2/` namespace and SHOULD include a JSON-LD context entry of the form `https://ac2.io/ext/<extension-name>/v<version>`.
 
@@ -569,7 +575,7 @@ Origin and destination: the **agent's tooling** originates the request; the agen
   "to": ["did:example:user"],
   "body": {
     "key_type": "ed25519" | "secp256k1" | "falcon-512",
-    "derivationPath": "m/44'/283'/0'/0'/agent/0",
+    "derivationPath": "m/44'/283'/1'/0/0",
     "purpose": "<WHY_NEEDED>",
     "for_operation": "<WHAT_OPERATION>"
   }
@@ -586,10 +592,10 @@ Origin and destination: the **agent's tooling** originates the request; the agen
   "to": ["did:example:agent"],
   "body": {
     "status": "approved" | "rejected",
-    "derivationPath": "m/44'/283'/0'/0'/agent/0",
+    "derivationPath": "m/44'/283'/1'/0/0",
     "key_type": "ed25519",
     "material": "<BASE64_OR_ENCRYPTED_KEY_PAYLOAD>",
-    "publicKey": "<BASE64_PUBLIC_KEY>",
+    "public_key": "<BASE64_PUBLIC_KEY>",
     "reason": "<OPTIONAL_REJECTION_REASON>"
   }
 }

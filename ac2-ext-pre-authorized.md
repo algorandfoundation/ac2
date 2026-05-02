@@ -50,7 +50,7 @@ Agent ──► Controller:     Spend Receipt
 
 ## Asset Identification
 
-Wherever a message in this extension carries an `amount`, it MUST be accompanied by a top-level `chain` ([[caip-2](https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/caip-2.md)] identifier) and an `asset` identifying the unit. For native chain tokens, `asset.id` uses the chain's zero / native identifier (e.g., `"0"` for ALGO). `symbol` is display-only.
+Wherever a message in this extension carries an `amount`, it MUST be accompanied by a top-level `body` field `chain` ([[caip-2](https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/caip-2.md)] identifier) and an `asset` identifying the unit (i.e., `chain` and `asset` sit alongside `amount` inside `body`, not on the DIDComm envelope itself). For native chain tokens, `asset.id` uses the chain's zero / native identifier (e.g., `"0"` for ALGO). `symbol` is display-only.
 
 ## Messages
 
@@ -91,7 +91,7 @@ Sent by the Controller to grant the agent a bounded capability backed by an on-c
   "to": ["did:example:agent"],
   "created_time": 1700000000,
   "body": {
-    "capabilities": ["mpp.charge", "mpp.session.voucher"],
+    "capabilities": ["ac2-ext-pre-authorized/mpp.charge", "ac2-ext-pre-authorized/mpp.session.voucher"],
     "vaultPointer": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=/app/987654321/vault/NTRZR6HGMMZGYMJKUNVNLKLA427ACAVIPFNC6JHA5XNBQQHW7MWA",
     "note": "LLM inference budget for April"
   }
