@@ -576,7 +576,7 @@ Origin and destination: the **agent's tooling** originates the request; the agen
   "from": "did:example:agent",
   "to": ["did:example:user"],
   "body": {
-    "key_type": "ed25519" | "secp256k1" | "falcon-512",
+    "key_type": "ed25519" | "secp256k1",
     "derivationPath": "m/44'/283'/1'/0/0",
     "purpose": "<WHY_NEEDED>",
     "for_operation": "<WHAT_OPERATION>"
