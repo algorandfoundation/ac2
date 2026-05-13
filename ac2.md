@@ -62,7 +62,7 @@ AC2 addresses these gaps by providing a protocol where:
 
 | Protocol | Relationship to AC2 |
 |----------|---------------------|
-| A2A (Agent2Agent) | Not in core; supported via the [AC2 A2A Extension](ac2-ext-a2a.md), which integrates A2A patterns onto AC2 transport |
+| A2A (Agent2Agent) | Not in core; may be supported via an AC2 extension that integrates A2A patterns onto AC2 transport |
 | MCP (Model Context Protocol) | No direct relationship; AC2 operates at the transport/authentication layer |
 | **DIDComm** | **AC2 uses DIDComm v2.0 message format** for plaintext messages, enabling interoperability with existing decentralized identity infrastructure |
 | WebAuthn | AC2 uses Liquid Auth which extends FIDO2/WebAuthn with the Liquid Extension |
@@ -101,7 +101,7 @@ AC2 addresses these gaps by providing a protocol where:
 
 `note`: __The above Git example requires a special GPG bridge program to forward signing requests from the agent to the user's wallet. The bridge itself is outside the scope of this protocol but can be implemented using AC2's signature-request flow.__
 
-Use cases requiring autonomous payments or asset transfers (background payments, metered streaming with off-chain vouchers, scheduled transfers) are covered by the [**AC2 Pre-Authorized Operations Extension**](ac2-ext-pre-authorized.md).
+Use cases requiring autonomous payments or asset transfers (background payments, metered streaming with off-chain vouchers, scheduled transfers) are out of core scope and expected to be covered by extensions (e.g. a pre-authorized-operations extension that adds capability grants, spend bounds, and receipts on top of the core signing trio).
 
 ## Conformance
 
@@ -255,7 +255,7 @@ The following structure is based on DIDcommv2 message format, re-used for AC2 me
 
 #### AC2 Message Examples
 
-Capability discovery is **not** in the core spec. If two peers need to negotiate which extensions or message families they both support, they SHOULD use the [AC2 Discovery Extension (`ac2-ext-discovery`)](ac2-ext-discovery.md) or an extension-specific discovery mechanism (e.g. A2A's `agent-card`). Core peers MAY assume signing trio support by default. Problems are reported via DIDComm `report-problem/2.0`.
+Capability discovery is **not** in the core spec. If two peers need to negotiate which extensions or message families they both support, they SHOULD use an AC2 discovery extension or an extension-specific discovery mechanism (e.g. an agent-card-style descriptor). Core peers MAY assume signing trio support by default. Problems are reported via DIDComm `report-problem/2.0`.
 
 ##### Signing Request
 
@@ -273,7 +273,8 @@ Capability discovery is **not** in the core spec. If two peers need to negotiate
     "payload": "base64-encoded data to sign",
     "schema": "schema of the payload (e.g., x402 payment schema)",
     "key_type": "account",
-    "display_hint": "json"
+    "display_hint": "json",
+    "sig_hint": "message-algorand"
   }
 }
 ```
@@ -282,10 +283,11 @@ Capability discovery is **not** in the core spec. If two peers need to negotiate
 
 - `description` (REQUIRED, non-empty string) — human-readable purpose, MUST be shown to the user in the approval prompt.
 - `encoding` (REQUIRED, MUST be `"base64"`) — encoding of `payload`.
-- `payload` (REQUIRED, base64 string) — raw bytes the signer will sign as Ed25519 input.
+- `payload` (REQUIRED, base64 string) — raw bytes the signer will sign. Whether the signer applies a chain-specific prefix or encoding before signing is determined by `sig_hint` below; when `sig_hint` is absent, the signer signs the raw bytes as Ed25519 input (the historical Algorand-only default).
 - `schema` (OPTIONAL, string) — schema identifier for the payload (e.g., x402 payment schema).
 - `key_type` (OPTIONAL, `"account"` | `"identity"`, default `"account"`) — which key the signer SHOULD use. The signer MAY refuse a `key_type` it does not support and respond with `ac2/SigningRejected`.
-- `display_hint` (OPTIONAL, `"text"` | `"json"` | `"hex"`) — UX hint for how the wallet SHOULD preview `payload` to the user. Has no cryptographic effect.
+- `display_hint` (OPTIONAL, `"text"` | `"json"` | `"hex"`) — UX hint for how the wallet SHOULD preview `payload` to the user. Has no cryptographic effect. The wallet MAY auto-detect if the field is absent.
+- `sig_hint` (OPTIONAL, one of `"raw-ed25519"` | `"raw-secp256k1"` | `"message-algorand"` | `"message-evm"` | `"message-solana"` | `"typed-data-evm"` | `"transaction-algorand"` | `"transaction-evm"` | `"transaction-solana"`) — explicit cryptographic-operation selector. Each value identifies one operation (curve, prefix, canonical encoding) the signer performs, and the format of the signature returned. Has no effect on UX preview (that's `display_hint`'s job). When absent, the signer performs Ed25519 over raw `payload` bytes (the historical default). Implementations MUST reject unknown values or pairings inconsistent with the selected signer's chain/curve via `ac2/SigningRejected`. The per-value byte-level semantics are defined by chain conventions (ARC-60, EIP-191, EIP-712, EIP-2718, Algorand canonical `TX`-prefixed msgpack, etc.) and agreed on out-of-band between signer and verifier; new values are added by extension.
 
 The `payload` field MUST be shown to the user in both its raw form and a human-readable form (e.g., "Pay 0.5 ALGO to recipient XYZ for API access") before the user approves the signing request.
 
@@ -440,12 +442,12 @@ Consumers MUST NOT rely on `keyOrigin` for trust decisions.
 
 ### Capability Identifier Namespacing
 
-Capability discovery itself is out of core scope (see [`ac2-ext-discovery`](ac2-ext-discovery.md) or extension-specific mechanisms such as A2A's `agent-card`). When peers do exchange capability identifiers, the identifiers SHOULD follow this three-tier namespacing convention:
+Capability discovery itself is out of core scope (covered by an AC2 discovery extension, or by an extension-specific mechanism such as an agent-card-style descriptor). When peers do exchange capability identifiers, the identifiers SHOULD follow this three-tier namespacing convention:
 
 | Tier | Namespace pattern | Defined by | Example |
 |------|-------------------|-----------|---------|
 | **Core** | `ac2/<name>` | This specification | `ac2/sign` |
-| **Extension** | `<extension-shortname>/<name>` | An AC2 extension specification | `ac2-ext-pre-authorized/payment`, `ac2-ext-a2a/task.invoke` |
+| **Extension** | `<extension-shortname>/<name>` | An AC2 extension specification | e.g. `ac2-ext-<name>/<capability>` |
 | **Application** | `<reverse-domain>/<name>` | The deploying application | `com.example.research/data-fetch` |
 
 Reverse-domain naming for application capabilities ensures global uniqueness without a central registry; each domain owner controls their own namespace.
@@ -485,11 +487,11 @@ AC2 is designed to be extended. Extensions add new communication patterns, messa
 
 **Fallback**: if a peer does not advertise an extension, parties using flows defined by that extension MUST fall back to the core Signature Request pattern (or refuse the operation).
 
-**Known extensions:**
+**Illustrative extensions** (placeholders — none are part of this core specification; each would be published as its own separate document under the rules above):
 
-- [**AC2 Discovery Extension**](ac2-ext-discovery.md) (`ac2-ext-discovery/1.0`) — defines the optional `ac2/CapabilityList` (push/pull) and `ac2/GetCapability` messages for cross-extension capability enumeration. Opt-in; core peers MAY assume signing-trio support without exchanging a list.
-- [**AC2 Pre-Authorized Operations Extension**](ac2-ext-pre-authorized.md) (`ac2-ext-pre-authorized/1.0`) — adds the Pre-Authorized communication pattern, two scenarios (tooling-controlled account, on-chain vault), and the messages `AgentTopUpRequest`, `AgentCapabilityGrant`, `AgentSpendReceipt`. Scoped to payments and asset-transfer signing.
-- [**AC2 A2A (Agent-to-Agent) Extension**](ac2-ext-a2a.md) (`ac2-ext-a2a/1.0`) — translates the Google A2A protocol's AgentCard, task lifecycle, message parts, and streaming patterns into DIDComm messages over AC2 transport. Adds DID-based mutual agent authentication and W3C Verifiable Credential-based Owner Consent for agent-to-agent connections.
+- A **discovery extension** that adds `ac2/CapabilityList` (push/pull) and `ac2/GetCapability` messages for cross-extension capability enumeration. Opt-in; core peers MAY assume signing-trio support without exchanging a list.
+- A **pre-authorized operations extension** that adds a pre-authorized communication pattern (e.g. tooling-controlled account or on-chain vault scenarios) and messages along the lines of `AgentTopUpRequest`, `AgentCapabilityGrant`, `AgentSpendReceipt`. Scoped to payments and asset-transfer signing.
+- An **A2A (Agent-to-Agent) extension** that translates the Google A2A protocol's AgentCard, task lifecycle, message parts, and streaming patterns into DIDComm messages over AC2 transport, with DID-based mutual agent authentication and Verifiable-Credential-based owner consent for agent-to-agent connections.
 
 ## Streaming Protocol
 
@@ -654,7 +656,7 @@ records, receipt logs).
 - `name` — human-readable name
 - `capabilities` — AC2 capability identifiers this agent supports
 
-Capabilities are exchanged via the [`ac2-ext-discovery`](ac2-ext-discovery.md) extension or an extension-specific discovery mechanism (e.g. A2A's `agent-card`); core does not mandate a discovery exchange.
+Capabilities are exchanged via an AC2 discovery extension or an extension-specific discovery mechanism (e.g. an agent-card-style descriptor); core does not mandate a discovery exchange.
 ```
 
 ## References
