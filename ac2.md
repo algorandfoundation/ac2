@@ -12,7 +12,7 @@ created: 2026-04-01
 
 ## Abstract
 
-This specification defines the **AC2 (Agentic Communication and Control) Protocol**, a peer-to-peer authenticated messaging system designed for secure communication between users and AI agents. The core protocol covers human-in-the-loop signing — agents request signatures from users, who validate and approve through their own wallet or application, with signatures then returned to the agent. The agent itself holds no keys and never sees key material; key custody for the agent's own identity lives in the agent's tooling (e.g., agent-internal tools, MCP tools, or OWS wallet toolings). Additional capabilities such as autonomous operation under pre-authorized bounds are defined as separate extensions to this core (see **Extensions** below).
+This specification defines the **AC2 (Agentic Communication and Control) Protocol**, a peer-to-peer authenticated messaging system designed for secure communication between users and AI agents. The core protocol covers human-in-the-loop signing — agents request signatures from users, who validate and approve through their own wallet or application, with signatures then returned to the agent. The agent itself holds no keys and never sees key material. Additional capabilities such as autonomous operation under pre-authorized bounds are defined as separate extensions to this core (see **Extensions** below).
 
 AC2 uses **Liquid Auth** as its transport mechanism - an authenticated peer-to-peer connection establishment protocol that leverages FIDO2/WebAuthn and WebRTC DataChannels to create sovereign, end-to-end encrypted communication channels between controllers (users) and agents. Unlike traditional messaging systems, AC2 does not rely on centralized message relay servers; instead, it establishes direct P2P connections through a signaling service that facilitates the initial handshake.
 
@@ -416,7 +416,7 @@ The signaling server facilitates the WebRTC handshake without accessing message 
 **Normative Requirements**:
 
 1. **DID Methods**: Implementations MUST support `did:key` per [[did-key](https://w3c-ccg.github.io/did-method-key/)] and SHOULD support `did:web`
-2. **Key Types**: Ed25519 keys REQUIRED for signatures; secp256k1 OPTIONAL for blockchain operations; post-quantum schemes such as `falcon-512` OPTIONAL
+2. **Key Types**: Ed25519 keys REQUIRED for signatures; secp256k1 OPTIONAL for blockchain operations;
 3. **Resolution**: Implementations MUST resolve DIDs per [[did-resolution](https://w3c-ccg.github.io/did-resolution/)]
 4. **Discovery**: Agent DIDs MUST be discoverable via `.well-known/did.json` (for `did:web` DIDs) or `.well-known/did-configuration.json` per [[well-known-did-configuration](https://identity.foundation/.well-known/resources/did-configuration/)] (for any DID method, including `did:key`)
 
