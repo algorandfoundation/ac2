@@ -42,7 +42,6 @@ Current messaging systems for AI agent interaction (WhatsApp, Telegram, email) w
 4. **Streaming with authentication** - Real-time AI responses lack proper auth
 
 AC2 addresses these gaps by providing a protocol where:
-- Agents MUST NOT access the user's private keys and MUST NOT sign on the user's account
 - For operations requiring the user's key, agents request and the user approves via familiar interfaces
 - The agent itself holds no keys; key custody for the agent's own identity lives in the agent's tooling
 - Extensions to this core MAY introduce additional flows such as autonomous operation under pre-authorized bounds
