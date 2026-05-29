@@ -43,7 +43,7 @@ The application uses `expo-router` for navigation. The flow is automatically det
 The application is built on the `@algorandfoundation/wallet-provider` architecture, which uses a modular `Extension` system to augment a `Provider` with specific capabilities.
 
 ```typescript
-import { Provider } from "@algorandfoundation/wallet-provider";
+import { Provider } from '@algorandfoundation/wallet-provider';
 
 export class MyProvider extends Provider<typeof MyProvider.EXTENSIONS> {
   static EXTENSIONS = [
