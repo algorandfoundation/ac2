@@ -4,4 +4,4 @@
  * Stub entry point. Implementation will be added here.
  */
 
-export const VERSION = "0.1.0";
+export const VERSION = '0.1.0';
