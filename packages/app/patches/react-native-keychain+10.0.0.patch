@@ -1,0 +1,255 @@
+diff --git a/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/KeychainModule.kt b/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/KeychainModule.kt
+index 722a5ed..10d6e5a 100644
+--- a/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/KeychainModule.kt
++++ b/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/KeychainModule.kt
+@@ -25,6 +25,8 @@ import com.oblador.keychain.resultHandler.ResultHandlerProvider
+ import com.oblador.keychain.exceptions.CryptoFailedException
+ import com.oblador.keychain.exceptions.EmptyParameterException
+ import com.oblador.keychain.exceptions.KeyStoreAccessException
++import javax.crypto.AEADBadTagException
++import javax.crypto.BadPaddingException
+ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.SupervisorJob
+@@ -138,6 +140,20 @@ class KeychainModule(reactContext: ReactApplicationContext) :
+   // region Initialization
+   /** Default constructor. */
+   init {
++    // Force BC provider to the end of the list to avoid Keystore conflict
++    // with some libraries (like react-native-quick-crypto) that might
++    // install a vanilla BouncyCastle provider.
++    try {
++      val bc = java.security.Security.getProvider("BC")
++      if (bc != null) {
++        java.security.Security.removeProvider("BC")
++        java.security.Security.addProvider(bc)
++        Log.i(KEYCHAIN_MODULE, "Moved BC provider to the end of the list")
++      }
++    } catch (e: Exception) {
++      Log.w(KEYCHAIN_MODULE, "Failed to move BC provider", e)
++    }
++
+     prefsStorage = DataStorePrefsStorage(reactContext, coroutineScope)
+     addCipherStorageToMap(CipherStorageKeystoreAesCbc(reactContext))
+     addCipherStorageToMap(CipherStorageKeystoreAesGcm(reactContext, false))
+@@ -199,14 +215,35 @@ class KeychainModule(reactContext: ReactApplicationContext) :
+           results.putString(Maps.STORAGE, storage.getCipherStorageName())
+           promise.resolve(results)
+         } catch (e: EmptyParameterException) {
+-          Log.e(KEYCHAIN_MODULE, e.message, e)
++          Log.e(KEYCHAIN_MODULE, e.message ?: "EmptyParameterException", e)
+           promise.reject(Errors.E_EMPTY_PARAMETERS, e)
+         } catch (e: CryptoFailedException) {
+-          Log.e(KEYCHAIN_MODULE, e.message, e)
+-          promise.reject(Errors.E_CRYPTO_FAILED, e)
++          // Graceful handling for provider-related NPEs or tag failures during encryption
++          val cause = e.cause
++          val isGracefulFailure = cause is NullPointerException ||
++                  (e.message?.contains("Attempt to get length of null array") == true) ||
++                  (e.message?.contains("Non-interactive decryption mode") == true)
++
++          if (isGracefulFailure) {
++            Log.w(KEYCHAIN_MODULE, "Graceful encryption failure for service '$alias' -> resolving false")
++            promise.resolve(false)
++          } else {
++            Log.e(KEYCHAIN_MODULE, e.message ?: "CryptoFailedException", e)
++            promise.reject(Errors.E_CRYPTO_FAILED, e)
++          }
+         } catch (fail: Throwable) {
+-          Log.e(KEYCHAIN_MODULE, fail.message, fail)
+-          promise.reject(Errors.E_UNKNOWN_ERROR, fail)
++          // Handle direct NPEs during encryption
++          val isGracefulFailure = fail is NullPointerException ||
++                  (fail.message?.contains("Attempt to get length of null array") == true) ||
++                  (fail.message?.contains("Non-interactive decryption mode") == true)
++
++          if (isGracefulFailure) {
++            Log.w(KEYCHAIN_MODULE, "Graceful encryption failure (direct) for service '$alias' -> resolving false")
++            promise.resolve(false)
++          } else {
++            Log.e(KEYCHAIN_MODULE, fail.message ?: "Unknown error", fail)
++            promise.reject(Errors.E_UNKNOWN_ERROR, fail)
++          }
+         }
+       }
+     }
+@@ -268,14 +305,47 @@ class KeychainModule(reactContext: ReactApplicationContext) :
+           credentials.putString(Maps.STORAGE, cipher?.getCipherStorageName())
+           promise.resolve(credentials)
+         } catch (e: KeyStoreAccessException) {
+-          Log.e(KEYCHAIN_MODULE, e.message!!)
+-          promise.reject(Errors.E_KEYSTORE_ACCESS_ERROR, e)
++          // Graceful stale handling: treat missing key as "not found".
++          val isGracefulFailure = e.message?.contains("Missing key for alias") == true ||
++                  e.message?.contains("Attempt to get length of null array") == true
++
++          if (isGracefulFailure) {
++            Log.w(KEYCHAIN_MODULE, "Graceful stale credentials for service '$alias' -> resolving false")
++            promise.resolve(false)
++          } else {
++            Log.e(KEYCHAIN_MODULE, e.message ?: "KeyStoreAccessException without message")
++            promise.reject(Errors.E_KEYSTORE_ACCESS_ERROR, e)
++          }
+         } catch (e: CryptoFailedException) {
+-          Log.e(KEYCHAIN_MODULE, e.message!!)
+-          promise.reject(Errors.E_CRYPTO_FAILED, e)
++          // Graceful stale handling: treat tag/padding failures as "not found".
++          val cause = e.cause
++          val isTagOrPaddingFailure = cause is AEADBadTagException || cause is BadPaddingException ||
++                  cause is NullPointerException ||
++                  (e.message?.contains("Authentication tag verification failed") == true) ||
++                  (e.message?.contains("Could not decrypt data") == true) ||
++                  (e.message?.contains("Missing key for alias") == true) ||
++                  (e.message?.contains("Attempt to get length of null array") == true) ||
++                  (e.message?.contains("Non-interactive decryption mode") == true)
++
++          if (isTagOrPaddingFailure) {
++            Log.w(KEYCHAIN_MODULE, "Graceful stale credentials for service '$alias' -> resolving false")
++            promise.resolve(false)
++          } else {
++            Log.e(KEYCHAIN_MODULE, e.message ?: "CryptoFailedException without message")
++            promise.reject(Errors.E_CRYPTO_FAILED, e)
++          }
+         } catch (fail: Throwable) {
+-          Log.e(KEYCHAIN_MODULE, fail.message, fail)
+-          promise.reject(Errors.E_UNKNOWN_ERROR, fail)
++          val isGracefulFailure = fail is NullPointerException ||
++                  (fail.message?.contains("Attempt to get length of null array") == true) ||
++                  (fail.message?.contains("Non-interactive decryption mode") == true)
++
++          if (isGracefulFailure) {
++            Log.w(KEYCHAIN_MODULE, "Graceful failure (direct) for service '$alias' -> resolving false")
++            promise.resolve(false)
++          } else {
++            Log.e(KEYCHAIN_MODULE, fail.message, fail)
++            promise.reject(Errors.E_UNKNOWN_ERROR, fail)
++          }
+         }
+       }
+     }
+@@ -328,7 +398,7 @@ class KeychainModule(reactContext: ReactApplicationContext) :
+       prefsStorage.removeEntry(alias)
+       promise.resolve(true)
+     } catch (e: KeyStoreAccessException) {
+-      Log.e(KEYCHAIN_MODULE, e.message!!)
++      Log.e(KEYCHAIN_MODULE, e.message ?: "KeyStoreAccessException without message")
+       promise.reject(Errors.E_KEYSTORE_ACCESS_ERROR, e)
+     } catch (fail: Throwable) {
+       Log.e(KEYCHAIN_MODULE, fail.message, fail)
+diff --git a/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageBase.kt b/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageBase.kt
+index adc9c00..9952292 100644
+--- a/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageBase.kt
++++ b/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageBase.kt
+@@ -242,6 +242,18 @@ abstract class CipherStorageBase(protected val applicationContext: Context) : Ci
+     return key
+   }
+ 
++  @Throws(KeyStoreAccessException::class)
++  fun getExistingKeyOrNull(alias: String): Key? {
++    val safeAlias = getDefaultAliasIfEmpty(alias, getDefaultAliasServiceName())
++    val keyStore = getKeyStoreAndLoad()
++    return try {
++      if (!keyStore.containsAlias(safeAlias)) return null
++      keyStore.getKey(safeAlias, null)
++    } catch (fail: Throwable) {
++      throw KeyStoreAccessException("Could not access Keystore for alias $safeAlias", fail)
++    }
++  }
++
+   /** Verify that provided key satisfy minimal needed level. */
+   @Throws(GeneralSecurityException::class)
+   protected fun validateKeySecurityLevel(level: SecurityLevel, key: Key): Boolean {
+@@ -321,7 +333,11 @@ abstract class CipherStorageBase(protected val applicationContext: Context) : Ci
+         return output.toByteArray()
+       }
+     } catch (fail: Throwable) {
+-      Log.e(LOG_TAG, fail.message, fail)
++      if (fail is NullPointerException || fail.message?.contains("Attempt to get length of null array") == true) {
++        Log.w(LOG_TAG, "Potential BouncyCastle conflict during encryption: ${fail.message}")
++      } else {
++        Log.e(LOG_TAG, fail.message ?: "Unknown encryption error", fail)
++      }
+       throw fail
+     }
+   }
+diff --git a/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreAesCbc.kt b/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreAesCbc.kt
+index 98c399f..d89b320 100644
+--- a/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreAesCbc.kt
++++ b/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreAesCbc.kt
+@@ -11,6 +11,7 @@ import com.oblador.keychain.SecurityLevel
+ import com.oblador.keychain.cipherStorage.CipherStorageKeystoreAesCbc.IV.IV_LENGTH
+ import com.oblador.keychain.resultHandler.ResultHandler
+ import com.oblador.keychain.exceptions.CryptoFailedException
++import com.oblador.keychain.exceptions.KeyStoreAccessException
+ import java.io.IOException
+ import java.security.GeneralSecurityException
+ import java.security.Key
+@@ -122,8 +123,14 @@ class CipherStorageKeystoreAesCbc(reactContext: ReactApplicationContext) :
+         val retries = AtomicInteger(1)
+ 
+         try {
+-            val key = extractGeneratedKey(safeAlias, level, retries)
+-
++            // Do not create key on decrypt; missing key should be treated gracefully by caller.
++            // See AES-GCM note: avoid creating new aliases during read which would
++            // change observable state without being able to decrypt restored ciphertext.
++            val key = getExistingKeyOrNull(safeAlias)
++            if (key == null) {
++                handler.onDecrypt(null, KeyStoreAccessException("Missing key for alias: $safeAlias"))
++                return
++            }
+             val results = CipherStorage.DecryptionResult(
+                 decryptBytes(key, username), decryptBytes(key, password), getSecurityLevel(key)
+             )
+diff --git a/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreAesGcm.kt b/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreAesGcm.kt
+index 6b6e626..21bd7a1 100644
+--- a/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreAesGcm.kt
++++ b/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreAesGcm.kt
+@@ -13,6 +13,7 @@ import com.oblador.keychain.resultHandler.CryptoContext
+ import com.oblador.keychain.resultHandler.CryptoOperation
+ import com.oblador.keychain.resultHandler.ResultHandler
+ import com.oblador.keychain.exceptions.CryptoFailedException
++import com.oblador.keychain.exceptions.KeyStoreAccessException
+ import java.io.IOException
+ import java.security.GeneralSecurityException
+ import java.security.Key
+@@ -127,7 +128,17 @@ class CipherStorageKeystoreAesGcm(
+         var key: Key? = null
+ 
+         try {
+-            key = extractGeneratedKey(safeAlias, level, retries)
++            // Do not create key on decrypt; missing key should be treated gracefully by caller.
++            // Rationale: after app reinstall with backups, prefs may be restored but Keystore
++            // is wiped. Auto-generating a key here cannot decrypt old ciphertext and would
++            // mutate state (adding a new alias) which also changes what listing returns.
++            // Instead, surface a missing-key error to the handler; the module maps it to
++            // a graceful "not found" for callers by default.
++            key = getExistingKeyOrNull(safeAlias)
++            if (key == null) {
++                handler.onDecrypt(null, KeyStoreAccessException("Missing key for alias: $safeAlias"))
++                return
++            }
+             val results = CipherStorage.DecryptionResult(
+                 decryptBytes(key, username), decryptBytes(key, password)
+             )
+diff --git a/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreRsaEcb.kt b/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreRsaEcb.kt
+index fc8ebf1..485ffed 100644
+--- a/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreRsaEcb.kt
++++ b/node_modules/react-native-keychain/android/src/main/java/com/oblador/keychain/cipherStorage/CipherStorageKeystoreRsaEcb.kt
+@@ -106,8 +106,14 @@ class CipherStorageKeystoreRsaEcb(reactContext: ReactApplicationContext) :
+         var key: Key? = null
+ 
+         try {
+-            // key is always NOT NULL otherwise GeneralSecurityException raised
+-            key = extractGeneratedKey(safeAlias, level, retries)
++            // Do not create key on decrypt; missing key should be treated gracefully by caller.
++            // Avoid creating a new keypair on read; this would not help decrypt legacy
++            // ciphertext and would alter keystore listings unexpectedly.
++            key = getExistingKeyOrNull(safeAlias)
++            if (key == null) {
++                handler.onDecrypt(null, KeyStoreAccessException("Missing key for alias: $safeAlias"))
++                return
++            }
+ 
+             val results =
+                 CipherStorage.DecryptionResult(

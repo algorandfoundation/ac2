@@ -1,0 +1,29 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "react", "react-perf", "typescript", "jsx-a11y", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error"
+  },
+  "env": {
+    "builtin": true,
+    "node": true,
+    "es2022": true
+  },
+  "settings": {
+    "react": {
+      "version": "19"
+    }
+  },
+  "rules": {
+    "no-console": "off",
+    "react-hooks/exhaustive-deps": "warn",
+    "eslint/no-unused-vars": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["**/__tests__/**", "**/*.test.*", "**/*-test.*"],
+      "rules": {}
+    }
+  ],
+  "ignorePatterns": ["dist/", "node_modules/", ".expo/", "android/", "ios/"]
+}
