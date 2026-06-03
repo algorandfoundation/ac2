@@ -52,8 +52,8 @@ const msg = createSigningRequest(
     id: 'msg-1',
     from: 'did:example:agent',
     to: ['did:example:user'],
-    created_time: Date.now(),
-  },
+    created_time: Math.floor(Date.now() / 1000),
+  }
   {
     description: 'Requesting signature for x402 payment',
     payload: '<base64-encoded-bytes>',
