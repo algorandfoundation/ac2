@@ -206,8 +206,8 @@ describe('handleMessage()', () => {
   });
 
   it('calls onSessionEstablish correctly', async () => {
-    const calls: Array<{ body: { protocol_version: string } }> = [];
-    const handler = (msg: { body: { protocol_version: string } }) => {
+    const calls: Array<{ body: Record<string, unknown> }> = [];
+    const handler = (msg: { body: Record<string, unknown> }) => {
       calls.push(msg);
     };
     await handleMessage(
@@ -215,12 +215,12 @@ describe('handleMessage()', () => {
       { onSessionEstablish: handler },
     );
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.body.protocol_version).toBe('1.0');
+    expect(calls[0]!.body['protocol_version']).toBe('1.0');
   });
 
   it('calls onStreamChunk correctly', async () => {
-    const calls: Array<{ body: { sequence: number } }> = [];
-    const handler = (msg: { body: { sequence: number } }) => {
+    const calls: Array<{ body: Record<string, unknown> }> = [];
+    const handler = (msg: { body: Record<string, unknown> }) => {
       calls.push(msg);
     };
     await handleMessage(
@@ -232,7 +232,7 @@ describe('handleMessage()', () => {
       { onStreamChunk: handler },
     );
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.body.sequence).toBe(2);
+    expect(calls[0]!.body['sequence']).toBe(2);
   });
 
   it('calls onUnknown for invalid messages', async () => {
