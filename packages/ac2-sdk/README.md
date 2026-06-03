@@ -1,6 +1,6 @@
 # @ac2/ac2-sdk
 
-SDK for the [AC2 (Agentic Communication and Control) Protocol](./ac2.md) — a peer-to-peer authenticated messaging system for human-in-the-loop AI agent signing workflows. Agents request signing operations; users approve through their own wallet or application. All communication is end-to-end encrypted via [Liquid Auth](https://github.com/algorandfoundation/liquid-auth).
+SDK for the [AC2 (Agentic Communication and Control) Protocol](https://github.com/algorandfoundation/ac2/blob/master/ac2.md) — a peer-to-peer authenticated messaging system for human-in-the-loop AI agent signing workflows. Agents request signing operations; users approve through their own wallet or application. All communication is end-to-end encrypted via [Liquid Auth](https://github.com/algorandfoundation/liquid-auth).
 
 ## Install
 
@@ -87,4 +87,4 @@ await handleMessage(rawJson, handlers);
 
 Liquid Auth transport integration for establishing authenticated peer-to-peer connections. This layer handles WebRTC DataChannel setup using FIDO2/WebAuthn credentials.
 
-> **Note:** Transport bindings are currently in progress. See the [AC2 spec](./ac2.md) for the full transport model.
+> **Note:** Transport bindings are currently in progress. See the [AC2 spec](https://github.com/algorandfoundation/ac2/blob/master/ac2.md) for the full transport model.
