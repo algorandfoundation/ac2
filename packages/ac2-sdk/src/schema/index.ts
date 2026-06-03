@@ -13,7 +13,6 @@ export type {
   KeyRequestBody,
   KeyResponseBody,
   KeyType,
-  SigningEncoding,
   SigningRequestBody,
   SigningResponseBody,
   ValidationResult,
