@@ -22,7 +22,7 @@ import { validate } from './validator.js';
  * @example
  * const { message, validation } = decode(rawJson);
  * if (validation.valid && isSigningRequest(message)) {
- *   console.log(message.body.operation);
+ *   console.log(message.body.payload);
  * }
  */
 export function decode(raw: string | AC2BaseMessage | Record<string, unknown>): DecodeResult {
