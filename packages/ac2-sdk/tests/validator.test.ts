@@ -153,7 +153,9 @@ describe('validate() — SigningResponse', () => {
     created_time: NOW,
     thid: 'test-001',
     body: {
+      status: 'approved',
       signature: 'c2lnbmF0dXJl',
+      timestamp: '2026-01-01T00:00:00Z',
     },
   };
 
@@ -161,23 +163,40 @@ describe('validate() — SigningResponse', () => {
     expect(validate(base).valid).toBe(true);
   });
 
-  it('accepts a response with signature only', () => {
-    const r = validate({ ...base, body: { signature: 'c2lnbmF0dXJl' } });
-    expect(r.valid).toBe(true);
+  it('rejects missing status', () => {
+    const { status: _, ...body } = base.body;
+    const r = validate({ ...base, body });
+    expect(r.valid).toBe(false);
   });
 
-  it('rejects unsupported extra fields', () => {
+  it('rejects invalid status', () => {
     const r = validate({
       ...base,
-      body: { signature: 'c2lnbmF0dXJl', timestamp: '2026-01-01T00:00:00Z' },
+      body: { ...base.body, status: 'pending' },
     });
     expect(r.valid).toBe(false);
   });
 
   it('rejects missing signature', () => {
-    const r = validate({ ...base, body: {} });
+    const { signature: _, ...body } = base.body;
+    const r = validate({ ...base, body });
     expect(r.valid).toBe(false);
     expect(r.errors.some((e) => e.includes('signature'))).toBe(true);
+  });
+
+  it('rejects missing timestamp', () => {
+    const { timestamp: _, ...body } = base.body;
+    const r = validate({ ...base, body });
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => e.includes('timestamp'))).toBe(true);
+  });
+
+  it('rejects unsupported extra fields', () => {
+    const r = validate({
+      ...base,
+      body: { ...base.body, extra: true },
+    });
+    expect(r.valid).toBe(false);
   });
 });
 
@@ -221,8 +240,16 @@ describe('validate() — KeyRequest', () => {
   };
 
   it('accepts a key request with documented fields', () => expect(validate(base).valid).toBe(true));
-  it('accepts arbitrary key request bodies', () => {
-    expect(validate({ ...base, body: { any: 'value', nested: { x: 1 } } }).valid).toBe(true);
+  it('rejects key request bodies missing required fields', () => {
+    expect(validate({ ...base, body: { purpose: 'Algorand identity' } }).valid).toBe(false);
+  });
+
+  it('rejects unsupported key types', () => {
+    expect(validate({ ...base, body: { ...base.body, key_type: 'rsa' } }).valid).toBe(false);
+  });
+
+  it('rejects extra key request fields', () => {
+    expect(validate({ ...base, body: { ...base.body, any: 'value' } }).valid).toBe(false);
   });
 });
 

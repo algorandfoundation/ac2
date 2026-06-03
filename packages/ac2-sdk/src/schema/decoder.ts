@@ -3,14 +3,8 @@ import type {
   AC2KeyRequest,
   AC2KeyResponse,
   AC2Message,
-  AC2SessionClose,
-  AC2SessionEstablish,
-  AC2SigningRejected,
   AC2SigningRequest,
   AC2SigningResponse,
-  AC2StreamChunk,
-  AC2StreamEnd,
-  AC2StreamRequest,
   DecodeResult,
   ValidationResult,
 } from './types.js';
@@ -63,34 +57,10 @@ export function isSigningResponse(msg: AC2BaseMessage): msg is AC2SigningRespons
   return msg.type === AC2MessageTypes.SIGNING_RESPONSE;
 }
 
-export function isSigningRejected(msg: AC2BaseMessage): msg is AC2SigningRejected {
-  return msg.type === AC2MessageTypes.SIGNING_REJECTED;
-}
-
 export function isKeyRequest(msg: AC2BaseMessage): msg is AC2KeyRequest {
   return msg.type === AC2MessageTypes.KEY_REQUEST;
 }
 
 export function isKeyResponse(msg: AC2BaseMessage): msg is AC2KeyResponse {
   return msg.type === AC2MessageTypes.KEY_RESPONSE;
-}
-
-export function isSessionEstablish(msg: AC2BaseMessage): msg is AC2SessionEstablish {
-  return msg.type === AC2MessageTypes.SESSION_ESTABLISH;
-}
-
-export function isSessionClose(msg: AC2BaseMessage): msg is AC2SessionClose {
-  return msg.type === AC2MessageTypes.SESSION_CLOSE;
-}
-
-export function isStreamRequest(msg: AC2BaseMessage): msg is AC2StreamRequest {
-  return msg.type === AC2MessageTypes.STREAM_REQUEST;
-}
-
-export function isStreamChunk(msg: AC2BaseMessage): msg is AC2StreamChunk {
-  return msg.type === AC2MessageTypes.STREAM_CHUNK;
-}
-
-export function isStreamEnd(msg: AC2BaseMessage): msg is AC2StreamEnd {
-  return msg.type === AC2MessageTypes.STREAM_END;
 }

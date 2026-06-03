@@ -18,20 +18,11 @@ export const signingRequestBodySchema = {
 export const signingResponseBodySchema = {
   $schema: 'http://json-schema.org/draft-07/schema#',
   type: 'object',
-  required: ['signature'],
+  required: ['status', 'signature', 'timestamp'],
   properties: {
+    status: { type: 'string', enum: ['approved', 'rejected'] },
     signature: { type: 'string', minLength: 1 },
-  },
-  additionalProperties: false,
-} as const;
-
-/** Body schema for ac2/SigningRejected */
-export const signingRejectedBodySchema = {
-  $schema: 'http://json-schema.org/draft-07/schema#',
-  type: 'object',
-  required: ['reason'],
-  properties: {
-    reason: { type: 'string', minLength: 1 },
+    timestamp: { type: 'string', minLength: 1 },
   },
   additionalProperties: false,
 } as const;

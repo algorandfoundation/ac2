@@ -2,17 +2,8 @@ import type { ErrorObject } from 'ajv';
 import Ajv from 'ajv';
 import { baseMessageSchema } from './definitions/base.js';
 import { keyRequestBodySchema, keyResponseBodySchema } from './definitions/key.js';
-import { sessionCloseBodySchema, sessionEstablishBodySchema } from './definitions/session.js';
-import {
-  signingRejectedBodySchema,
-  signingRequestBodySchema,
-  signingResponseBodySchema,
-} from './definitions/signing.js';
-import {
-  streamChunkBodySchema,
-  streamEndBodySchema,
-  streamRequestBodySchema,
-} from './definitions/streaming.js';
+import { signingRequestBodySchema, signingResponseBodySchema } from './definitions/signing.js';
+
 import type { ValidationResult } from './types.js';
 import { AC2MessageTypes } from './types.js';
 
@@ -25,14 +16,8 @@ const validateBase = ajv.compile(baseMessageSchema);
 const bodyValidators: Record<string, ReturnType<typeof ajv.compile>> = {
   [AC2MessageTypes.SIGNING_REQUEST]: ajv.compile(signingRequestBodySchema),
   [AC2MessageTypes.SIGNING_RESPONSE]: ajv.compile(signingResponseBodySchema),
-  [AC2MessageTypes.SIGNING_REJECTED]: ajv.compile(signingRejectedBodySchema),
   [AC2MessageTypes.KEY_REQUEST]: ajv.compile(keyRequestBodySchema),
   [AC2MessageTypes.KEY_RESPONSE]: ajv.compile(keyResponseBodySchema),
-  [AC2MessageTypes.SESSION_ESTABLISH]: ajv.compile(sessionEstablishBodySchema),
-  [AC2MessageTypes.SESSION_CLOSE]: ajv.compile(sessionCloseBodySchema),
-  [AC2MessageTypes.STREAM_REQUEST]: ajv.compile(streamRequestBodySchema),
-  [AC2MessageTypes.STREAM_CHUNK]: ajv.compile(streamChunkBodySchema),
-  [AC2MessageTypes.STREAM_END]: ajv.compile(streamEndBodySchema),
 };
 
 const KNOWN_TYPES = new Set<string>(Object.values(AC2MessageTypes));

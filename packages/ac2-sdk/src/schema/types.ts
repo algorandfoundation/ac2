@@ -50,12 +50,8 @@ export const AC2MessageTypes = {
   SESSION_CLOSE: 'ac2/SessionClose',
   SIGNING_REQUEST: 'ac2/SigningRequest',
   SIGNING_RESPONSE: 'ac2/SigningResponse',
-  SIGNING_REJECTED: 'ac2/SigningRejected',
   KEY_REQUEST: 'ac2/KeyRequest',
   KEY_RESPONSE: 'ac2/KeyResponse',
-  STREAM_REQUEST: 'ac2/StreamRequest',
-  STREAM_CHUNK: 'ac2/StreamChunk',
-  STREAM_END: 'ac2/StreamEnd',
 } as const;
 
 export type AC2MessageType = (typeof AC2MessageTypes)[keyof typeof AC2MessageTypes];
@@ -80,43 +76,21 @@ export interface SigningRequestBody {
 
 /** Body for ac2/SigningResponse (controller → agent) */
 export interface SigningResponseBody {
+  status: 'approved' | 'rejected';
   /** The raw signature, base64-encoded */
   signature: string;
-}
-
-/** Body for ac2/SigningRejected (controller → agent) */
-export interface SigningRejectedBody {
-  /** Human-readable reason for rejection */
-  reason: string;
+  timestamp: string;
 }
 
 /** Body for ac2/KeyRequest (agent → controller) */
-export type KeyRequestBody = Record<string, unknown>;
+export interface KeyRequestBody {
+  key_type: 'ed25519' | 'secp256k1' | 'falcon-512';
+  purpose: string;
+  for_operation: string;
+}
 
 /** Body for ac2/KeyResponse (controller → agent) */
 export type KeyResponseBody = Record<string, unknown>;
-
-/** Body for ac2/SessionEstablish */
-export type SessionEstablishBody = Record<string, unknown>;
-
-/** Body for ac2/SessionClose */
-export type SessionCloseBody = Record<string, unknown>;
-
-/** Body for ac2/StreamRequest (controller → agent) */
-export type StreamRequestBody = Record<string, unknown>;
-
-/** Token usage statistics embedded in stream chunks */
-export interface StreamUsage {
-  input_tokens?: number;
-  output_tokens?: number;
-  total_tokens?: number;
-}
-
-/** Body for ac2/StreamChunk (agent → controller) */
-export type StreamChunkBody = Record<string, unknown>;
-
-/** Body for ac2/StreamEnd (agent → controller) */
-export type StreamEndBody = Record<string, unknown>;
 
 // ─── Typed Messages ───────────────────────────────────────────────────────────
 //
@@ -134,11 +108,6 @@ export interface AC2SigningResponse extends AC2BaseMessage {
   body: SigningResponseBody;
 }
 
-export interface AC2SigningRejected extends AC2BaseMessage {
-  type: 'ac2/SigningRejected';
-  body: SigningRejectedBody;
-}
-
 export interface AC2KeyRequest extends AC2BaseMessage {
   type: 'ac2/KeyRequest';
   body: KeyRequestBody;
@@ -149,42 +118,7 @@ export interface AC2KeyResponse extends AC2BaseMessage {
   body: KeyResponseBody;
 }
 
-export interface AC2SessionEstablish extends AC2BaseMessage {
-  type: 'ac2/SessionEstablish';
-  body: SessionEstablishBody;
-}
-
-export interface AC2SessionClose extends AC2BaseMessage {
-  type: 'ac2/SessionClose';
-  body: SessionCloseBody;
-}
-
-export interface AC2StreamRequest extends AC2BaseMessage {
-  type: 'ac2/StreamRequest';
-  body: StreamRequestBody;
-}
-
-export interface AC2StreamChunk extends AC2BaseMessage {
-  type: 'ac2/StreamChunk';
-  body: StreamChunkBody;
-}
-
-export interface AC2StreamEnd extends AC2BaseMessage {
-  type: 'ac2/StreamEnd';
-  body: StreamEndBody;
-}
-
-export type AC2Message =
-  | AC2SigningRequest
-  | AC2SigningResponse
-  | AC2SigningRejected
-  | AC2KeyRequest
-  | AC2KeyResponse
-  | AC2SessionEstablish
-  | AC2SessionClose
-  | AC2StreamRequest
-  | AC2StreamChunk
-  | AC2StreamEnd;
+export type AC2Message = AC2SigningRequest | AC2SigningResponse | AC2KeyRequest | AC2KeyResponse;
 
 // ─── Result Types ─────────────────────────────────────────────────────────────
 
