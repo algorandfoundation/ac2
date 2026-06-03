@@ -80,7 +80,7 @@ export function validate(payload: unknown): ValidationResult {
     const bodyValidator = bodyValidators[messageType];
     if (!bodyValidator(msg.body) && bodyValidator.errors) {
       for (const err of bodyValidator.errors) {
-        errors.push(`body${formatAjvError(err)}`);
+        errors.push(`body ${formatAjvError(err)}`);
       }
     }
   }
