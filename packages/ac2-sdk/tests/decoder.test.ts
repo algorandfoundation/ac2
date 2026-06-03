@@ -31,7 +31,6 @@ const signingRequestMsg = {
     description: "Sign Algorand transaction",
     encoding: "base64",
     payload: "dGVzdA==",
-    operation: "algorand-txn",
   },
 };
 
@@ -170,13 +169,13 @@ describe("type guards", () => {
 
 describe("handleMessage()", () => {
   it("calls onSigningRequest for a SigningRequest", async () => {
-    const calls: Array<{ body: { operation: string } }> = [];
-    const handler = (msg: { body: { operation: string } }) => {
+    const calls: Array<{ body: { description: string } }> = [];
+    const handler = (msg: { body: { description: string } }) => {
       calls.push(msg);
     };
     await handleMessage(signingRequestMsg, { onSigningRequest: handler });
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.body.operation).toBe("algorand-txn");
+    expect(calls[0]!.body.description).toBe("Sign Algorand transaction");
   });
 
   it("does not call unrelated handlers", async () => {
@@ -258,9 +257,9 @@ describe("handleMessage()", () => {
     await handleMessage(signingRequestMsg, {
       onSigningRequest: async (m) => {
         await Promise.resolve();
-        results.push(m.body.operation);
+        results.push(m.body.description);
       },
     });
-    expect(results).toEqual(["algorand-txn"]);
+    expect(results).toEqual(["Sign Algorand transaction"]);
   });
 });

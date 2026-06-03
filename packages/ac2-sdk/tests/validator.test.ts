@@ -15,7 +15,6 @@ const validSigningRequest = {
     description: "Sign this payload",
     encoding: "base64",
     payload: "dGVzdA==",
-    operation: "algorand-txn",
   },
 };
 
@@ -126,12 +125,20 @@ describe("validate() — SigningRequest body", () => {
     expect(r.errors.length).toBeGreaterThan(0);
   });
 
-  it("accepts optional schema and context", () => {
+  it("accepts optional schema", () => {
     const r = validate({
       ...validSigningRequest,
-      body: { ...validSigningRequest.body, schema: "https://x402.org/v1", context: "API fee" },
+      body: { ...validSigningRequest.body, schema: "https://x402.org/v1" },
     });
     expect(r.valid).toBe(true);
+  });
+
+  it("rejects unsupported extra fields", () => {
+    const r = validate({
+      ...validSigningRequest,
+      body: { ...validSigningRequest.body, operation: "algorand-txn" },
+    });
+    expect(r.valid).toBe(false);
   });
 });
 
@@ -147,7 +154,6 @@ describe("validate() — SigningResponse", () => {
     thid: "test-001",
     body: {
       signature: "c2lnbmF0dXJl",
-      timestamp: new Date().toISOString(),
     },
   };
 
@@ -155,13 +161,18 @@ describe("validate() — SigningResponse", () => {
     expect(validate(base).valid).toBe(true);
   });
 
-  it("accepts response without optional timestamp", () => {
+  it("accepts a response with signature only", () => {
     const r = validate({ ...base, body: { signature: "c2lnbmF0dXJl" } });
     expect(r.valid).toBe(true);
   });
 
+  it("rejects unsupported extra fields", () => {
+    const r = validate({ ...base, body: { signature: "c2lnbmF0dXJl", timestamp: "2026-01-01T00:00:00Z" } });
+    expect(r.valid).toBe(false);
+  });
+
   it("rejects missing signature", () => {
-    const r = validate({ ...base, body: { timestamp: new Date().toISOString() } });
+    const r = validate({ ...base, body: {} });
     expect(r.valid).toBe(false);
     expect(r.errors.some((e) => e.includes("signature"))).toBe(true);
   });
@@ -294,7 +305,6 @@ describe("validateBody()", () => {
       description: "test",
       encoding: "base64",
       payload: "dGVzdA==",
-      operation: "test-op",
     });
     expect(r.valid).toBe(true);
     expect(r.errors).toHaveLength(0);

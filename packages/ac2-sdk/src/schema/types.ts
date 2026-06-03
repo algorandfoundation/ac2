@@ -74,20 +74,14 @@ export interface SigningRequestBody {
   encoding: SigningEncoding;
   /** The data to be signed, encoded per `encoding` */
   payload: string;
-  /** Signature operation type, e.g. "x402-payment", "git-commit", "algorand-txn" */
-  operation: string;
   /** Optional schema identifier for the payload (e.g. x402 payment schema URI) */
   schema?: string;
-  /** Context: why this signature is needed */
-  context?: string;
 }
 
 /** Body for ac2/SigningResponse (controller → agent) */
 export interface SigningResponseBody {
   /** The raw signature, base64-encoded */
   signature: string;
-  /** Optional timestamp (ISO 8601) when the user approved */
-  timestamp?: string;
 }
 
 /** Body for ac2/SigningRejected (controller → agent) */

@@ -55,9 +55,10 @@ const msg = createSigningRequest(
     created_time: Date.now(),
   },
   {
+    description: "Requesting signature for x402 payment",
     payload: "<base64-encoded-bytes>",
     encoding: "base64",
-    context: "Sign this transaction",
+    schema: "https://x402.org/schema/payment/v1",
   },
 );
 ```

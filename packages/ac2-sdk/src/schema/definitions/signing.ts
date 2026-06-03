@@ -4,14 +4,12 @@ const SIGNING_ENCODINGS = ["base64", "hex", "utf8", "cbor"] as const;
 export const signingRequestBodySchema = {
   $schema: "http://json-schema.org/draft-07/schema#",
   type: "object",
-  required: ["description", "encoding", "payload", "operation"],
+  required: ["description", "encoding", "payload"],
   properties: {
     description: { type: "string", minLength: 1 },
     encoding: { type: "string", enum: SIGNING_ENCODINGS },
     payload: { type: "string", minLength: 1 },
-    operation: { type: "string", minLength: 1 },
     schema: { type: "string" },
-    context: { type: "string" },
   },
   additionalProperties: false,
 } as const;
@@ -23,7 +21,6 @@ export const signingResponseBodySchema = {
   required: ["signature"],
   properties: {
     signature: { type: "string", minLength: 1 },
-    timestamp: { type: "string" },
   },
   additionalProperties: false,
 } as const;
