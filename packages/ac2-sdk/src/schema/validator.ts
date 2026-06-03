@@ -1,20 +1,20 @@
-import type { ErrorObject } from "ajv";
-import Ajv from "ajv";
-import { baseMessageSchema } from "./definitions/base.js";
-import { keyRequestBodySchema, keyResponseBodySchema } from "./definitions/key.js";
-import { sessionCloseBodySchema, sessionEstablishBodySchema } from "./definitions/session.js";
+import type { ErrorObject } from 'ajv';
+import Ajv from 'ajv';
+import { baseMessageSchema } from './definitions/base.js';
+import { keyRequestBodySchema, keyResponseBodySchema } from './definitions/key.js';
+import { sessionCloseBodySchema, sessionEstablishBodySchema } from './definitions/session.js';
 import {
   signingRejectedBodySchema,
   signingRequestBodySchema,
   signingResponseBodySchema,
-} from "./definitions/signing.js";
+} from './definitions/signing.js';
 import {
   streamChunkBodySchema,
   streamEndBodySchema,
   streamRequestBodySchema,
-} from "./definitions/streaming.js";
-import type { ValidationResult } from "./types.js";
-import { AC2MessageTypes } from "./types.js";
+} from './definitions/streaming.js';
+import type { ValidationResult } from './types.js';
+import { AC2MessageTypes } from './types.js';
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 
@@ -52,8 +52,8 @@ export function validate(payload: unknown): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  if (payload === null || typeof payload !== "object") {
-    return { valid: false, errors: ["Payload must be a non-null object"], warnings };
+  if (payload === null || typeof payload !== 'object') {
+    return { valid: false, errors: ['Payload must be a non-null object'], warnings };
   }
 
   // Pass 1 — base envelope
@@ -64,7 +64,7 @@ export function validate(payload: unknown): ValidationResult {
   }
 
   const msg = payload as Record<string, unknown>;
-  const messageType = typeof msg.type === "string" ? msg.type : undefined;
+  const messageType = typeof msg.type === 'string' ? msg.type : undefined;
 
   // Warn on unrecognised type (forward-compatibility: don't error)
   if (messageType !== undefined && !KNOWN_TYPES.has(messageType)) {
@@ -72,7 +72,7 @@ export function validate(payload: unknown): ValidationResult {
   }
 
   // Warn on expired message
-  if (typeof msg.expires_time === "number" && msg.expires_time < Date.now() / 1000) {
+  if (typeof msg.expires_time === 'number' && msg.expires_time < Date.now() / 1000) {
     warnings.push(
       `Message has expired (expires_time: ${msg.expires_time}, now: ${Math.floor(Date.now() / 1000)})`,
     );
@@ -82,7 +82,7 @@ export function validate(payload: unknown): ValidationResult {
   if (
     messageType &&
     messageType in bodyValidators &&
-    typeof msg.body === "object" &&
+    typeof msg.body === 'object' &&
     msg.body !== null
   ) {
     const bodyValidator = bodyValidators[messageType]!;
@@ -136,6 +136,6 @@ export function validateBody(type: string, body: unknown): ValidationResult {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatAjvError(err: ErrorObject): string {
-  const path = err.instancePath ? ` ${err.instancePath}` : "";
-  return `${path} ${err.message ?? "unknown error"}`.trim();
+  const path = err.instancePath ? ` ${err.instancePath}` : '';
+  return `${path} ${err.message ?? 'unknown error'}`.trim();
 }

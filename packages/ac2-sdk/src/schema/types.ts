@@ -22,7 +22,7 @@ export interface AC2Attachment {
  * DIDs for `from` / `to`.
  */
 export interface AC2BaseMessage {
-  "@context"?: string[];
+  '@context'?: string[];
   /** Unique message ID (UUID recommended) */
   id: string;
   /** Message type URI, e.g. "ac2/SigningRequest" */
@@ -46,25 +46,25 @@ export interface AC2BaseMessage {
 // ─── Message Type Constants ───────────────────────────────────────────────────
 
 export const AC2MessageTypes = {
-  SESSION_ESTABLISH: "ac2/SessionEstablish",
-  SESSION_CLOSE: "ac2/SessionClose",
-  SIGNING_REQUEST: "ac2/SigningRequest",
-  SIGNING_RESPONSE: "ac2/SigningResponse",
-  SIGNING_REJECTED: "ac2/SigningRejected",
-  KEY_REQUEST: "ac2/KeyRequest",
-  KEY_RESPONSE: "ac2/KeyResponse",
-  STREAM_REQUEST: "ac2/StreamRequest",
-  STREAM_CHUNK: "ac2/StreamChunk",
-  STREAM_END: "ac2/StreamEnd",
+  SESSION_ESTABLISH: 'ac2/SessionEstablish',
+  SESSION_CLOSE: 'ac2/SessionClose',
+  SIGNING_REQUEST: 'ac2/SigningRequest',
+  SIGNING_RESPONSE: 'ac2/SigningResponse',
+  SIGNING_REJECTED: 'ac2/SigningRejected',
+  KEY_REQUEST: 'ac2/KeyRequest',
+  KEY_RESPONSE: 'ac2/KeyResponse',
+  STREAM_REQUEST: 'ac2/StreamRequest',
+  STREAM_CHUNK: 'ac2/StreamChunk',
+  STREAM_END: 'ac2/StreamEnd',
 } as const;
 
 export type AC2MessageType = (typeof AC2MessageTypes)[keyof typeof AC2MessageTypes];
 
 // ─── Body Types ───────────────────────────────────────────────────────────────
 
-export type SigningEncoding = "base64" | "hex" | "utf8" | "cbor";
-export type KeyType = "ed25519" | "secp256k1" | "falcon-512";
-export type KeyEncoding = "base64" | "base64url" | "hex";
+export type SigningEncoding = 'base64' | 'hex' | 'utf8' | 'cbor';
+export type KeyType = 'ed25519' | 'secp256k1' | 'falcon-512';
+export type KeyEncoding = 'base64' | 'base64url' | 'hex';
 
 /** Body for ac2/SigningRequest (agent → controller) */
 export interface SigningRequestBody {
@@ -91,44 +91,19 @@ export interface SigningRejectedBody {
 }
 
 /** Body for ac2/KeyRequest (agent → controller) */
-export interface KeyRequestBody {
-  key_type: KeyType;
-  /** Why the key is needed */
-  purpose: string;
-  /** Which operation will use this key */
-  for_operation: string;
-}
+export type KeyRequestBody = Record<string, unknown>;
 
 /** Body for ac2/KeyResponse (controller → agent) */
-export interface KeyResponseBody {
-  key_type: KeyType;
-  /** The public key bytes */
-  public_key: string;
-  encoding: KeyEncoding;
-}
+export type KeyResponseBody = Record<string, unknown>;
 
 /** Body for ac2/SessionEstablish */
-export interface SessionEstablishBody {
-  /** Semantic version of the AC2 protocol, e.g. "1.0" */
-  protocol_version: string;
-  /** Optional self-declared DID of the agent */
-  agent_did?: string;
-  /** Capabilities offered by this side */
-  capabilities?: string[];
-}
+export type SessionEstablishBody = Record<string, unknown>;
 
 /** Body for ac2/SessionClose */
-export interface SessionCloseBody {
-  reason?: string;
-}
+export type SessionCloseBody = Record<string, unknown>;
 
 /** Body for ac2/StreamRequest (controller → agent) */
-export interface StreamRequestBody {
-  /** Unique identifier for this stream session */
-  stream_id: string;
-  content: string;
-  content_type: "text" | "audio";
-}
+export type StreamRequestBody = Record<string, unknown>;
 
 /** Token usage statistics embedded in stream chunks */
 export interface StreamUsage {
@@ -138,22 +113,10 @@ export interface StreamUsage {
 }
 
 /** Body for ac2/StreamChunk (agent → controller) */
-export interface StreamChunkBody {
-  stream_id: string;
-  /** Monotonically increasing sequence number */
-  sequence: number;
-  content: string;
-  content_type: "text" | "audio";
-  /** True when this is the final chunk of the stream */
-  is_last?: boolean;
-  usage?: StreamUsage;
-}
+export type StreamChunkBody = Record<string, unknown>;
 
 /** Body for ac2/StreamEnd (agent → controller) */
-export interface StreamEndBody {
-  stream_id: string;
-  usage?: StreamUsage;
-}
+export type StreamEndBody = Record<string, unknown>;
 
 // ─── Typed Messages ───────────────────────────────────────────────────────────
 //
@@ -162,52 +125,52 @@ export interface StreamEndBody {
 // to `object`, so the extends constraint is satisfied.
 
 export interface AC2SigningRequest extends AC2BaseMessage {
-  type: "ac2/SigningRequest";
+  type: 'ac2/SigningRequest';
   body: SigningRequestBody;
 }
 
 export interface AC2SigningResponse extends AC2BaseMessage {
-  type: "ac2/SigningResponse";
+  type: 'ac2/SigningResponse';
   body: SigningResponseBody;
 }
 
 export interface AC2SigningRejected extends AC2BaseMessage {
-  type: "ac2/SigningRejected";
+  type: 'ac2/SigningRejected';
   body: SigningRejectedBody;
 }
 
 export interface AC2KeyRequest extends AC2BaseMessage {
-  type: "ac2/KeyRequest";
+  type: 'ac2/KeyRequest';
   body: KeyRequestBody;
 }
 
 export interface AC2KeyResponse extends AC2BaseMessage {
-  type: "ac2/KeyResponse";
+  type: 'ac2/KeyResponse';
   body: KeyResponseBody;
 }
 
 export interface AC2SessionEstablish extends AC2BaseMessage {
-  type: "ac2/SessionEstablish";
+  type: 'ac2/SessionEstablish';
   body: SessionEstablishBody;
 }
 
 export interface AC2SessionClose extends AC2BaseMessage {
-  type: "ac2/SessionClose";
+  type: 'ac2/SessionClose';
   body: SessionCloseBody;
 }
 
 export interface AC2StreamRequest extends AC2BaseMessage {
-  type: "ac2/StreamRequest";
+  type: 'ac2/StreamRequest';
   body: StreamRequestBody;
 }
 
 export interface AC2StreamChunk extends AC2BaseMessage {
-  type: "ac2/StreamChunk";
+  type: 'ac2/StreamChunk';
   body: StreamChunkBody;
 }
 
 export interface AC2StreamEnd extends AC2BaseMessage {
-  type: "ac2/StreamEnd";
+  type: 'ac2/StreamEnd';
   body: StreamEndBody;
 }
 

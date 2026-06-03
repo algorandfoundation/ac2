@@ -13,9 +13,9 @@ import type {
   AC2StreamRequest,
   DecodeResult,
   ValidationResult,
-} from "./types.js";
-import { AC2MessageTypes } from "./types.js";
-import { validate } from "./validator.js";
+} from './types.js';
+import { AC2MessageTypes } from './types.js';
+import { validate } from './validator.js';
 
 // ─── Decode ───────────────────────────────────────────────────────────────────
 
@@ -34,13 +34,13 @@ import { validate } from "./validator.js";
 export function decode(raw: string | Record<string, unknown>): DecodeResult {
   let obj: unknown;
 
-  if (typeof raw === "string") {
+  if (typeof raw === 'string') {
     try {
       obj = JSON.parse(raw);
     } catch {
       const validation: ValidationResult = {
         valid: false,
-        errors: ["Invalid JSON: failed to parse"],
+        errors: ['Invalid JSON: failed to parse'],
         warnings: [],
       };
       return { message: {} as AC2Message, validation };

@@ -12,11 +12,11 @@ npm install @ac2/ac2-sdk
 
 The SDK is a single package with three export paths:
 
-| Path | Description |
-|------|-------------|
-| `@ac2/ac2-sdk/schema` | Pure schema: types, type guards, decoding, and validation |
-| `@ac2/ac2-sdk/protocol` | Message factories and dispatcher built on top of the schema |
-| `@ac2/ac2-sdk/transport` | Liquid Auth transport integration |
+| Path                     | Description                                                 |
+| ------------------------ | ----------------------------------------------------------- |
+| `@ac2/ac2-sdk/schema`    | Pure schema: types, type guards, decoding, and validation   |
+| `@ac2/ac2-sdk/protocol`  | Message factories and dispatcher built on top of the schema |
+| `@ac2/ac2-sdk/transport` | Liquid Auth transport integration                           |
 
 ## Usage
 
@@ -25,7 +25,7 @@ The SDK is a single package with three export paths:
 Low-level schema primitives. Use this when you need direct control over decoding or validation.
 
 ```ts
-import { decode, validate, isSigningRequest } from "@ac2/ac2-sdk/schema";
+import { decode, validate, isSigningRequest } from '@ac2/ac2-sdk/schema';
 
 const { message, validation } = decode(rawJson);
 
@@ -45,20 +45,20 @@ Message factories and a handler dispatcher. Use this to build and process AC2 me
 **Creating messages:**
 
 ```ts
-import { createSigningRequest } from "@ac2/ac2-sdk/protocol";
+import { createSigningRequest } from '@ac2/ac2-sdk/protocol';
 
 const msg = createSigningRequest(
   {
-    id: "msg-1",
-    from: "did:example:agent",
-    to: ["did:example:user"],
+    id: 'msg-1',
+    from: 'did:example:agent',
+    to: ['did:example:user'],
     created_time: Date.now(),
   },
   {
-    description: "Requesting signature for x402 payment",
-    payload: "<base64-encoded-bytes>",
-    encoding: "base64",
-    schema: "https://x402.org/schema/payment/v1",
+    description: 'Requesting signature for x402 payment',
+    payload: '<base64-encoded-bytes>',
+    encoding: 'base64',
+    schema: 'https://x402.org/schema/payment/v1',
   },
 );
 ```
@@ -66,8 +66,8 @@ const msg = createSigningRequest(
 **Handling incoming messages:**
 
 ```ts
-import { handleMessage } from "@ac2/ac2-sdk/protocol";
-import type { MessageHandlers } from "@ac2/ac2-sdk/protocol";
+import { handleMessage } from '@ac2/ac2-sdk/protocol';
+import type { MessageHandlers } from '@ac2/ac2-sdk/protocol';
 
 const handlers: MessageHandlers = {
   onSigningRequest: async (msg) => {
@@ -77,7 +77,7 @@ const handlers: MessageHandlers = {
     // use the signature
   },
   onUnknown: async (msg, validation) => {
-    console.warn("Unhandled message", msg.type, validation.errors);
+    console.warn('Unhandled message', msg.type, validation.errors);
   },
 };
 
