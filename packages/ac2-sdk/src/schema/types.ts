@@ -72,7 +72,6 @@ export type AC2MessageType = (typeof AC2MessageTypes)[keyof typeof AC2MessageTyp
 
 // ─── Body Types ───────────────────────────────────────────────────────────────
 
-export type SigningEncoding = 'base64' | 'hex' | 'utf8' | 'cbor';
 export type KeyType = 'ed25519' | 'secp256k1' | 'falcon-512';
 export type KeyEncoding = 'base64' | 'base64url' | 'hex';
 
@@ -81,7 +80,7 @@ export interface SigningRequestBody {
   /** Human-readable description shown to the user before they approve */
   description: string;
   /** Encoding of the `payload` field */
-  encoding: SigningEncoding;
+  encoding: 'base64';
   /** The data to be signed, encoded per `encoding` */
   payload: string;
   /** Optional schema identifier for the payload (e.g. x402 payment schema URI) */

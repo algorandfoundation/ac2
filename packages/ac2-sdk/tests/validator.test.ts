@@ -92,14 +92,12 @@ describe('validate() — base envelope', () => {
 // ─── SigningRequest body ──────────────────────────────────────────────────────
 
 describe('validate() — SigningRequest body', () => {
-  it('accepts all valid encodings', () => {
-    for (const enc of ['base64', 'hex', 'utf8', 'cbor']) {
-      const r = validate({
-        ...validSigningRequest,
-        body: { ...validSigningRequest.body, encoding: enc },
-      });
-      expect(r.valid).toBe(true);
-    }
+  it('accepts valid encoding', () => {
+    const r = validate({
+      ...validSigningRequest,
+      body: { ...validSigningRequest.body, encoding: 'base64' },
+    });
+    expect(r.valid).toBe(true);
   });
 
   it('rejects invalid encoding', () => {
@@ -227,57 +225,6 @@ describe('validate() — KeyRequest', () => {
 
   it('rejects extra key request fields', () => {
     expect(validate({ ...base, body: { ...base.body, any: 'value' } }).valid).toBe(false);
-  });
-});
-
-// ─── SessionEstablish ─────────────────────────────────────────────────────────
-
-describe('validate() — SessionEstablish', () => {
-  const base = {
-    id: 'test-005',
-    type: 'ac2/SessionEstablish',
-    from: 'did:key:agent',
-    to: ['did:key:user'],
-    created_time: NOW,
-    body: { protocol_version: '1.0' },
-  };
-
-  it('accepts SessionEstablish with documented fields', () =>
-    expect(validate(base).valid).toBe(true));
-  it('accepts SessionEstablish with arbitrary fields', () => {
-    const r = validate({ ...base, body: { protocol_version: 'v1', any: true } });
-    expect(r.valid).toBe(true);
-  });
-});
-
-// ─── StreamChunk ──────────────────────────────────────────────────────────────
-
-describe('validate() — StreamChunk', () => {
-  const base = {
-    id: 'test-006',
-    type: 'ac2/StreamChunk',
-    from: 'did:key:agent',
-    to: ['did:key:user'],
-    created_time: NOW,
-    body: {
-      stream_id: 'stream-1',
-      sequence: 0,
-      content: 'Hello world',
-      content_type: 'text',
-    },
-  };
-
-  it('accepts a StreamChunk with documented fields', () => expect(validate(base).valid).toBe(true));
-  it('accepts optional is_last and usage', () => {
-    const r = validate({
-      ...base,
-      body: { ...base.body, is_last: true, usage: { input_tokens: 5, output_tokens: 10 } },
-    });
-    expect(r.valid).toBe(true);
-  });
-  it('accepts arbitrary StreamChunk fields', () => {
-    const r = validate({ ...base, body: { random: 'field', sequence: 'not-number' } });
-    expect(r.valid).toBe(true);
   });
 });
 

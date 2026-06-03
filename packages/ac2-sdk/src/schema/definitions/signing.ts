@@ -2,7 +2,6 @@ import type { JSONSchemaType } from 'ajv';
 
 import type { SigningRequestBody, SigningResponseBody } from '../types.js';
 import { DRAFT_07_SCHEMA_URI } from './constants.js';
-const SIGNING_ENCODINGS = ['base64', 'hex', 'utf8', 'cbor'] as const;
 
 /** Body schema for ac2/SigningRequest */
 export const signingRequestBodySchema: JSONSchemaType<SigningRequestBody> = {
@@ -11,7 +10,7 @@ export const signingRequestBodySchema: JSONSchemaType<SigningRequestBody> = {
   required: ['description', 'encoding', 'payload'],
   properties: {
     description: { type: 'string', minLength: 1 },
-    encoding: { type: 'string', enum: SIGNING_ENCODINGS },
+    encoding: { type: 'string', const: 'base64' },
     payload: { type: 'string', minLength: 1 },
     schema: { type: 'string', nullable: true },
   },
