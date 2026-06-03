@@ -8,19 +8,26 @@ import type { ValidationResult } from './types.js';
 import { AC2MessageTypes } from './types.js';
 
 const ajv = new Ajv({ allErrors: true, strict: false });
+const draftValidate = ajv.compile(baseMessageSchema);
+
+const bodySchemas = {
+  [AC2MessageTypes.SIGNING_REQUEST]: signingRequestBodySchema,
+  [AC2MessageTypes.SIGNING_RESPONSE]: signingResponseBodySchema,
+  [AC2MessageTypes.KEY_REQUEST]: keyRequestBodySchema,
+  [AC2MessageTypes.KEY_RESPONSE]: keyResponseBodySchema,
+} as const;
 
 // ─── Compiled validators (created once, reused) ───────────────────────────────
 
-const validateBase = ajv.compile(baseMessageSchema);
+const bodyValidators = Object.fromEntries(
+  Object.entries(bodySchemas).map(([messageType, schema]) => [messageType, ajv.compile(schema)]),
+) as Record<keyof typeof bodySchemas, ReturnType<typeof ajv.compile>>;
 
-const bodyValidators: Record<string, ReturnType<typeof ajv.compile>> = {
-  [AC2MessageTypes.SIGNING_REQUEST]: ajv.compile(signingRequestBodySchema),
-  [AC2MessageTypes.SIGNING_RESPONSE]: ajv.compile(signingResponseBodySchema),
-  [AC2MessageTypes.KEY_REQUEST]: ajv.compile(keyRequestBodySchema),
-  [AC2MessageTypes.KEY_RESPONSE]: ajv.compile(keyResponseBodySchema),
-};
+const KNOWN_TYPES = new Set<string>(Object.keys(bodySchemas));
 
-const KNOWN_TYPES = new Set<string>(Object.values(AC2MessageTypes));
+function isKnownBodyType(type: string): type is keyof typeof bodyValidators {
+  return type in bodyValidators;
+}
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -42,8 +49,8 @@ export function validate(payload: unknown): ValidationResult {
   }
 
   // Pass 1 — base envelope
-  if (!validateBase(payload) && validateBase.errors) {
-    for (const err of validateBase.errors) {
+  if (!draftValidate(payload) && draftValidate.errors) {
+    for (const err of draftValidate.errors) {
       errors.push(formatAjvError(err));
     }
   }
@@ -66,11 +73,11 @@ export function validate(payload: unknown): ValidationResult {
   // Pass 2 — body for known types
   if (
     messageType &&
-    messageType in bodyValidators &&
+    isKnownBodyType(messageType) &&
     typeof msg.body === 'object' &&
     msg.body !== null
   ) {
-    const bodyValidator = bodyValidators[messageType]!;
+    const bodyValidator = bodyValidators[messageType];
     if (!bodyValidator(msg.body) && bodyValidator.errors) {
       for (const err of bodyValidator.errors) {
         errors.push(`body${formatAjvError(err)}`);
@@ -98,7 +105,7 @@ export function validateMessage(message: Record<string, unknown>): ValidationRes
  * forward-compatible code does not break on new message types.
  */
 export function validateBody(type: string, body: unknown): ValidationResult {
-  if (!(type in bodyValidators)) {
+  if (!isKnownBodyType(type)) {
     return {
       valid: true,
       errors: [],
@@ -107,7 +114,7 @@ export function validateBody(type: string, body: unknown): ValidationResult {
   }
 
   const errors: string[] = [];
-  const bodyValidator = bodyValidators[type]!;
+  const bodyValidator = bodyValidators[type];
 
   if (!bodyValidator(body) && bodyValidator.errors) {
     for (const err of bodyValidator.errors) {

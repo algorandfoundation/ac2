@@ -200,29 +200,6 @@ describe('validate() — SigningResponse', () => {
   });
 });
 
-// ─── SigningRejected ──────────────────────────────────────────────────────────
-
-describe('validate() — SigningRejected', () => {
-  const base = {
-    id: 'test-003',
-    type: 'ac2/SigningRejected',
-    from: 'did:key:bob',
-    to: ['did:key:alice'],
-    created_time: NOW,
-    thid: 'test-001',
-    body: { reason: 'Rejected by user' },
-  };
-
-  it('accepts a valid SigningRejected', () => {
-    expect(validate(base).valid).toBe(true);
-  });
-
-  it('rejects empty reason', () => {
-    const r = validate({ ...base, body: { reason: '' } });
-    expect(r.valid).toBe(false);
-  });
-});
-
 // ─── KeyRequest ───────────────────────────────────────────────────────────────
 
 describe('validate() — KeyRequest', () => {

@@ -25,7 +25,7 @@ import { validate } from './validator.js';
  *   console.log(message.body.operation);
  * }
  */
-export function decode(raw: string | Record<string, unknown>): DecodeResult {
+export function decode(raw: string | AC2BaseMessage | Record<string, unknown>): DecodeResult {
   let obj: unknown;
 
   if (typeof raw === 'string') {

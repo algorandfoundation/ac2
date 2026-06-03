@@ -1,0 +1,172 @@
+/// <reference types="vitest/globals" />
+
+import {
+  createKeyRequest,
+  createKeyResponse,
+  createSigningRequest,
+  createSigningResponse,
+  handleMessage,
+} from '../src/protocol';
+import { AC2MessageTypes } from '../src/schema';
+
+const NOW = Math.floor(Date.now() / 1000);
+
+const envelope = {
+  id: 'proto-001',
+  from: 'did:key:alice',
+  to: ['did:key:bob'],
+  created_time: NOW,
+  expires_time: NOW + 60,
+  thid: 'thread-1',
+  pthid: 'parent-1',
+  attachments: [{ id: 'att-1', data: { json: { hello: 'world' } } }],
+};
+
+describe('protocol factories', () => {
+  it('creates a signing request with the base envelope fields', () => {
+    const message = createSigningRequest(envelope, {
+      description: 'Sign this payload',
+      encoding: 'base64',
+      payload: 'dGVzdA==',
+    });
+
+    expect(message.type).toBe(AC2MessageTypes.SIGNING_REQUEST);
+    expect(message.expires_time).toBe(envelope.expires_time);
+    expect(message.thid).toBe(envelope.thid);
+    expect(message.pthid).toBe(envelope.pthid);
+    expect(message.attachments).toEqual(envelope.attachments);
+    expect(message.body.description).toBe('Sign this payload');
+  });
+
+  it('creates the other protocol message variants', () => {
+    const signingResponse = createSigningResponse(envelope, {
+      status: 'approved',
+      signature: 'c2lnbmF0dXJl',
+      timestamp: '2026-01-01T00:00:00Z',
+    });
+    const keyRequest = createKeyRequest(envelope, {
+      key_type: 'ed25519',
+      purpose: 'identity',
+      for_operation: 'algorand-txn',
+    });
+    const keyResponse = createKeyResponse(envelope, {
+      public_key: 'abc123',
+      encoding: 'base64',
+    });
+
+    expect(signingResponse.type).toBe(AC2MessageTypes.SIGNING_RESPONSE);
+    expect(keyRequest.type).toBe(AC2MessageTypes.KEY_REQUEST);
+    expect(keyResponse.type).toBe(AC2MessageTypes.KEY_RESPONSE);
+  });
+});
+
+describe('handleMessage()', () => {
+  it('dispatches to the matching handlers', async () => {
+    const calls: string[] = [];
+
+    await handleMessage(
+      createSigningRequest(envelope, {
+        description: 'Sign this payload',
+        encoding: 'base64',
+        payload: 'dGVzdA==',
+      }),
+      {
+        onSigningRequest: async () => {
+          calls.push('signing-request');
+        },
+        onSigningResponse: async () => {
+          calls.push('signing-response');
+        },
+        onKeyRequest: async () => {
+          calls.push('key-request');
+        },
+        onKeyResponse: async () => {
+          calls.push('key-response');
+        },
+      },
+    );
+
+    await handleMessage(
+      createSigningResponse(envelope, {
+        status: 'approved',
+        signature: 'c2lnbmF0dXJl',
+        timestamp: '2026-01-01T00:00:00Z',
+      }),
+      {
+        onSigningRequest: async () => {
+          calls.push('signing-request');
+        },
+        onSigningResponse: async () => {
+          calls.push('signing-response');
+        },
+        onKeyRequest: async () => {
+          calls.push('key-request');
+        },
+        onKeyResponse: async () => {
+          calls.push('key-response');
+        },
+      },
+    );
+
+    await handleMessage(
+      createKeyRequest(envelope, {
+        key_type: 'ed25519',
+        purpose: 'identity',
+        for_operation: 'algorand-txn',
+      }),
+      {
+        onSigningRequest: async () => {
+          calls.push('signing-request');
+        },
+        onSigningResponse: async () => {
+          calls.push('signing-response');
+        },
+        onKeyRequest: async () => {
+          calls.push('key-request');
+        },
+        onKeyResponse: async () => {
+          calls.push('key-response');
+        },
+      },
+    );
+
+    await handleMessage(
+      createKeyResponse(envelope, {
+        public_key: 'abc123',
+        encoding: 'base64',
+      }),
+      {
+        onSigningRequest: async () => {
+          calls.push('signing-request');
+        },
+        onSigningResponse: async () => {
+          calls.push('signing-response');
+        },
+        onKeyRequest: async () => {
+          calls.push('key-request');
+        },
+        onKeyResponse: async () => {
+          calls.push('key-response');
+        },
+      },
+    );
+
+    expect(calls).toEqual(['signing-request', 'signing-response', 'key-request', 'key-response']);
+  });
+
+  it('routes invalid messages to onUnknown', async () => {
+    const calls: Array<{ valid: boolean }> = [];
+
+    await handleMessage(
+      { type: 'ac2/SigningRequest' },
+      {
+        onUnknown: async (_msg, validation) => {
+          calls.push(validation);
+        },
+      },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.valid).toBe(false);
+  });
+});

@@ -1,6 +1,11 @@
+import type { JSONSchemaType } from 'ajv';
+
+import type { KeyRequestBody, KeyResponseBody } from '../types.js';
+import { DRAFT_07_SCHEMA_URI } from './constants.js';
+
 /** Body schema for ac2/KeyRequest */
-export const keyRequestBodySchema = {
-  $schema: 'http://json-schema.org/draft-07/schema#',
+export const keyRequestBodySchema: JSONSchemaType<KeyRequestBody> = {
+  $schema: DRAFT_07_SCHEMA_URI,
   type: 'object',
   properties: {
     key_type: {
@@ -16,11 +21,11 @@ export const keyRequestBodySchema = {
   },
   required: ['key_type', 'purpose', 'for_operation'],
   additionalProperties: false,
-} as const;
+};
 
 /** Body schema for ac2/KeyResponse */
-export const keyResponseBodySchema = {
-  $schema: 'http://json-schema.org/draft-07/schema#',
+export const keyResponseBodySchema: JSONSchemaType<KeyResponseBody> = {
+  $schema: DRAFT_07_SCHEMA_URI,
   type: 'object',
   additionalProperties: true,
-} as const;
+};

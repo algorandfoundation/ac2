@@ -4,14 +4,8 @@ import {
   decode,
   isKeyRequest,
   isKeyResponse,
-  isSessionClose,
-  isSessionEstablish,
-  isSigningRejected,
   isSigningRequest,
   isSigningResponse,
-  isStreamChunk,
-  isStreamEnd,
-  isStreamRequest,
 } from '../src/schema/decoder';
 import { handleMessage } from '../src/protocol/handlers';
 
@@ -92,15 +86,6 @@ describe('type guards', () => {
     expect(isSigningResponse(message)).toBe(true);
   });
 
-  it('isSigningRejected', () => {
-    const { message } = decode({
-      ...baseEnvelope,
-      type: 'ac2/SigningRejected',
-      body: { reason: 'nope' },
-    });
-    expect(isSigningRejected(message)).toBe(true);
-  });
-
   it('isKeyRequest', () => {
     const { message } = decode({
       ...baseEnvelope,
@@ -117,51 +102,6 @@ describe('type guards', () => {
       body: { key_type: 'ed25519', public_key: 'abc', encoding: 'base64' },
     });
     expect(isKeyResponse(message)).toBe(true);
-  });
-
-  it('isSessionEstablish', () => {
-    const { message } = decode({
-      ...baseEnvelope,
-      type: 'ac2/SessionEstablish',
-      body: { protocol_version: '1.0' },
-    });
-    expect(isSessionEstablish(message)).toBe(true);
-  });
-
-  it('isSessionClose', () => {
-    const { message } = decode({
-      ...baseEnvelope,
-      type: 'ac2/SessionClose',
-      body: {},
-    });
-    expect(isSessionClose(message)).toBe(true);
-  });
-
-  it('isStreamRequest', () => {
-    const { message } = decode({
-      ...baseEnvelope,
-      type: 'ac2/StreamRequest',
-      body: { stream_id: 's1', content: 'hi', content_type: 'text' },
-    });
-    expect(isStreamRequest(message)).toBe(true);
-  });
-
-  it('isStreamChunk', () => {
-    const { message } = decode({
-      ...baseEnvelope,
-      type: 'ac2/StreamChunk',
-      body: { stream_id: 's1', sequence: 0, content: 'hi', content_type: 'text' },
-    });
-    expect(isStreamChunk(message)).toBe(true);
-  });
-
-  it('isStreamEnd', () => {
-    const { message } = decode({
-      ...baseEnvelope,
-      type: 'ac2/StreamEnd',
-      body: { stream_id: 's1' },
-    });
-    expect(isStreamEnd(message)).toBe(true);
   });
 });
 
@@ -190,49 +130,6 @@ describe('handleMessage()', () => {
     }
     expect(onSigningResponseCalls).toBe(0);
     expect(onKeyRequestCalls).toBe(0);
-  });
-
-  it('calls onSigningRejected correctly', async () => {
-    const calls: Array<{ body: { reason: string } }> = [];
-    const handler = (msg: { body: { reason: string } }) => {
-      calls.push(msg);
-    };
-    await handleMessage(
-      { ...baseEnvelope, type: 'ac2/SigningRejected', body: { reason: 'User declined' } },
-      { onSigningRejected: handler },
-    );
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.body.reason).toBe('User declined');
-  });
-
-  it('calls onSessionEstablish correctly', async () => {
-    const calls: Array<{ body: Record<string, unknown> }> = [];
-    const handler = (msg: { body: Record<string, unknown> }) => {
-      calls.push(msg);
-    };
-    await handleMessage(
-      { ...baseEnvelope, type: 'ac2/SessionEstablish', body: { protocol_version: '1.0' } },
-      { onSessionEstablish: handler },
-    );
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.body['protocol_version']).toBe('1.0');
-  });
-
-  it('calls onStreamChunk correctly', async () => {
-    const calls: Array<{ body: Record<string, unknown> }> = [];
-    const handler = (msg: { body: Record<string, unknown> }) => {
-      calls.push(msg);
-    };
-    await handleMessage(
-      {
-        ...baseEnvelope,
-        type: 'ac2/StreamChunk',
-        body: { stream_id: 's1', sequence: 2, content: 'hello', content_type: 'text' },
-      },
-      { onStreamChunk: handler },
-    );
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.body['sequence']).toBe(2);
   });
 
   it('calls onUnknown for invalid messages', async () => {

@@ -7,12 +7,22 @@ export interface AC2AttachmentData {
   links?: string[];
 }
 
+/** Schema-friendly attachment data shape used by JSONSchemaType. */
+export interface AC2AttachmentDataSchema {
+  [key: string]: unknown;
+}
+
 /** DIDComm v2 Attachment */
 export interface AC2Attachment {
   id: string;
   media_type?: string;
   description?: string;
   data: AC2AttachmentData;
+}
+
+/** Schema-friendly attachment shape used by JSONSchemaType. */
+export interface AC2AttachmentSchema extends Omit<AC2Attachment, 'data'> {
+  data: AC2AttachmentDataSchema;
 }
 
 /**
@@ -43,11 +53,15 @@ export interface AC2BaseMessage {
   attachments?: AC2Attachment[];
 }
 
+/** Schema-friendly base envelope used by JSONSchemaType. */
+export interface AC2BaseMessageSchema extends Omit<AC2BaseMessage, 'body' | 'attachments'> {
+  body: Record<string, unknown>;
+  attachments?: AC2AttachmentSchema[];
+}
+
 // ─── Message Type Constants ───────────────────────────────────────────────────
 
 export const AC2MessageTypes = {
-  SESSION_ESTABLISH: 'ac2/SessionEstablish',
-  SESSION_CLOSE: 'ac2/SessionClose',
   SIGNING_REQUEST: 'ac2/SigningRequest',
   SIGNING_RESPONSE: 'ac2/SigningResponse',
   KEY_REQUEST: 'ac2/KeyRequest',
@@ -90,7 +104,9 @@ export interface KeyRequestBody {
 }
 
 /** Body for ac2/KeyResponse (controller → agent) */
-export type KeyResponseBody = Record<string, unknown>;
+export interface KeyResponseBody {
+  [key: string]: unknown;
+}
 
 // ─── Typed Messages ───────────────────────────────────────────────────────────
 //
