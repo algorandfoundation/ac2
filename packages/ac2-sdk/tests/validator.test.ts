@@ -305,14 +305,33 @@ describe('validate() — KeyRequest', () => {
     created_time: NOW,
     body: {
       key_type: 'ed25519',
-      purpose: 'Algorand identity',
+      purpose: ['sign', 'verify'],
       for_operation: 'algorand-txn',
     },
   };
 
   it('accepts a key request with documented fields', () => expect(validate(base).valid).toBe(true));
+
+  it('accepts optional derivation_path', () => {
+    expect(
+      validate({ ...base, body: { ...base.body, derivation_path: "m/44'/283'/0'/0'" } }).valid,
+    ).toBe(true);
+  });
+
   it('rejects key request bodies missing required fields', () => {
-    expect(validate({ ...base, body: { purpose: 'Algorand identity' } }).valid).toBe(false);
+    expect(
+      validate({ ...base, body: { purpose: ['sign'], for_operation: 'algo-txn' } }).valid,
+    ).toBe(false);
+  });
+
+  it('rejects empty purpose array', () => {
+    expect(validate({ ...base, body: { ...base.body, purpose: [] } }).valid).toBe(false);
+  });
+
+  it('rejects purpose with invalid enum values', () => {
+    const r = validate({ ...base, body: { ...base.body, purpose: ['sign', 'unknownPurpose'] } });
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => e.includes('purpose'))).toBe(true);
   });
 
   it('rejects unsupported key types', () => {

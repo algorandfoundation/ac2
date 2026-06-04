@@ -48,7 +48,7 @@ describe('protocol factories', () => {
     });
     const keyRequest = createKeyRequest(envelope, {
       key_type: 'ed25519',
-      purpose: 'identity',
+      purpose: ['sign'],
       for_operation: 'algorand-txn',
     });
     const keyResponse = createKeyResponse(envelope, {
@@ -114,7 +114,7 @@ describe('handleMessage()', () => {
     await handleMessage(
       createKeyRequest(envelope, {
         key_type: 'ed25519',
-        purpose: 'identity',
+        purpose: ['sign'],
         for_operation: 'algorand-txn',
       }),
       {

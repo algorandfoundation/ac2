@@ -10,10 +10,28 @@ export const keyRequestBodySchema: JSONSchemaType<KeyRequestBody> = {
   properties: {
     key_type: {
       type: 'string',
-      enum: ['ed25519', 'secp256k1', 'falcon-512'],
+      enum: ['ed25519', 'secp256k1'],
+    },
+    derivation_path: {
+      type: 'string',
+      nullable: true,
     },
     purpose: {
-      type: 'string',
+      type: 'array',
+      items: {
+        type: 'string',
+        enum: [
+          'encrypt',
+          'decrypt',
+          'sign',
+          'verify',
+          'deriveKey',
+          'deriveBits',
+          'wrapKey',
+          'unwrapKey',
+        ],
+      },
+      minItems: 1,
     },
     for_operation: {
       type: 'string',

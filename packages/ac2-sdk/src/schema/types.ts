@@ -120,10 +120,23 @@ export interface SigningRejectedBody {
   reason: string;
 }
 
+/** Key purpose/usage constraints for ac2/KeyRequest. */
+export type KeyPurpose =
+  | 'encrypt'
+  | 'decrypt'
+  | 'sign'
+  | 'verify'
+  | 'deriveKey'
+  | 'deriveBits'
+  | 'wrapKey'
+  | 'unwrapKey';
+
 /** Body for ac2/KeyRequest (agent → controller) */
 export interface KeyRequestBody {
-  key_type: 'ed25519' | 'secp256k1' | 'falcon-512';
-  purpose: string;
+  key_type: 'ed25519' | 'secp256k1';
+  derivation_path?: string;
+  /** Array of permitted key purposes/usages */
+  purpose: KeyPurpose[];
   for_operation: string;
 }
 
