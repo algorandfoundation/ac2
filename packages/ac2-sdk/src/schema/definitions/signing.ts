@@ -13,6 +13,23 @@ export const signingRequestBodySchema: JSONSchemaType<SigningRequestBody> = {
     encoding: { type: 'string', const: 'base64' },
     payload: { type: 'string', minLength: 1 },
     schema: { type: 'string', nullable: true },
+    key_type: { type: 'string', enum: ['account', 'identity'], nullable: true },
+    display_hint: { type: 'string', enum: ['text', 'json', 'hex'], nullable: true },
+    sig_hint: {
+      type: 'string',
+      enum: [
+        'raw-ed25519',
+        'raw-secp256k1',
+        'message-algorand',
+        'message-evm',
+        'message-solana',
+        'typed-data-evm',
+        'transaction-algorand',
+        'transaction-evm',
+        'transaction-solana',
+      ],
+      nullable: true,
+    },
   },
   additionalProperties: false,
 };

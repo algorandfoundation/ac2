@@ -11,6 +11,7 @@ export type {
   DecodeResult,
   KeyRequestBody,
   KeyResponseBody,
+  SigningHint,
   SigningRequestBody,
   SigningResponseBody,
   ValidationResult,

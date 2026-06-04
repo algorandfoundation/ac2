@@ -73,16 +73,34 @@ export type AC2MessageType = (typeof AC2MessageTypes)[keyof typeof AC2MessageTyp
 
 // ─── Body Types ───────────────────────────────────────────────────────────────
 
+/** Explicit cryptographic-operation selector for ac2/SigningRequest. */
+export type SigningHint =
+  | 'raw-ed25519'
+  | 'raw-secp256k1'
+  | 'message-algorand'
+  | 'message-evm'
+  | 'message-solana'
+  | 'typed-data-evm'
+  | 'transaction-algorand'
+  | 'transaction-evm'
+  | 'transaction-solana';
+
 /** Body for ac2/SigningRequest (agent → controller) */
 export interface SigningRequestBody {
   /** Human-readable description shown to the user before they approve */
   description: string;
-  /** Encoding of the `payload` field */
+  /** Encoding of the `payload` field — MUST be `"base64"` */
   encoding: 'base64';
   /** The data to be signed, encoded per `encoding` */
   payload: string;
   /** Optional schema identifier for the payload (e.g. x402 payment schema URI) */
   schema?: string;
+  /** Which key the signer SHOULD use (default: `"account"`) */
+  key_type?: 'account' | 'identity';
+  /** UX hint for how the wallet SHOULD preview `payload` to the user */
+  display_hint?: 'text' | 'json' | 'hex';
+  /** Explicit cryptographic-operation selector; when absent the signer performs raw Ed25519 */
+  sig_hint?: SigningHint;
 }
 
 /** Body for ac2/SigningResponse (controller → agent) */

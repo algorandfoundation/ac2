@@ -131,6 +131,78 @@ describe('validate() — SigningRequest body', () => {
     expect(r.valid).toBe(true);
   });
 
+  it('accepts optional key_type', () => {
+    expect(
+      validate({
+        ...validSigningRequest,
+        body: { ...validSigningRequest.body, key_type: 'account' },
+      }).valid,
+    ).toBe(true);
+    expect(
+      validate({
+        ...validSigningRequest,
+        body: { ...validSigningRequest.body, key_type: 'identity' },
+      }).valid,
+    ).toBe(true);
+  });
+
+  it('rejects invalid key_type', () => {
+    const r = validate({
+      ...validSigningRequest,
+      body: { ...validSigningRequest.body, key_type: 'master' },
+    });
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => e.includes('key_type'))).toBe(true);
+  });
+
+  it('accepts optional display_hint', () => {
+    for (const hint of ['text', 'json', 'hex']) {
+      expect(
+        validate({
+          ...validSigningRequest,
+          body: { ...validSigningRequest.body, display_hint: hint },
+        }).valid,
+      ).toBe(true);
+    }
+  });
+
+  it('rejects invalid display_hint', () => {
+    const r = validate({
+      ...validSigningRequest,
+      body: { ...validSigningRequest.body, display_hint: 'binary' },
+    });
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => e.includes('display_hint'))).toBe(true);
+  });
+
+  it('accepts all valid sig_hint values', () => {
+    const hints = [
+      'raw-ed25519',
+      'raw-secp256k1',
+      'message-algorand',
+      'message-evm',
+      'message-solana',
+      'typed-data-evm',
+      'transaction-algorand',
+      'transaction-evm',
+      'transaction-solana',
+    ];
+    for (const sig_hint of hints) {
+      expect(
+        validate({ ...validSigningRequest, body: { ...validSigningRequest.body, sig_hint } }).valid,
+      ).toBe(true);
+    }
+  });
+
+  it('rejects an unknown sig_hint value', () => {
+    const r = validate({
+      ...validSigningRequest,
+      body: { ...validSigningRequest.body, sig_hint: 'transaction-bitcoin' },
+    });
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => e.includes('sig_hint'))).toBe(true);
+  });
+
   it('rejects unsupported extra fields', () => {
     const r = validate({
       ...validSigningRequest,
