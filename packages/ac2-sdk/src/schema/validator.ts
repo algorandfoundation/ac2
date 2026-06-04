@@ -2,7 +2,11 @@ import type { ErrorObject } from 'ajv';
 import Ajv from 'ajv';
 import { baseMessageSchema } from './definitions/base.js';
 import { keyRequestBodySchema, keyResponseBodySchema } from './definitions/key.js';
-import { signingRequestBodySchema, signingResponseBodySchema } from './definitions/signing.js';
+import {
+  signingRejectedBodySchema,
+  signingRequestBodySchema,
+  signingResponseBodySchema,
+} from './definitions/signing.js';
 
 import type { ValidationResult } from './types.js';
 import { AC2MessageTypes } from './types.js';
@@ -13,6 +17,7 @@ const draftValidate = ajv.compile(baseMessageSchema);
 const bodySchemas = {
   [AC2MessageTypes.SIGNING_REQUEST]: signingRequestBodySchema,
   [AC2MessageTypes.SIGNING_RESPONSE]: signingResponseBodySchema,
+  [AC2MessageTypes.SIGNING_REJECTED]: signingRejectedBodySchema,
   [AC2MessageTypes.KEY_REQUEST]: keyRequestBodySchema,
   [AC2MessageTypes.KEY_RESPONSE]: keyResponseBodySchema,
 } as const;

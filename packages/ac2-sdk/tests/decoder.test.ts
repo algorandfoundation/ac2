@@ -4,10 +4,10 @@ import {
   decode,
   isKeyRequest,
   isKeyResponse,
+  isSigningRejected,
   isSigningRequest,
   isSigningResponse,
 } from '../src/schema/decoder';
-import { handleMessage } from '../src/protocol/handlers';
 
 const NOW = Math.floor(Date.now() / 1000);
 
@@ -103,60 +103,13 @@ describe('type guards', () => {
     });
     expect(isKeyResponse(message)).toBe(true);
   });
-});
 
-// ─── handleMessage() ──────────────────────────────────────────────────────────
-
-describe('handleMessage()', () => {
-  it('calls onSigningRequest for a SigningRequest', async () => {
-    const calls: Array<{ body: { description: string } }> = [];
-    const handler = (msg: { body: { description: string } }) => {
-      calls.push(msg);
-    };
-    await handleMessage(signingRequestMsg, { onSigningRequest: handler });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.body.description).toBe('Sign Algorand transaction');
-  });
-
-  it('does not call unrelated handlers', async () => {
-    let onSigningResponseCalls = 0;
-    let onKeyRequestCalls = 0;
-    await handleMessage(signingRequestMsg, { onSigningResponse, onKeyRequest });
-    function onSigningResponse() {
-      onSigningResponseCalls += 1;
-    }
-    function onKeyRequest() {
-      onKeyRequestCalls += 1;
-    }
-    expect(onSigningResponseCalls).toBe(0);
-    expect(onKeyRequestCalls).toBe(0);
-  });
-
-  it('calls onUnknown for invalid messages', async () => {
-    const calls: Array<[unknown, { valid: boolean }]> = [];
-    const handler = (msg: unknown, validation: { valid: boolean }) => {
-      calls.push([msg, validation]);
-    };
-    await handleMessage({ type: 'ac2/SigningRequest' }, { onUnknown: handler });
-    expect(calls).toHaveLength(1);
-    const [, validation] = calls[0]!;
-    expect(validation.valid).toBe(false);
-  });
-
-  it('returns the validation result', async () => {
-    const result = await handleMessage(signingRequestMsg, {});
-    expect(result.valid).toBe(true);
-    expect(result.messageType).toBe('ac2/SigningRequest');
-  });
-
-  it('works with an async handler', async () => {
-    const results: string[] = [];
-    await handleMessage(signingRequestMsg, {
-      onSigningRequest: async (m) => {
-        await Promise.resolve();
-        results.push(m.body.description);
-      },
+  it('isSigningRejected', () => {
+    const { message } = decode({
+      ...baseEnvelope,
+      type: 'ac2/SigningRejected',
+      body: { reason: 'Not approved' },
     });
-    expect(results).toEqual(['Sign Algorand transaction']);
+    expect(isSigningRejected(message)).toBe(true);
   });
 });

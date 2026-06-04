@@ -281,16 +281,16 @@ describe('validate() — SigningRejected', () => {
     },
   };
 
-  it('treats SigningRejected as unknown until a body schema is registered', () => {
+  it('validates a correct SigningRejected message', () => {
     const r = validate(base);
     expect(r.valid).toBe(true);
-    expect(r.warnings.some((w) => w.includes('Unknown message type'))).toBe(true);
+    expect(r.warnings).toHaveLength(0);
   });
 
-  it('validateBody returns warning for SigningRejected until schema is wired', () => {
+  it('validateBody validates a correct SigningRejected body', () => {
     const r = validateBody(AC2MessageTypes.SIGNING_REJECTED, base.body);
     expect(r.valid).toBe(true);
-    expect(r.warnings.some((w) => w.includes('No body schema'))).toBe(true);
+    expect(r.warnings).toHaveLength(0);
   });
 });
 
@@ -343,6 +343,72 @@ describe('validate() — KeyRequest', () => {
   });
 });
 
+// ─── KeyResponse ──────────────────────────────────────────────────────────────
+
+describe('validate() — KeyResponse', () => {
+  const base = {
+    id: 'test-005',
+    type: 'ac2/KeyResponse',
+    from: 'did:key:user',
+    to: ['did:key:agent'],
+    created_time: NOW,
+    thid: 'test-004',
+    body: {
+      status: 'approved',
+      key_type: 'ed25519',
+      material: 'bWF0ZXJpYWw=',
+      public_key: 'cHVibGljS2V5',
+    },
+  };
+
+  it('accepts a valid approved KeyResponse', () => {
+    expect(validate(base).valid).toBe(true);
+  });
+
+  it('accepts a rejected response with reason', () => {
+    expect(
+      validate({
+        ...base,
+        body: { ...base.body, status: 'rejected', reason: 'Key type not supported' },
+      }).valid,
+    ).toBe(true);
+  });
+
+  it('accepts optional derivation_path', () => {
+    expect(
+      validate({ ...base, body: { ...base.body, derivation_path: "m/44'/283'/0'/0'" } }).valid,
+    ).toBe(true);
+  });
+
+  it('rejects invalid status', () => {
+    const r = validate({ ...base, body: { ...base.body, status: 'pending' } });
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => e.includes('status'))).toBe(true);
+  });
+
+  it('rejects missing material', () => {
+    const { material: _, ...body } = base.body;
+    const r = validate({ ...base, body });
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => e.includes('material'))).toBe(true);
+  });
+
+  it('rejects missing public_key', () => {
+    const { public_key: _, ...body } = base.body;
+    const r = validate({ ...base, body });
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => e.includes('public_key'))).toBe(true);
+  });
+
+  it('rejects unsupported key_type', () => {
+    expect(validate({ ...base, body: { ...base.body, key_type: 'rsa' } }).valid).toBe(false);
+  });
+
+  it('rejects extra fields', () => {
+    expect(validate({ ...base, body: { ...base.body, extra: true } }).valid).toBe(false);
+  });
+});
+
 // ─── validateBody() ───────────────────────────────────────────────────────────
 
 describe('validateBody()', () => {
@@ -364,6 +430,38 @@ describe('validateBody()', () => {
 
   it('rejects an invalid SigningRequest body', () => {
     const r = validateBody(AC2MessageTypes.SIGNING_REQUEST, { description: 'only this' });
+    expect(r.valid).toBe(false);
+    expect(r.errors.length).toBeGreaterThan(0);
+  });
+
+  it('validates a correct SigningResponse body', () => {
+    const r = validateBody(AC2MessageTypes.SIGNING_RESPONSE, {
+      signature: 'c2lnbmF0dXJl',
+      public_key: 'cHVibGljS2V5',
+    });
+    expect(r.valid).toBe(true);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it('rejects an invalid SigningResponse body', () => {
+    const r = validateBody(AC2MessageTypes.SIGNING_RESPONSE, { signature: 'only-sig' });
+    expect(r.valid).toBe(false);
+    expect(r.errors.length).toBeGreaterThan(0);
+  });
+
+  it('validates a correct KeyResponse body', () => {
+    const r = validateBody(AC2MessageTypes.KEY_RESPONSE, {
+      status: 'approved',
+      key_type: 'ed25519',
+      material: 'bWF0ZXJpYWw=',
+      public_key: 'cHVibGljS2V5',
+    });
+    expect(r.valid).toBe(true);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it('rejects an invalid KeyResponse body', () => {
+    const r = validateBody(AC2MessageTypes.KEY_RESPONSE, { public_key: 'only-this' });
     expect(r.valid).toBe(false);
     expect(r.errors.length).toBeGreaterThan(0);
   });

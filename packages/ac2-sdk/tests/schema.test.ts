@@ -6,6 +6,7 @@ import {
   decode,
   keyRequestBodySchema,
   keyResponseBodySchema,
+  signingRejectedBodySchema,
   signingRequestBodySchema,
   signingResponseBodySchema,
   validate,
@@ -41,6 +42,8 @@ describe('schema exports', () => {
     expect(signingResponseBodySchema.required).toEqual(['signature', 'public_key']);
     expect(signingResponseBodySchema.properties.signature?.type).toBe('string');
     expect(signingResponseBodySchema.properties.public_key?.type).toBe('string');
+    expect(signingRejectedBodySchema.required).toEqual(['reason']);
+    expect(signingRejectedBodySchema.properties.reason?.type).toBe('string');
     expect(keyRequestBodySchema.additionalProperties).toBe(false);
     expect(keyResponseBodySchema.additionalProperties).toBe(false);
     expect(keyResponseBodySchema.required).toEqual([
