@@ -1,5 +1,5 @@
 {
-  "name": "@ac2/ac2-sdk",
+  "name": "@algorandfoundation/ac2-sdk",
   "version": "0.1.0",
   "description": "AC2 protocol SDK",
   "files": [
