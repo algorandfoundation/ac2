@@ -140,9 +140,25 @@ export interface KeyRequestBody {
   for_operation: string;
 }
 
-/** Body for ac2/KeyResponse (controller → agent) */
+/** Body for ac2/KeyResponse (controller → agent)
+ *
+ * NOTE: Future versions may split this into separate KeyResponse and KeyRejected
+ * messages, similar to the SigningResponse/SigningRejected flow. For now, a single
+ * message type handles both approval and rejection via the `status` field.
+ */
 export interface KeyResponseBody {
-  [key: string]: unknown;
+  /** Response status: approved or rejected */
+  status: 'approved' | 'rejected';
+  /** The key type that was generated */
+  key_type: 'ed25519' | 'secp256k1';
+  /** Key material (base64 encoded) */
+  material: string;
+  /** Public key (base64 encoded) */
+  public_key: string;
+  /** Derivation path used (if applicable) */
+  derivation_path?: string;
+  /** Rejection reason (if status is "rejected") */
+  reason?: string;
 }
 
 // ─── Typed Messages ───────────────────────────────────────────────────────────

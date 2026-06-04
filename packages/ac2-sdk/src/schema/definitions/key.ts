@@ -45,5 +45,32 @@ export const keyRequestBodySchema: JSONSchemaType<KeyRequestBody> = {
 export const keyResponseBodySchema: JSONSchemaType<KeyResponseBody> = {
   $schema: DRAFT_07_SCHEMA_URI,
   type: 'object',
-  additionalProperties: true,
+  properties: {
+    status: {
+      type: 'string',
+      enum: ['approved', 'rejected'],
+    },
+    key_type: {
+      type: 'string',
+      enum: ['ed25519', 'secp256k1'],
+    },
+    material: {
+      type: 'string',
+      minLength: 1,
+    },
+    public_key: {
+      type: 'string',
+      minLength: 1,
+    },
+    derivation_path: {
+      type: 'string',
+      nullable: true,
+    },
+    reason: {
+      type: 'string',
+      nullable: true,
+    },
+  },
+  required: ['status', 'key_type', 'material', 'public_key'],
+  additionalProperties: false,
 };

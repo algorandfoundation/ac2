@@ -42,7 +42,13 @@ describe('schema exports', () => {
     expect(signingResponseBodySchema.properties.signature?.type).toBe('string');
     expect(signingResponseBodySchema.properties.public_key?.type).toBe('string');
     expect(keyRequestBodySchema.additionalProperties).toBe(false);
-    expect(keyResponseBodySchema.additionalProperties).toBe(true);
+    expect(keyResponseBodySchema.additionalProperties).toBe(false);
+    expect(keyResponseBodySchema.required).toEqual([
+      'status',
+      'key_type',
+      'material',
+      'public_key',
+    ]);
   });
 });
 

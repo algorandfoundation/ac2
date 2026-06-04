@@ -55,8 +55,11 @@ describe('protocol factories', () => {
       for_operation: 'algorand-txn',
     });
     const keyResponse = createKeyResponse(envelope, {
-      public_key: 'abc123',
-      encoding: 'base64',
+      status: 'approved',
+      key_type: 'ed25519',
+      material: 'bWF0ZXJpYWw=',
+      public_key: 'cHVibGljS2V5',
+      derivation_path: "m/44'/283'/0'/0",
     });
 
     expect(signingResponse.type).toBe(AC2MessageTypes.SIGNING_RESPONSE);
@@ -168,8 +171,11 @@ describe('handleMessage()', () => {
 
     await handleMessage(
       createKeyResponse(envelope, {
-        public_key: 'abc123',
-        encoding: 'base64',
+        status: 'approved',
+        key_type: 'ed25519',
+        material: 'bWF0ZXJpYWw=',
+        public_key: 'cHVibGljS2V5',
+        derivation_path: "m/44'/283'/0'/0",
       }),
       {
         onSigningRequest: async () => {
