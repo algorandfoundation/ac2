@@ -69,3 +69,21 @@ export function isKeyRequest(msg: AC2BaseMessage): msg is AC2KeyRequest {
 export function isKeyResponse(msg: AC2BaseMessage): msg is AC2KeyResponse {
   return msg.type === AC2MessageTypes.KEY_RESPONSE;
 }
+
+/**
+ * Structural type guard for an arbitrary value being an AC2 envelope. Cheaper
+ * than full schema validation; used by transports to distinguish AC2 traffic
+ * from raw (e.g. chat) payloads multiplexed on the same DataChannel.
+ */
+export function isAc2Message(x: unknown): x is AC2BaseMessage {
+  if (typeof x !== 'object' || x === null) return false;
+  const m = x as Partial<AC2BaseMessage>;
+  if (typeof m.id !== 'string' || m.id.length === 0) return false;
+  if (typeof m.type !== 'string' || m.type.length === 0) return false;
+  if (typeof m.from !== 'string' || m.from.length === 0) return false;
+  if (!Array.isArray(m.to) || m.to.some((d) => typeof d !== 'string')) {
+    return false;
+  }
+  if (typeof m.body !== 'object' || m.body === null) return false;
+  return true;
+}

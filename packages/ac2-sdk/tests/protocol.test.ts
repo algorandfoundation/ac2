@@ -7,6 +7,8 @@ import {
   createSigningResponse,
   createSigningRejected,
   handleMessage,
+  defaultMessageHandlers,
+  type MessageHandlerMap,
 } from '../src/protocol';
 import { AC2MessageTypes } from '../src/schema';
 
@@ -70,8 +72,26 @@ describe('protocol factories', () => {
 });
 
 describe('handleMessage()', () => {
-  it('dispatches to the matching handlers', async () => {
+  it('dispatches messages to the matching type-keyed handler', async () => {
     const calls: string[] = [];
+
+    const handlers: MessageHandlerMap = {
+      'ac2/SigningRequest': async () => {
+        calls.push('signing-request');
+      },
+      'ac2/SigningResponse': async () => {
+        calls.push('signing-response');
+      },
+      'ac2/SigningRejected': async () => {
+        calls.push('signing-rejected');
+      },
+      'ac2/KeyRequest': async () => {
+        calls.push('key-request');
+      },
+      'ac2/KeyResponse': async () => {
+        calls.push('key-response');
+      },
+    };
 
     await handleMessage(
       createSigningRequest(envelope, {
@@ -79,20 +99,7 @@ describe('handleMessage()', () => {
         encoding: 'base64',
         payload: 'dGVzdA==',
       }),
-      {
-        onSigningRequest: async () => {
-          calls.push('signing-request');
-        },
-        onSigningResponse: async () => {
-          calls.push('signing-response');
-        },
-        onKeyRequest: async () => {
-          calls.push('key-request');
-        },
-        onKeyResponse: async () => {
-          calls.push('key-response');
-        },
-      },
+      { handlers },
     );
 
     await handleMessage(
@@ -102,46 +109,14 @@ describe('handleMessage()', () => {
         address: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ',
         key_type: 'account',
       }),
-      {
-        onSigningRequest: async () => {
-          calls.push('signing-request');
-        },
-        onSigningResponse: async () => {
-          calls.push('signing-response');
-        },
-        onSigningRejected: async () => {
-          calls.push('signing-rejected');
-        },
-        onKeyRequest: async () => {
-          calls.push('key-request');
-        },
-        onKeyResponse: async () => {
-          calls.push('key-response');
-        },
-      },
+      { handlers },
     );
 
     await handleMessage(
       createSigningRejected(envelope, {
         reason: 'User rejected the signing request',
       }),
-      {
-        onSigningRequest: async () => {
-          calls.push('signing-request');
-        },
-        onSigningResponse: async () => {
-          calls.push('signing-response');
-        },
-        onSigningRejected: async () => {
-          calls.push('signing-rejected');
-        },
-        onKeyRequest: async () => {
-          calls.push('key-request');
-        },
-        onKeyResponse: async () => {
-          calls.push('key-response');
-        },
-      },
+      { handlers },
     );
 
     await handleMessage(
@@ -150,23 +125,7 @@ describe('handleMessage()', () => {
         purpose: ['sign'],
         for_operation: 'algorand-txn',
       }),
-      {
-        onSigningRequest: async () => {
-          calls.push('signing-request');
-        },
-        onSigningResponse: async () => {
-          calls.push('signing-response');
-        },
-        onSigningRejected: async () => {
-          calls.push('signing-rejected');
-        },
-        onKeyRequest: async () => {
-          calls.push('key-request');
-        },
-        onKeyResponse: async () => {
-          calls.push('key-response');
-        },
-      },
+      { handlers },
     );
 
     await handleMessage(
@@ -177,23 +136,7 @@ describe('handleMessage()', () => {
         public_key: 'cHVibGljS2V5',
         derivation_path: "m/44'/283'/0'/0",
       }),
-      {
-        onSigningRequest: async () => {
-          calls.push('signing-request');
-        },
-        onSigningResponse: async () => {
-          calls.push('signing-response');
-        },
-        onSigningRejected: async () => {
-          calls.push('signing-rejected');
-        },
-        onKeyRequest: async () => {
-          calls.push('key-request');
-        },
-        onKeyResponse: async () => {
-          calls.push('key-response');
-        },
-      },
+      { handlers },
     );
 
     expect(calls).toEqual([
@@ -219,5 +162,73 @@ describe('handleMessage()', () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]!.valid).toBe(false);
+  });
+
+  it('routes unregistered (extension) types to onUnknown', async () => {
+    const seen: string[] = [];
+
+    // A valid envelope but with an extension `type` the SDK does not know.
+    const extensionMessage = {
+      ...envelope,
+      id: 'ext-001',
+      type: 'com.acme.payment.request',
+      body: { amount: 100, currency: 'USD' },
+    };
+
+    await handleMessage(extensionMessage as any, {
+      handlers: {
+        'ac2/SigningRequest': () => {
+          seen.push('should-not-fire');
+        },
+      },
+      onUnknown: (msg) => {
+        seen.push(`unknown:${msg.type}`);
+      },
+    });
+
+    expect(seen).toEqual(['unknown:com.acme.payment.request']);
+  });
+
+  it('supports registering handlers for extension types via the open map', async () => {
+    const seen: string[] = [];
+
+    const extensionMessage = {
+      ...envelope,
+      id: 'ext-002',
+      type: 'com.acme.payment.request',
+      body: { amount: 42, currency: 'USD' },
+    };
+
+    await handleMessage(extensionMessage as any, {
+      handlers: {
+        'com.acme.payment.request': (msg) => {
+          seen.push(`paid:${msg.id}`);
+        },
+      },
+    });
+
+    expect(seen).toEqual(['paid:ext-002']);
+  });
+
+  it('lets consumer handlers override defaults via object spread', async () => {
+    const seen: string[] = [];
+
+    const merged: MessageHandlerMap = {
+      ...defaultMessageHandlers,
+      'ac2/SigningRequest': (msg) => {
+        seen.push(`overridden:${msg.id}`);
+      },
+    };
+
+    await handleMessage(
+      createSigningRequest(envelope, {
+        description: 'Sign this payload',
+        encoding: 'base64',
+        payload: 'dGVzdA==',
+      }),
+      { handlers: merged },
+    );
+
+    expect(seen).toEqual([`overridden:${envelope.id}`]);
   });
 });

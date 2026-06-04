@@ -213,3 +213,147 @@ export interface DecodeResult<T extends AC2BaseMessage = AC2Message> {
   message: T;
   validation: ValidationResult;
 }
+
+// ─── High-level Protocol Types ────────────────────────────────────────────────
+//
+// Shared shapes consumed by `Ac2Client` and the response/rejected builders.
+// They live here (next to the body/message types they reference) so the
+// client module can focus on dispatch and lifecycle, and the builders module
+// can focus on envelope construction.
+
+/**
+ * Discriminated outcome of `Ac2Client.requestSignature`.
+ *
+ * - `{ kind: 'response', ... }` — controller approved and returned a signature.
+ * - `{ kind: 'rejected', ... }` — controller declined; `message.body.reason`
+ *   carries the user-supplied explanation.
+ */
+export type SigningOutcome =
+  | { kind: 'response'; message: AC2SigningResponse }
+  | { kind: 'rejected'; message: AC2SigningRejected };
+
+/**
+ * Approval reply returned by a {@link SigningResponder}. Carries the
+ * signature body the SDK will wrap in an `ac2/SigningResponse`.
+ */
+export interface SigningResponseReply {
+  kind: 'approve';
+  body: SigningResponseBody;
+}
+
+/**
+ * Rejection reply returned by a {@link SigningResponder}. The
+ * `reason` string is surfaced to the requesting agent verbatim.
+ */
+export interface SigningRejectedReply {
+  kind: 'reject';
+  reason: string;
+}
+
+/** Either reply shape returned by a {@link SigningResponder}. */
+export type SigningReply = SigningResponseReply | SigningRejectedReply;
+
+/**
+ * Function shape registered via `Ac2Client.onSigningRequest`. Inspects
+ * an inbound signing request and returns either an approval (with the
+ * signed payload) or a rejection (with a human-readable reason).
+ */
+export type SigningResponder = (request: AC2SigningRequest) => SigningReply | Promise<SigningReply>;
+
+/**
+ * Function shape registered via `Ac2Client.onKeyRequest`. Inspects an
+ * inbound key request and returns the `ac2/KeyResponse` body — the
+ * `status` field encodes the approve / reject distinction per the
+ * spec's single-message KeyResponse shape.
+ */
+export type KeyResponder = (request: AC2KeyRequest) => KeyResponseBody | Promise<KeyResponseBody>;
+
+/**
+ * Arguments for `Ac2Client.requestSignature`.
+ *
+ * Envelope fields not supplied (`id`, `created_time`) are filled in
+ * automatically: `id` is generated (UUIDv4 when `crypto.randomUUID` is
+ * available), `created_time` defaults to the current Unix time in
+ * seconds.
+ */
+export interface BuildSigningRequestArgs {
+  /** DID of the agent issuing the request. */
+  from: string;
+  /** DID(s) of the controller(s) that should receive the request. */
+  to: string | readonly string[];
+  /** Typed `ac2/SigningRequest` body. */
+  body: SigningRequestBody;
+  /** Override the generated message id. */
+  id?: string;
+  /** Override the default `created_time` (Unix seconds). */
+  created_time?: number;
+  /** Optional `expires_time` (Unix seconds). */
+  expires_time?: number;
+}
+
+/**
+ * Arguments for `Ac2Client.requestKey`. Envelope defaults match
+ * {@link BuildSigningRequestArgs}.
+ */
+export interface BuildKeyRequestArgs {
+  /** DID of the agent issuing the request. */
+  from: string;
+  /** DID(s) of the controller(s) that should receive the request. */
+  to: string | readonly string[];
+  /** Typed `ac2/KeyRequest` body. */
+  body: KeyRequestBody;
+  /** Override the generated message id. */
+  id?: string;
+  /** Override the default `created_time` (Unix seconds). */
+  created_time?: number;
+  /** Optional `expires_time` (Unix seconds). */
+  expires_time?: number;
+}
+
+/** Arguments for `buildSigningResponse`. */
+export interface BuildSigningResponseArgs {
+  /** The request being answered — used to thread `thid` and address `to`. */
+  request: Pick<AC2SigningRequest, 'id' | 'from' | 'to'>;
+  /** Controller DID (the signer); defaults to `request.to[0]`. */
+  from?: string;
+  /** Typed `ac2/SigningResponse` body (signature material). */
+  body: SigningResponseBody;
+  /** Override the generated message id. */
+  id?: string;
+  /** Override the default `created_time` (Unix seconds). */
+  created_time?: number;
+  /** Optional `expires_time` (Unix seconds). */
+  expires_time?: number;
+}
+
+/** Arguments for `buildSigningRejected`. */
+export interface BuildSigningRejectedArgs {
+  /** The request being declined — used to thread `thid` and address `to`. */
+  request: Pick<AC2SigningRequest, 'id' | 'from' | 'to'>;
+  /** Controller DID (the signer); defaults to `request.to[0]`. */
+  from?: string;
+  /** Human-readable rejection reason; surfaced to the requesting agent. */
+  reason: string;
+  /** Override the generated message id. */
+  id?: string;
+  /** Override the default `created_time` (Unix seconds). */
+  created_time?: number;
+  /** Optional `expires_time` (Unix seconds). */
+  expires_time?: number;
+}
+
+/** Arguments for `buildKeyResponse`. */
+export interface BuildKeyResponseArgs {
+  /** The request being answered — used to thread `thid` and address `to`. */
+  request: Pick<AC2KeyRequest, 'id' | 'from' | 'to'>;
+  /** Controller DID (the keystore holder); defaults to `request.to[0]`. */
+  from?: string;
+  /** Typed `ac2/KeyResponse` body (status + key material, or rejection). */
+  body: KeyResponseBody;
+  /** Override the generated message id. */
+  id?: string;
+  /** Override the default `created_time` (Unix seconds). */
+  created_time?: number;
+  /** Optional `expires_time` (Unix seconds). */
+  expires_time?: number;
+}

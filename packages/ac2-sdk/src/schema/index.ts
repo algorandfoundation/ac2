@@ -6,6 +6,7 @@ export type {
   AC2KeyResponse,
   AC2Message,
   AC2MessageType,
+  AC2SigningRejected,
   AC2SigningRequest,
   AC2SigningResponse,
   DecodeResult,
@@ -16,6 +17,17 @@ export type {
   SigningRequestBody,
   SigningResponseBody,
   ValidationResult,
+  SigningOutcome,
+  SigningReply,
+  SigningResponseReply,
+  SigningRejectedReply,
+  SigningResponder,
+  KeyResponder,
+  BuildSigningRequestArgs,
+  BuildKeyRequestArgs,
+  BuildSigningResponseArgs,
+  BuildSigningRejectedArgs,
+  BuildKeyResponseArgs,
 } from './types.js';
 
 export { AC2MessageTypes } from './types.js';
@@ -24,6 +36,7 @@ export {
   decode,
   isKeyRequest,
   isKeyResponse,
+  isAc2Message,
   isSigningRequest,
   isSigningResponse,
   isSigningRejected,
