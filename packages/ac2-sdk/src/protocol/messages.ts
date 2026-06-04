@@ -4,8 +4,10 @@ import type {
   AC2KeyResponse,
   AC2SigningRequest,
   AC2SigningResponse,
+  AC2SigningRejected,
   KeyRequestBody,
   KeyResponseBody,
+  SigningRejectedBody,
   SigningRequestBody,
   SigningResponseBody,
 } from '../schema/types.js';
@@ -50,6 +52,13 @@ export function createSigningResponse(
   body: SigningResponseBody,
 ): AC2SigningResponse {
   return createBaseMessage(AC2MessageTypes.SIGNING_RESPONSE, envelope, body) as AC2SigningResponse;
+}
+
+export function createSigningRejected(
+  envelope: EnvelopeFields,
+  body: SigningRejectedBody,
+): AC2SigningRejected {
+  return createBaseMessage(AC2MessageTypes.SIGNING_REJECTED, envelope, body) as AC2SigningRejected;
 }
 
 export function createKeyRequest(envelope: EnvelopeFields, body: KeyRequestBody): AC2KeyRequest {

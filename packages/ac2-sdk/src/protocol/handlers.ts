@@ -4,6 +4,7 @@ import {
   isKeyResponse,
   isSigningRequest,
   isSigningResponse,
+  isSigningRejected,
 } from '../schema/decoder.js';
 import type {
   AC2BaseMessage,
@@ -11,6 +12,7 @@ import type {
   AC2KeyResponse,
   AC2SigningRequest,
   AC2SigningResponse,
+  AC2SigningRejected,
   ValidationResult,
 } from '../schema/types.js';
 
@@ -22,6 +24,7 @@ import type {
 export interface MessageHandlers {
   onSigningRequest?: (msg: AC2SigningRequest) => void | Promise<void>;
   onSigningResponse?: (msg: AC2SigningResponse) => void | Promise<void>;
+  onSigningRejected?: (msg: AC2SigningRejected) => void | Promise<void>;
   onKeyRequest?: (msg: AC2KeyRequest) => void | Promise<void>;
   onKeyResponse?: (msg: AC2KeyResponse) => void | Promise<void>;
   onUnknown?: (msg: AC2BaseMessage, validation: ValidationResult) => void | Promise<void>;
@@ -45,6 +48,7 @@ export async function handleMessage(
 
   if (isSigningRequest(msg)) await handlers.onSigningRequest?.(msg);
   else if (isSigningResponse(msg)) await handlers.onSigningResponse?.(msg);
+  else if (isSigningRejected(msg)) await handlers.onSigningRejected?.(msg);
   else if (isKeyRequest(msg)) await handlers.onKeyRequest?.(msg);
   else if (isKeyResponse(msg)) await handlers.onKeyResponse?.(msg);
   else await handlers.onUnknown?.(msg, validation);

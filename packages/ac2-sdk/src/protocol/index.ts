@@ -6,4 +6,5 @@ export {
   createKeyResponse,
   createSigningRequest,
   createSigningResponse,
+  createSigningRejected,
 } from './messages.js';

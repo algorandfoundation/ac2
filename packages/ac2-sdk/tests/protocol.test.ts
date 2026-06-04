@@ -46,6 +46,9 @@ describe('protocol factories', () => {
       address: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ',
       key_type: 'account',
     });
+    const signingRejected = createSigningRejected(envelope, {
+      reason: 'User rejected the signing request',
+    });
     const keyRequest = createKeyRequest(envelope, {
       key_type: 'ed25519',
       purpose: ['sign'],
@@ -57,6 +60,7 @@ describe('protocol factories', () => {
     });
 
     expect(signingResponse.type).toBe(AC2MessageTypes.SIGNING_RESPONSE);
+    expect(signingRejected.type).toBe(AC2MessageTypes.SIGNING_REJECTED);
     expect(keyRequest.type).toBe(AC2MessageTypes.KEY_REQUEST);
     expect(keyResponse.type).toBe(AC2MessageTypes.KEY_RESPONSE);
   });
@@ -102,6 +106,32 @@ describe('handleMessage()', () => {
         onSigningResponse: async () => {
           calls.push('signing-response');
         },
+        onSigningRejected: async () => {
+          calls.push('signing-rejected');
+        },
+        onKeyRequest: async () => {
+          calls.push('key-request');
+        },
+        onKeyResponse: async () => {
+          calls.push('key-response');
+        },
+      },
+    );
+
+    await handleMessage(
+      createSigningRejected(envelope, {
+        reason: 'User rejected the signing request',
+      }),
+      {
+        onSigningRequest: async () => {
+          calls.push('signing-request');
+        },
+        onSigningResponse: async () => {
+          calls.push('signing-response');
+        },
+        onSigningRejected: async () => {
+          calls.push('signing-rejected');
+        },
         onKeyRequest: async () => {
           calls.push('key-request');
         },
@@ -124,6 +154,9 @@ describe('handleMessage()', () => {
         onSigningResponse: async () => {
           calls.push('signing-response');
         },
+        onSigningRejected: async () => {
+          calls.push('signing-rejected');
+        },
         onKeyRequest: async () => {
           calls.push('key-request');
         },
@@ -145,6 +178,9 @@ describe('handleMessage()', () => {
         onSigningResponse: async () => {
           calls.push('signing-response');
         },
+        onSigningRejected: async () => {
+          calls.push('signing-rejected');
+        },
         onKeyRequest: async () => {
           calls.push('key-request');
         },
@@ -154,7 +190,13 @@ describe('handleMessage()', () => {
       },
     );
 
-    expect(calls).toEqual(['signing-request', 'signing-response', 'key-request', 'key-response']);
+    expect(calls).toEqual([
+      'signing-request',
+      'signing-response',
+      'signing-rejected',
+      'key-request',
+      'key-response',
+    ]);
   });
 
   it('routes invalid messages to onUnknown', async () => {
