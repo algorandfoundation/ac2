@@ -5,6 +5,7 @@ import {
   createKeyResponse,
   createSigningRequest,
   createSigningResponse,
+  createSigningRejected,
   handleMessage,
 } from '../src/protocol';
 import { AC2MessageTypes } from '../src/schema';
@@ -40,9 +41,10 @@ describe('protocol factories', () => {
 
   it('creates the other protocol message variants', () => {
     const signingResponse = createSigningResponse(envelope, {
-      status: 'approved',
       signature: 'c2lnbmF0dXJl',
-      timestamp: '2026-01-01T00:00:00Z',
+      public_key: 'cHVibGljS2V5',
+      address: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ',
+      key_type: 'account',
     });
     const keyRequest = createKeyRequest(envelope, {
       key_type: 'ed25519',
@@ -88,9 +90,10 @@ describe('handleMessage()', () => {
 
     await handleMessage(
       createSigningResponse(envelope, {
-        status: 'approved',
         signature: 'c2lnbmF0dXJl',
-        timestamp: '2026-01-01T00:00:00Z',
+        public_key: 'cHVibGljS2V5',
+        address: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ',
+        key_type: 'account',
       }),
       {
         onSigningRequest: async () => {

@@ -9,10 +9,8 @@ export type {
   AC2SigningRequest,
   AC2SigningResponse,
   DecodeResult,
-  KeyEncoding,
   KeyRequestBody,
   KeyResponseBody,
-  KeyType,
   SigningRequestBody,
   SigningResponseBody,
   ValidationResult,
@@ -26,6 +24,7 @@ export {
   isKeyResponse,
   isSigningRequest,
   isSigningResponse,
+  isSigningRejected,
 } from './decoder.js';
 
 export { validate, validateBody, validateMessage } from './validator.js';
@@ -33,4 +32,8 @@ export { validate, validateBody, validateMessage } from './validator.js';
 export { baseMessageSchema } from './definitions/base.js';
 export { keyRequestBodySchema, keyResponseBodySchema } from './definitions/key.js';
 
-export { signingRequestBodySchema, signingResponseBodySchema } from './definitions/signing.js';
+export {
+  signingRequestBodySchema,
+  signingResponseBodySchema,
+  signingRejectedBodySchema,
+} from './definitions/signing.js';

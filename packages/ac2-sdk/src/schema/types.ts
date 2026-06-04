@@ -64,6 +64,7 @@ export interface AC2BaseMessageSchema extends Omit<AC2BaseMessage, 'body' | 'att
 export const AC2MessageTypes = {
   SIGNING_REQUEST: 'ac2/SigningRequest',
   SIGNING_RESPONSE: 'ac2/SigningResponse',
+  SIGNING_REJECTED: 'ac2/SigningRejected',
   KEY_REQUEST: 'ac2/KeyRequest',
   KEY_RESPONSE: 'ac2/KeyResponse',
 } as const;
@@ -71,9 +72,6 @@ export const AC2MessageTypes = {
 export type AC2MessageType = (typeof AC2MessageTypes)[keyof typeof AC2MessageTypes];
 
 // ─── Body Types ───────────────────────────────────────────────────────────────
-
-export type KeyType = 'ed25519' | 'secp256k1' | 'falcon-512';
-export type KeyEncoding = 'base64' | 'base64url' | 'hex';
 
 /** Body for ac2/SigningRequest (agent → controller) */
 export interface SigningRequestBody {
@@ -89,10 +87,19 @@ export interface SigningRequestBody {
 
 /** Body for ac2/SigningResponse (controller → agent) */
 export interface SigningResponseBody {
-  status: 'approved' | 'rejected';
-  /** The raw signature, base64-encoded */
+  /*  Ed25519 signature */
   signature: string;
-  timestamp: string;
+  /* 32-byte Ed25519 public key (base64 encoded) */
+  public_key: string;
+  /* Algorand Address (optional) */
+  address?: string;
+  /* Which key actually signed */
+  key_type?: 'account' | 'identity';
+}
+
+/** Body for ac2/SigningRejected when the user rejects the signing request. */
+export interface SigningRejectedBody {
+  reason: string;
 }
 
 /** Body for ac2/KeyRequest (agent → controller) */
@@ -123,6 +130,11 @@ export interface AC2SigningResponse extends AC2BaseMessage {
   body: SigningResponseBody;
 }
 
+export interface AC2SigningRejected extends AC2BaseMessage {
+  type: 'ac2/SigningRejected';
+  body: SigningRejectedBody;
+}
+
 export interface AC2KeyRequest extends AC2BaseMessage {
   type: 'ac2/KeyRequest';
   body: KeyRequestBody;
@@ -133,7 +145,12 @@ export interface AC2KeyResponse extends AC2BaseMessage {
   body: KeyResponseBody;
 }
 
-export type AC2Message = AC2SigningRequest | AC2SigningResponse | AC2KeyRequest | AC2KeyResponse;
+export type AC2Message =
+  | AC2SigningRequest
+  | AC2SigningResponse
+  | AC2SigningRejected
+  | AC2KeyRequest
+  | AC2KeyResponse;
 
 // ─── Result Types ─────────────────────────────────────────────────────────────
 

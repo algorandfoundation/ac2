@@ -151,28 +151,15 @@ describe('validate() — SigningResponse', () => {
     created_time: NOW,
     thid: 'test-001',
     body: {
-      status: 'approved',
       signature: 'c2lnbmF0dXJl',
-      timestamp: '2026-01-01T00:00:00Z',
+      public_key: 'cHVibGljS2V5',
+      address: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ',
+      key_type: 'account',
     },
   };
 
   it('accepts a valid SigningResponse', () => {
     expect(validate(base).valid).toBe(true);
-  });
-
-  it('rejects missing status', () => {
-    const { status: _, ...body } = base.body;
-    const r = validate({ ...base, body });
-    expect(r.valid).toBe(false);
-  });
-
-  it('rejects invalid status', () => {
-    const r = validate({
-      ...base,
-      body: { ...base.body, status: 'pending' },
-    });
-    expect(r.valid).toBe(false);
   });
 
   it('rejects missing signature', () => {
@@ -182,11 +169,20 @@ describe('validate() — SigningResponse', () => {
     expect(r.errors.some((e) => e.includes('signature'))).toBe(true);
   });
 
-  it('rejects missing timestamp', () => {
-    const { timestamp: _, ...body } = base.body;
+  it('rejects missing public_key', () => {
+    const { public_key: _, ...body } = base.body;
     const r = validate({ ...base, body });
     expect(r.valid).toBe(false);
-    expect(r.errors.some((e) => e.includes('timestamp'))).toBe(true);
+    expect(r.errors.some((e) => e.includes('public_key'))).toBe(true);
+  });
+
+  it('rejects invalid key_type', () => {
+    const r = validate({
+      ...base,
+      body: { ...base.body, key_type: 'pending' },
+    });
+    expect(r.valid).toBe(false);
+    expect(r.errors.some((e) => e.includes('key_type'))).toBe(true);
   });
 
   it('rejects unsupported extra fields', () => {
@@ -195,6 +191,34 @@ describe('validate() — SigningResponse', () => {
       body: { ...base.body, extra: true },
     });
     expect(r.valid).toBe(false);
+  });
+});
+
+// ─── SigningRejected ─────────────────────────────────────────────────────────
+
+describe('validate() — SigningRejected', () => {
+  const base = {
+    id: 'test-003',
+    type: AC2MessageTypes.SIGNING_REJECTED,
+    from: 'did:key:bob',
+    to: ['did:key:alice'],
+    created_time: NOW,
+    thid: 'test-001',
+    body: {
+      reason: 'User rejected signing request',
+    },
+  };
+
+  it('treats SigningRejected as unknown until a body schema is registered', () => {
+    const r = validate(base);
+    expect(r.valid).toBe(true);
+    expect(r.warnings.some((w) => w.includes('Unknown message type'))).toBe(true);
+  });
+
+  it('validateBody returns warning for SigningRejected until schema is wired', () => {
+    const r = validateBody(AC2MessageTypes.SIGNING_REJECTED, base.body);
+    expect(r.valid).toBe(true);
+    expect(r.warnings.some((w) => w.includes('No body schema'))).toBe(true);
   });
 });
 

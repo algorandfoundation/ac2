@@ -5,6 +5,7 @@ import type {
   AC2Message,
   AC2SigningRequest,
   AC2SigningResponse,
+  AC2SigningRejected,
   DecodeResult,
   ValidationResult,
 } from './types.js';
@@ -55,6 +56,10 @@ export function isSigningRequest(msg: AC2BaseMessage): msg is AC2SigningRequest 
 
 export function isSigningResponse(msg: AC2BaseMessage): msg is AC2SigningResponse {
   return msg.type === AC2MessageTypes.SIGNING_RESPONSE;
+}
+
+export function isSigningRejected(msg: AC2BaseMessage): msg is AC2SigningRejected {
+  return msg.type === AC2MessageTypes.SIGNING_REJECTED;
 }
 
 export function isKeyRequest(msg: AC2BaseMessage): msg is AC2KeyRequest {

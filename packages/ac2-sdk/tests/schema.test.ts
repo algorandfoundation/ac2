@@ -38,7 +38,9 @@ describe('schema exports', () => {
 
   it('exposes the signing and key body schemas', () => {
     expect(signingRequestBodySchema.required).toEqual(['description', 'encoding', 'payload']);
-    expect(signingResponseBodySchema.properties.status?.enum).toEqual(['approved', 'rejected']);
+    expect(signingResponseBodySchema.required).toEqual(['signature', 'public_key']);
+    expect(signingResponseBodySchema.properties.signature?.type).toBe('string');
+    expect(signingResponseBodySchema.properties.public_key?.type).toBe('string');
     expect(keyRequestBodySchema.additionalProperties).toBe(false);
     expect(keyResponseBodySchema.additionalProperties).toBe(true);
   });
