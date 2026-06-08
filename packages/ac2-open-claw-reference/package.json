@@ -20,8 +20,6 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "prepare": "tsc -p tsconfig.build.json",
-    "build-link-bundle": "node scripts/build-link-bundle.mjs",
-    "link": "tsc -p tsconfig.build.json && node scripts/build-link-bundle.mjs && openclaw plugins install --link .link-bundle",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
