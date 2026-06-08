@@ -1,0 +1,60 @@
+{
+  "name": "ac2-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private workspace for AC2 packages",
+  "workspaces": [
+    "build/",
+    "packages/*"
+  ],
+  "homepage": "https://github.com/algorandfoundation/ac2#readme",
+  "bugs": {
+    "url": "https://github.com/algorandfoundation/ac2/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/algorandfoundation/ac2.git"
+  },
+  "license": "Apache-2.0",
+  "author": "",
+  "scripts": {
+    "test": "pnpm -r --if-present run test"
+  },
+  "devDependencies": {
+    "@semantic-release/changelog": "catalog:",
+    "@semantic-release/git": "catalog:"
+  },
+  "release": {
+    "plugins": [
+      "@semantic-release/commit-analyzer",
+      "@semantic-release/release-notes-generator",
+      "@semantic-release/changelog",
+      "@semantic-release/npm",
+      [
+        "@semantic-release/git",
+        {
+          "assets": [
+            "CHANGELOG.md",
+            "package.json",
+            "pnpm-lock.yaml"
+          ]
+        }
+      ],
+      [
+        "@semantic-release/github",
+        {
+          "successComment": false
+        }
+      ]
+    ],
+    "branches": [
+      "release",
+      {
+        "name": "main",
+        "prerelease": "canary",
+        "channel": "next"
+      }
+    ]
+  },
+  "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319"
+}
