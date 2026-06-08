@@ -1,0 +1,81 @@
+{
+  "name": "@ac2/ac2-open-claw-reference",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reference OpenClaw plugin for the AC2 protocol. Implements both tool and channel interfaces for signing and chat over Liquid Auth.",
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "skills"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "tsc -p tsconfig.build.json",
+    "build-link-bundle": "node scripts/build-link-bundle.mjs",
+    "link": "tsc -p tsconfig.build.json && node scripts/build-link-bundle.mjs && openclaw plugins install --link .link-bundle",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@algorandfoundation/ac2-sdk": "1.0.0-canary.1",
+    "@algorandfoundation/keystore": "1.0.0-canary.16",
+    "@algorandfoundation/liquid-client": "1.0.0-canary.8",
+    "@napi-rs/keyring": "^1.3.0",
+    "@roamhq/wrtc": "^0.10.0",
+    "@sinclair/typebox": "^0.32.0",
+    "@tanstack/store": "^0.9.1",
+    "node-datachannel": "^0.32.3",
+    "qrcode-terminal": "^0.12.0",
+    "socket.io-client": "^4.7.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/qrcode-terminal": "^0.12.2",
+    "openclaw": "2026.6.1",
+    "typescript": "~5.8.3",
+    "vitest": "^3.2.0"
+  },
+  "dependenciesMeta": {
+    "@algorandfoundation/ac2-sdk": {
+      "injected": true
+    },
+    "@algorandfoundation/liquid-client": {
+      "injected": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/entry.js"
+    ],
+    "setupEntry": "./dist/setup/index.js",
+    "channels": [
+      "ac2"
+    ],
+    "channelEnvVars": [
+      {
+        "name": "AC2_LIQUID_AUTH_SERVER",
+        "description": "Liquid Auth signaling server origin. Overrides the `liquidAuthServer` channel config at runtime. Defaults to https://debug.liquidauth.com when neither is set.",
+        "required": false
+      }
+    ],
+    "contracts": {
+      "tools": [
+        "ac2_sign",
+        "ac2_capabilities"
+      ],
+      "commands": [
+        "ac2"
+      ]
+    }
+  }
+}
