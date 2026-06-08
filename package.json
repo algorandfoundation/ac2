@@ -50,7 +50,7 @@
     "branches": [
       "release",
       {
-        "name": "main",
+        "name": "master",
         "prerelease": "canary",
         "channel": "next"
       }
