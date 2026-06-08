@@ -12,9 +12,15 @@ catalogs:
     '@semantic-release/git':
       specifier: ^10.0.1
       version: 10.0.1
+    '@types/node':
+      specifier: ^22.0.0
+      version: 22.19.20
     semantic-release:
       specifier: ^25.0.3
       version: 25.0.3
+    typescript:
+      specifier: ~5.8.3
+      version: 5.8.3
 
 importers:
 
@@ -26,6 +32,12 @@ importers:
       '@semantic-release/git':
         specifier: 'catalog:'
         version: 10.0.1(semantic-release@25.0.3(typescript@5.8.3))
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.20
+      typescript:
+        specifier: 'catalog:'
+        version: 5.8.3
 
   build:
     dependencies:
@@ -44,6 +56,13 @@ importers:
       semantic-release:
         specifier: 'catalog:'
         version: 25.0.3(typescript@5.8.3)
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.20
+      typescript:
+        specifier: 'catalog:'
+        version: 5.8.3
 
   packages/ac2-sdk:
     dependencies:
@@ -55,13 +74,13 @@ importers:
         specifier: workspace:*
         version: link:../../build
       '@types/node':
-        specifier: ^22.0.0
+        specifier: 'catalog:'
         version: 22.19.20
       typedoc:
         specifier: ^0.28.19
         version: 0.28.19(typescript@5.8.3)
       typescript:
-        specifier: ~5.8.3
+        specifier: 'catalog:'
         version: 5.8.3
       vitest:
         specifier: ^3.2.0

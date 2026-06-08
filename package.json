@@ -22,7 +22,9 @@
   },
   "devDependencies": {
     "@semantic-release/changelog": "catalog:",
-    "@semantic-release/git": "catalog:"
+    "@semantic-release/git": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
   },
   "release": {
     "plugins": [

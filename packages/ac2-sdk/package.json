@@ -72,9 +72,9 @@
   },
   "devDependencies": {
     "@algorandfoundation/package-releaser": "workspace:*",
-    "@types/node": "^22.0.0",
+    "@types/node": "catalog:",
     "typedoc": "^0.28.19",
-    "typescript": "~5.8.3",
+    "typescript": "catalog:",
     "vitest": "^3.2.0"
   }
 }
