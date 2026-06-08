@@ -3,10 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "description": "Private workspace for AC2 packages",
-  "workspaces": [
-    "build/",
-    "packages/*"
-  ],
   "homepage": "https://github.com/algorandfoundation/ac2#readme",
   "bugs": {
     "url": "https://github.com/algorandfoundation/ac2/issues"
