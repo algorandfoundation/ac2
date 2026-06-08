@@ -185,7 +185,7 @@ Streaming (raw bytes over a side channel correlated by `thid`) is intentionally 
 ## Documentation
 
 - [EXTENDING.md](./EXTENDING.md): package layout, subpath exports, custom transports, custom message types, signaling providers.
-- [CONTRIBUTING.md](../../CONTRIBUTING.md): repository structure, build, test, and release workflow.
+- [CONTRIBUTING.md](../CONTRIBUTING.md): repository structure, build, test, and release workflow.
 
 ## License
 
