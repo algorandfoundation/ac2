@@ -74,13 +74,13 @@ importers:
         specifier: workspace:*
         version: link:../../build
       '@types/node':
-        specifier: 'catalog:'
+        specifier: ^22.0.0
         version: 22.19.20
       typedoc:
         specifier: ^0.28.19
         version: 0.28.19(typescript@5.8.3)
       typescript:
-        specifier: 'catalog:'
+        specifier: ~5.8.3
         version: 5.8.3
       vitest:
         specifier: ^3.2.0
