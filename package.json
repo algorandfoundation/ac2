@@ -18,7 +18,8 @@
   "license": "Apache-2.0",
   "author": "",
   "scripts": {
-    "test": "pnpm -r --if-present run test"
+    "test": "pnpm -r --if-present run test",
+    "release": "pnpm -r --if-present run release"
   },
   "devDependencies": {
     "@semantic-release/changelog": "catalog:",
