@@ -179,7 +179,8 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         else if (channel.label === AC2_HEARTBEAT_LABEL) heartbeatChannel = channel;
       });
 
-      const dataChannels: Record<string, RTCDataChannelInit> = {
+      type DataChannelInit = { ordered?: boolean };
+      const dataChannels: Record<string, DataChannelInit> = {
         [AC2_CONTROL_LABEL]: { ordered: true },
         ...(includeStream ? { [AC2_STREAM_LABEL]: { ordered: true } } : {}),
         [AC2_HEARTBEAT_LABEL]: { ordered: true },
