@@ -1,0 +1,19 @@
+name: CI
+on:
+  pull_request:
+    branches: ["master", "release"]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          cache: "pnpm"
+      - run: pnpm install
+      #- run: pnpm run lint:github
+      #- run: pnpm run fmt:check
+      - run: pnpm test

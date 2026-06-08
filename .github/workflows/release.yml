@@ -1,0 +1,43 @@
+name: Release
+on:
+  push:
+    branches: ["master", "release"]
+
+concurrency:
+  group: Release
+  cancel-in-progress: true
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # TODO: add support for environment
+    #environment: Production
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v5 # Honors the packageManager field
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          cache: "pnpm"
+      - run: pnpm install
+      - run: pnpm run --if-present build
+      - run: pnpm install # fix broken workspace for binaries
+      - name: Release
+        id: release
+        run: pnpm run release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Rebase main onto release
+        if: github.ref == 'refs/heads/release' && steps.release.outputs.released == 'true'
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git checkout main
+          git rebase release
+          git push origin main

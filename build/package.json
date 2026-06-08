@@ -1,0 +1,31 @@
+{
+  "name": "@algorandfoundation/package-releaser",
+  "version": "0.0.1",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/algorandfoundation/wallet-provider-extensions.git",
+    "directory": "build"
+  },
+  "bin": {
+    "package-releaser": "dist/bin.js"
+  },
+  "type": "module",
+  "main": "dist/bin.js",
+  "scripts": {
+    "prepare": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist coverage node_modules docs"
+  },
+  "dependencies": {
+    "cosmiconfig": "^9.0.0",
+    "memize": "^2.1.1",
+    "meow": "^14.0.0",
+    "read-pkg": "^10.1.0",
+    "semantic-release": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}
