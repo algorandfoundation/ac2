@@ -13,7 +13,6 @@
   "type": "module",
   "main": "dist/bin.js",
   "scripts": {
-    "prepare": "tsc -p tsconfig.build.json",
     "build": "tsc -p tsconfig.build.json",
     "clean": "rm -rf dist coverage node_modules docs"
   },

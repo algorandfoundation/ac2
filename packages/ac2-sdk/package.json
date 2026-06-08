@@ -57,7 +57,6 @@
     }
   },
   "scripts": {
-    "prepare": "tsc -p tsconfig.build.json",
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsc -p tsconfig.build.json --watch",
     "type-check": "tsc --noEmit",
@@ -65,8 +64,10 @@
     "test:watch": "vitest --globals",
     "docs": "typedoc",
     "docs:watch": "typedoc --watch",
-    "release": "package-releaser"
+    "release": "package-releaser",
+    "release:dry-run": "package-releaser --dry-run"
   },
+  "release": null,
   "dependencies": {
     "ajv": "^8.17.1"
   },

@@ -18,13 +18,17 @@
   "license": "Apache-2.0",
   "author": "",
   "scripts": {
+    "build": "pnpm run build:releaser && pnpm run -r --filter=!@algorandfoundation/package-releaser --if-present build",
+    "build:releaser": "pnpm run --filter @algorandfoundation/package-releaser build",
     "test": "pnpm -r --if-present run test",
-    "release": "pnpm -r --if-present run release"
+    "release": "pnpm run -r --workspace-concurrency 1 --if-present release",
+    "release:dry-run": "pnpm run -r --workspace-concurrency 1 --if-present release:dry-run"
   },
   "devDependencies": {
     "@semantic-release/changelog": "catalog:",
     "@semantic-release/git": "catalog:",
     "@types/node": "catalog:",
+    "semantic-release": "catalog:",
     "typescript": "catalog:"
   },
   "release": {

@@ -22,6 +22,11 @@ catalogs:
       specifier: ~5.8.3
       version: 5.8.3
 
+patchedDependencies:
+  '@semantic-release/npm@13.1.5':
+    hash: f8fb36b515bbe8990c2498aa928100d1676d2af288ea16a4656a8827c9458e76
+    path: patches/@semantic-release__npm@13.1.5.patch
+
 importers:
 
   .:
@@ -35,6 +40,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.20
+      semantic-release:
+        specifier: 'catalog:'
+        version: 25.0.3(typescript@5.8.3)
       typescript:
         specifier: 'catalog:'
         version: 5.8.3
@@ -2282,7 +2290,7 @@ snapshots:
       - kerberos
       - supports-color
 
-  '@semantic-release/npm@13.1.5(semantic-release@25.0.3(typescript@5.8.3))':
+  '@semantic-release/npm@13.1.5(patch_hash=f8fb36b515bbe8990c2498aa928100d1676d2af288ea16a4656a8827c9458e76)(semantic-release@25.0.3(typescript@5.8.3))':
     dependencies:
       '@actions/core': 3.0.1
       '@semantic-release/error': 4.0.0
@@ -3268,7 +3276,7 @@ snapshots:
       '@semantic-release/commit-analyzer': 13.0.1(semantic-release@25.0.3(typescript@5.8.3))
       '@semantic-release/error': 4.0.0
       '@semantic-release/github': 12.0.8(semantic-release@25.0.3(typescript@5.8.3))
-      '@semantic-release/npm': 13.1.5(semantic-release@25.0.3(typescript@5.8.3))
+      '@semantic-release/npm': 13.1.5(patch_hash=f8fb36b515bbe8990c2498aa928100d1676d2af288ea16a4656a8827c9458e76)(semantic-release@25.0.3(typescript@5.8.3))
       '@semantic-release/release-notes-generator': 14.1.1(semantic-release@25.0.3(typescript@5.8.3))
       aggregate-error: 5.0.0
       cosmiconfig: 9.0.2(typescript@5.8.3)
