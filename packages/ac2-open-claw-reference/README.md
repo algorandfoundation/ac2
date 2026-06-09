@@ -21,58 +21,33 @@ identity key is **issued by the wallet** during pairing (bootstrap
 `KeyRequest`) and persisted in an OS-keychain-protected keystore — the
 agent never touches the user's account keys or passkeys.
 
-## Getting started in OpenClaw
+## Getting started
 
-This package isn't published. Build a **self-contained distribution
-bundle** and install that single export into OpenClaw.
+> **TODO:** publish this package to a registry. Until then, the only
+> supported flow is a live link from this monorepo — see below.
 
-### Build the distribution bundle
+### Prerequisites
 
-`scripts/bundle.mjs` (run via `pnpm run build`) uses esbuild to inline
-every pure-JS dependency into `dist/`, so the export needs **no**
-`node_modules` of its own at runtime. Only the host SDK (`openclaw`),
-Node built-ins, and the native add-ons that ship `.node` binaries
-(`node-datachannel`, `@napi-rs/keyring`) are kept external and resolved
-on the host.
+- Node.js ≥ 22, pnpm ≥ 10
+- `openclaw` CLI on `PATH`.
+- `openclaw` already setup with an agent
+
+### Link the plugin into OpenClaw
 
 ```bash
 git clone https://github.com/algorandfoundation/ac2-controller.git
-cd ac2-controller/packages/ac2-open-claw-reference
-pnpm install --ignore-workspace   # install the plugin's own build deps, decoupled from the monorepo
-pnpm run build                    # esbuild bundle (dist/*.js) + tsc declarations (dist/*.d.ts)
+cd ac2-controller
+pnpm install                                          # once, at the repo root
 
-# Or build AND pack a single distributable archive in one step:
-pnpm run dist:pack                # -> ac2-ac2-open-claw-reference-0.1.0.tgz
-```
-
-### Install it into OpenClaw
-
-```bash
-# from anywhere OpenClaw is installed — install the packed archive...
-openclaw plugins install file:/absolute/path/to/ac2-ac2-open-claw-reference-0.1.0.tgz
-# ...or install straight from the built package directory:
-openclaw plugins install file:/absolute/path/to/ac2-controller/packages/ac2-open-claw-reference
-
-openclaw plugins enable ac2-open-claw-reference
-openclaw ac2 setup            # wires channel + tools into openclaw.json
+cd packages/ac2-open-claw-reference
+pnpm dev:link                                         # rebuild natives → bundle → register → enable
+openclaw ac2 setup                                    # wire channel + tools into openclaw.json
 openclaw gateway restart
 ```
 
-Notes:
+### Configuration
 
-- **Dangerous-code scanner.** `socket.io-client`'s bundled Node
-  long-polling fallback (`xmlhttprequest-ssl`) contains a
-  `child_process.spawn` call, which trips OpenClaw's install-time
-  scanner. It is not reached on the WebSocket path; for local testing
-  pass `--dangerously-force-unsafe-install`.
-- **Native binaries.** The host installs `node-datachannel` /
-  `@napi-rs/keyring` from `package.json`. If a package manager skips
-  build scripts and the prebuilt `node_datachannel.node` is missing, run
-  `npx prebuild-install -r napi` inside the installed copy's
-  `node_modules/node-datachannel`.
-
-Alternatively, register the built package directly in `openclaw.json`
-under `plugins.entries`:
+Once linked, `openclaw.json` will contain an entry like:
 
 ```json5
 {
@@ -87,11 +62,13 @@ under `plugins.entries`:
 }
 ```
 
-then `openclaw ac2 setup && openclaw gateway restart`.
-`AC2_LIQUID_AUTH_SERVER` overrides the server at runtime.
+`AC2_LIQUID_AUTH_SERVER` overrides `liquidAuthServer` at runtime.
 
-Then, in a conversation: enable the `ac2` channel, scan the QR, and the
-model can call `ac2_capabilities` followed by `ac2_sign`. See
+### Using it
+
+In a conversation, enable the `ac2` channel, scan the QR with your AC2
+Controller / wallet, then the model can call `ac2_capabilities`
+followed by `ac2_sign`. See
 [DISCOVERY §3.2](https://github.com/algorandfoundation/ac2-sdk) for the
 request/response shapes.
 
