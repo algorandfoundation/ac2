@@ -110,14 +110,13 @@ export function buildCapabilitiesTool(): AnyAgentTool {
     }> {
       const config = resolveConfig(getActiveApi() || ({} as any));
       const result = capabilitiesFlow(config);
+      const headline =
+        result.status === 'ok'
+          ? 'AC2 session is connected.'
+          : 'AC2 session is not connected — pair via `/ac2`.';
+      const body = JSON.stringify(result, null, 2);
       return {
-        content: [
-          textResult(
-            result.status === 'ok'
-              ? 'AC2 session is connected.'
-              : 'AC2 session is not connected — pair via `/ac2`.',
-          ),
-        ],
+        content: [textResult(`${headline}\n\`\`\`json\n${body}\n\`\`\``)],
         details: result,
       };
     },
