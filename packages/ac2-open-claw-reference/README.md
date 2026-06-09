@@ -23,25 +23,56 @@ agent never touches the user's account keys or passkeys.
 
 ## Getting started in OpenClaw
 
-This package isn't published. Point OpenClaw at a local checkout
-instead — clone the repo, build the plugin, and install it from its
-directory:
+This package isn't published. Build a **self-contained distribution
+bundle** and install that single export into OpenClaw.
+
+### Build the distribution bundle
+
+`scripts/bundle.mjs` (run via `pnpm run build`) uses esbuild to inline
+every pure-JS dependency into `dist/`, so the export needs **no**
+`node_modules` of its own at runtime. Only the host SDK (`openclaw`),
+Node built-ins, and the native add-ons that ship `.node` binaries
+(`node-datachannel`, `@napi-rs/keyring`) are kept external and resolved
+on the host.
 
 ```bash
 git clone https://github.com/algorandfoundation/ac2-controller.git
 cd ac2-controller/packages/ac2-open-claw-reference
-pnpm install --ignore-workspace   # install the plugin's own node_modules, decoupled from the monorepo
-pnpm run build
+pnpm install --ignore-workspace   # install the plugin's own build deps, decoupled from the monorepo
+pnpm run build                    # esbuild bundle (dist/*.js) + tsc declarations (dist/*.d.ts)
 
-# from anywhere OpenClaw is installed:
+# Or build AND pack a single distributable archive in one step:
+pnpm run dist:pack                # -> ac2-ac2-open-claw-reference-0.1.0.tgz
+```
+
+### Install it into OpenClaw
+
+```bash
+# from anywhere OpenClaw is installed — install the packed archive...
+openclaw plugins install file:/absolute/path/to/ac2-ac2-open-claw-reference-0.1.0.tgz
+# ...or install straight from the built package directory:
 openclaw plugins install file:/absolute/path/to/ac2-controller/packages/ac2-open-claw-reference
+
 openclaw plugins enable ac2-open-claw-reference
 openclaw ac2 setup            # wires channel + tools into openclaw.json
 openclaw gateway restart
 ```
 
-Alternatively, register it directly in `openclaw.json` under
-`plugins.entries`:
+Notes:
+
+- **Dangerous-code scanner.** `socket.io-client`'s bundled Node
+  long-polling fallback (`xmlhttprequest-ssl`) contains a
+  `child_process.spawn` call, which trips OpenClaw's install-time
+  scanner. It is not reached on the WebSocket path; for local testing
+  pass `--dangerously-force-unsafe-install`.
+- **Native binaries.** The host installs `node-datachannel` /
+  `@napi-rs/keyring` from `package.json`. If a package manager skips
+  build scripts and the prebuilt `node_datachannel.node` is missing, run
+  `npx prebuild-install -r napi` inside the installed copy's
+  `node_modules/node-datachannel`.
+
+Alternatively, register the built package directly in `openclaw.json`
+under `plugins.entries`:
 
 ```json5
 {

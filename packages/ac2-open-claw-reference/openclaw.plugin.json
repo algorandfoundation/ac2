@@ -4,7 +4,6 @@
   "description": "Reference OpenClaw plugin for the AC2 protocol. The `ac2` channel owns pairing over Liquid Auth + WebRTC; `ac2_sign` and `ac2_capabilities` route through the active channel session.",
   "version": "0.1.0",
   "channels": ["ac2"],
-  "setupEntry": "./dist/setup.js",
   "channelEnvVars": [
     {
       "name": "AC2_LIQUID_AUTH_SERVER",
