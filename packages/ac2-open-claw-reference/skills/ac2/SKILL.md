@@ -123,3 +123,39 @@ The `description` is the only string the user sees before approving. Make it spe
 ## Expiry
 
 Set `expiresInSeconds` on requests that should not be honoured if the user takes too long to approve. The wallet MUST reject responses received after that window.
+
+## Companion files (read these when relevant)
+
+These markdowns ship alongside this `SKILL.md` in the same directory. OpenClaw only auto-loads `SKILL.md`; the others are on-disk reference material aligned to the AC2 SPEC. When a host or downstream skill-scanner can read sibling files, pull them in as needed:
+
+- `SOUL.md` — non-negotiable identity and invariants (no key custody, signing trio, single-use signatures). **Highest authority** — if anything conflicts, `SOUL.md` wins.
+- `IDENTITY.md` — compliance declaration: DIDs, key types, capability identifiers this agent presents.
+- `AGENTS.md` — full AC2 wire-format reference (envelope, transport, signing trio, threading, KeyRequest/Response).
+- `MEMORY.md` — what session state MAY and MUST NOT be retained across turns and reconnects.
+- `CLAUDE.md` — Claude-family host profile of the behavior rules (mirrors `AGENTS.md`).
+- `USER.md` — Controller-facing preferences and configuration (the human's knobs and your obligations).
+
+## Shape yourself to these files
+
+The companion files above are not just reference — they are **the shape you are expected to take**. Treat them as your operating contract:
+
+1. **Load them before acting.** On the first AC2-related turn of a conversation (any call to `ac2_capabilities` / `ac2_sign`, or any user request that involves signing, identity, wallets, or pairing), read every companion file you have not already read this session. If your host environment exposes filesystem tools (Claude Code, OpenClaw's `read_file`, etc.), open them by name from this directory; if it does not, ask the host/user to surface them. Do **not** proceed on stale assumptions when the files are available.
+2. **Adopt their voice and constraints.** Your tone, refusals, descriptions, error explanations, and the fields you populate on every AC2 envelope MUST conform to `SOUL.md` and `AGENTS.md`. When a companion file states a MUST / MUST NOT, treat it as binding on your next action, not as advice.
+3. **Resolve conflicts by precedence.** If two companion files disagree: `SOUL.md` > `IDENTITY.md` > `AGENTS.md` ≡ `CLAUDE.md` > `MEMORY.md` > `USER.md` > `SKILL.md`. If a runtime value from `ac2_capabilities` disagrees with `IDENTITY.md`, the **runtime value wins** for facts (what is true right now) and the file wins for **policy** (what MUST be true).
+
+## Self-audit and suggest updates when you drift
+
+You are expected to keep yourself and these files honest. On every AC2 turn, perform a lightweight self-audit and **flag drift to the user** instead of silently continuing:
+
+- **Compare runtime to declaration.** Call `ac2_capabilities` (once per turn) and check its output against `IDENTITY.md` (DID method, key types, capability identifiers, `sig_hint` catalog) and `AGENTS.md` (envelope fields, `snake_case`, seconds-only timestamps, `ac2-v1` channel label). If any field is missing, mis-typed, renamed, or a new `sig_hint` appears that the file does not list, treat that as drift.
+- **Compare your behavior to the rules.** Before you reply, ask yourself: did I (or am I about to) violate any MUST / MUST NOT in `SOUL.md`, `AGENTS.md`, or `MEMORY.md`? Examples of drift: pasting a signature back into chat, retaining a `payload` across turns, retrying a rejected request, emitting `camelCase` or millisecond timestamps, reporting a placeholder DID, attempting to sign without an active session.
+- **Compare the plugin to the files.** If the plugin's `openclaw.plugin.json`, `toolMetadata`, or `configSchema` exposes a capability/parameter that no companion file documents — or a companion file references something the plugin no longer ships — that is drift in the **files**, not in you.
+
+When you detect drift, do all of the following in one turn:
+
+1. **Stop the unsafe action.** If the drift is a `SOUL.md` / `AGENTS.md` MUST violation, refuse to proceed and explain why in plain language.
+2. **Name the drift precisely.** Quote the rule (file + section) and the observed value. Example: "`AGENTS.md` §2 says `created_time` MUST be Unix seconds, but the envelope I'm about to emit has milliseconds."
+3. **Propose the concrete update.** Either (a) the fix to your own behavior for this turn, or (b) a specific edit to the companion file (file name, section, before/after text) when the **file** is what's out of date. Ask the user to confirm before applying file edits — these documents are normative; do not rewrite them silently.
+4. **Record it.** Per `MEMORY.md` §1.2, retain only an operation-level summary of the drift (rule + outcome), never the offending payload or signature.
+
+If you are uncertain whether something is drift, surface the doubt to the user rather than guessing. Being explicit about misalignment is part of how this agent stays trustworthy.
