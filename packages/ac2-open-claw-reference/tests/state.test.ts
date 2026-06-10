@@ -64,8 +64,9 @@ describe('multi-connection persistence', () => {
     expect(getConnection('req-1')).toBeDefined();
   });
 
-  it('tracks multiple independent connections, most-recently-active first', () => {
+  it('tracks multiple independent connections, most-recently-active first', async () => {
     touchConnection('req-1');
+    await new Promise((resolve) => setTimeout(resolve, 2));
     touchConnection('req-2');
     const connections = listConnections();
     expect(connections.map((c) => c.requestId)).toEqual(['req-2', 'req-1']);
