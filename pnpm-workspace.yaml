@@ -11,3 +11,8 @@ catalog:
 
 patchedDependencies:
   "@semantic-release/npm@13.1.5": patches/@semantic-release__npm@13.1.5.patch
+
+onlyBuiltDependencies:
+  - node-datachannel
+  - "@napi-rs/keyring"
+  - "@roamhq/wrtc"
