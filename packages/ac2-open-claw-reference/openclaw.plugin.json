@@ -1,0 +1,119 @@
+{
+  "id": "ac2-open-claw-reference",
+  "name": "AC2 Reference",
+  "description": "Reference OpenClaw plugin for the AC2 protocol. The `ac2` channel owns pairing over Liquid Auth + WebRTC; `ac2_sign` and `ac2_capabilities` route through the active channel session.",
+  "version": "0.1.0",
+  "channels": ["ac2"],
+  "channelEnvVars": [
+    {
+      "name": "AC2_LIQUID_AUTH_SERVER",
+      "description": "Liquid Auth signaling server origin. Overrides the `liquidAuthServer` channel config at runtime. Defaults to https://debug.liquidauth.com when neither is set.",
+      "required": false
+    }
+  ],
+  "skills": ["./skills"],
+  "activation": {
+    "onCommands": ["ac2"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "liquidAuthServer": {
+        "type": "string",
+        "description": "Liquid Auth signaling server origin. Overridable via the `AC2_LIQUID_AUTH_SERVER` env var. Production deployments MUST set this; the bundled stub is for tests/demos only."
+      },
+      "defaultTimeoutMs": {
+        "type": "number",
+        "default": 120000,
+        "description": "Default ceiling for awaiting pairing and SigningResponse, in milliseconds."
+      }
+    },
+    "required": []
+  },
+  "uiHints": {
+    "liquidAuthServer": { "label": "Liquid Auth Server" }
+  },
+  "contracts": {
+    "tools": ["ac2_sign", "ac2_capabilities"],
+    "commands": ["ac2"]
+  },
+  "toolMetadata": {
+    "ac2_sign": {
+      "label": "AC2 Sign",
+      "description": "Ask the user's connected wallet (over the active `ac2` channel) to sign the supplied base64 payload. Returns `{ status: \"signed\", signature, publicKey, ... }` on approval or `{ status: \"rejected\", reason }` on decline. Requires an active `ac2` channel; otherwise rejects with `no_active_session`.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Human-readable purpose shown to the user in the wallet. REQUIRED by the AC2 spec — vague descriptions get declined."
+          },
+          "payload_base64": {
+            "type": "string",
+            "description": "Base64-encoded raw bytes the wallet will sign. The core reference signs these bytes as-is under the selected curve; downstream plugins may apply additional encodings based on `sig_hint`."
+          },
+          "sig_hint": {
+            "type": "string",
+            "description": "AC2 sig_hint identifying the curve to use: 'raw-ed25519' or 'raw-secp256k1'. Downstream wallet plugins may accept additional, chain-specific hints."
+          },
+          "display_hint": {
+            "type": "string",
+            "description": "How the wallet should preview the payload: 'text' | 'json' | 'hex'."
+          },
+          "key_type": {
+            "type": "string",
+            "description": "Which key role to use: 'account' (default) | 'identity'."
+          },
+          "expires_in_seconds": {
+            "type": "number",
+            "description": "Optional TTL for the request. The wallet MUST reject responses received after this time."
+          }
+        },
+        "required": ["description", "payload_base64"],
+        "additionalProperties": false
+      }
+    },
+    "ac2_capabilities": {
+      "label": "AC2 Capabilities",
+      "description": "Return the agent's AC2 descriptor and the protocol catalog of sig_hints. Reports whether an `ac2` channel session is currently active. Downstream wallet-specific plugins extend this with live wallet identities/accounts.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "refresh": {
+            "type": "boolean",
+            "description": "No-op accepted for API parity with downstream plugins. The core reference does not cache."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "channelConfigs": {
+    "ac2": {
+      "label": "AC2",
+      "description": "Pair an AC2 Controller / wallet over Liquid Auth + WebRTC. Once paired, `ac2_sign` and `ac2_capabilities` route through the active DataChannel.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "liquidAuthServer": {
+            "type": "string",
+            "description": "Liquid Auth server URL. Falls back to the AC2_LIQUID_AUTH_SERVER env var, then to the bundled stub."
+          }
+        },
+        "required": []
+      },
+      "uiHints": {
+        "liquidAuthServer": {
+          "label": "Liquid Auth Server",
+          "placeholder": "https://debug.liquidauth.com"
+        }
+      },
+      "commands": {
+        "nativeCommandsAutoEnabled": true,
+        "nativeSkillsAutoEnabled": true
+      }
+    }
+  }
+}
