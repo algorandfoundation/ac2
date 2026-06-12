@@ -1,6 +1,6 @@
 /**
  * OpenClaw setup entry for the `ac2` channel
- * (`openclaw.setupEntry: "./dist/setup/index.js"`). Built on
+ * (`openclaw.setupEntry: "./dist/setup.index.js"`). Built on
  * `defineBundledChannelSetupEntry`; never boots the channel runtime.
  */
 
@@ -20,7 +20,7 @@ const SETUP_DESCRIPTION =
 
 const bundledSetupEntry = defineBundledChannelSetupEntry({
   importMetaUrl: import.meta.url,
-  plugin: { specifier: '../channel/plugin.js', exportName: 'channelPlugin' },
+  plugin: { specifier: './channel.plugin.js', exportName: 'channelPlugin' },
 });
 
 /** Setup entry augmented with `id` / `channels` / `channelEnvVars` / `status` / `setup`. */

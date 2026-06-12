@@ -205,7 +205,7 @@ export const pluginEntry = defineBundledChannelEntry({
   name: 'AC2 Reference',
   description: MANIFEST_DESCRIPTION,
   importMetaUrl: import.meta.url,
-  plugin: { specifier: './channel/plugin.js', exportName: 'channelPlugin' },
+  plugin: { specifier: './channel.plugin.js', exportName: 'channelPlugin' },
   registerCliMetadata,
   registerFull,
 });
