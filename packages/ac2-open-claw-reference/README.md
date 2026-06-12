@@ -35,7 +35,32 @@ agent never touches the user's account keys or passkeys.
 
 ### Install the plugin into OpenClaw
 
-From this monorepo (recommended while the package is pre-release):
+#### From the npm registry (canary)
+
+```bash
+openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.2
+
+# Rebuild native addons — `openclaw plugins install` runs `npm install
+# --ignore-scripts`, so the prebuilt `.node` binaries are not produced
+# automatically. Find the npm project directory openclaw created for the
+# plugin and rebuild from there:
+PLUGIN_DIR="$(ls -d "${OPENCLAW_HOME:-$HOME/.openclaw}"/npm/projects/algorandfoundation-ac2-open-claw-reference-* | head -n1)"
+npm rebuild --prefix "$PLUGIN_DIR" node-datachannel @napi-rs/keyring
+
+openclaw plugins enable ac2-open-claw-reference
+openclaw ac2 setup                                    # wire channel + tools into openclaw.json
+openclaw gateway restart
+```
+
+The npm-registry install lays the plugin out at
+`${OPENCLAW_HOME:-~/.openclaw}/npm/projects/algorandfoundation-ac2-open-claw-reference-<hash>/node_modules/@algorandfoundation/ac2-open-claw-reference`,
+so `npm rebuild --prefix` must point at the **project root** (the
+`npm/projects/<slug>/` directory), not at the inner package — that's
+where the rebuildable `node_modules/` tree lives. If you skip the
+rebuild, the gateway register step fails with
+`Cannot find module '.../build/Release/node_datachannel.node'`.
+
+#### From this monorepo (pre-release / development)
 
 ```bash
 git clone https://github.com/algorandfoundation/ac2.git
@@ -52,28 +77,16 @@ openclaw gateway restart
 tarball with workspace-only devDependencies stripped, installs it into
 `${OPENCLAW_HOME:-~/.openclaw}/extensions/ac2-open-claw-reference`, then
 runs `npm rebuild` inside that directory to produce the native
-`.node` binaries (`openclaw plugins install` invokes
-`npm install --ignore-scripts`, so the native build scripts have to be
-re-triggered manually — `install:plugin` does it for you).
+`.node` binaries (same `--ignore-scripts` constraint as above —
+`install:plugin` re-triggers it for you).
 
-To uninstall:
+To uninstall (either install path):
 
 ```bash
-pnpm uninstall:plugin                                 # openclaw plugins uninstall ac2-open-claw-reference
+openclaw plugins uninstall ac2-open-claw-reference
+# or, from the monorepo:
+pnpm uninstall:plugin
 ```
-
-> **Native rebuild caveat.** If you install the published tarball
-> directly via `openclaw plugins install @algorandfoundation/ac2-open-claw-reference`
-> (without the `install:plugin` wrapper), you will need to run the
-> rebuild step yourself before the plugin can register — otherwise the
-> gateway will fail with `Cannot find module '.../node_datachannel.node'`:
->
-> ```bash
-> npm rebuild --prefix "${OPENCLAW_HOME:-$HOME/.openclaw}/extensions/ac2-open-claw-reference" \
->   node-datachannel @napi-rs/keyring
-> openclaw plugins enable ac2-open-claw-reference
-> openclaw gateway restart
-> ```
 
 ### Configuration
 
