@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.2](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.1...ac2-open-claw-reference@1.0.0-canary.2) (2026-06-12)
+
+
+### Bug Fixes
+
+* update README to include installation instructions ([063818a](https://github.com/algorandfoundation/ac2/commit/063818a5711f792a1308f080e9ad65c06d04392b))
+
 # ac2-open-claw-reference@1.0.0-canary.1 (2026-06-12)
 
 
