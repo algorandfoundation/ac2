@@ -46,19 +46,13 @@
   },
   "scripts": {
     "build": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts",
-    "build:js": "node scripts/bundle.mjs",
-    "build:types": "tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts",
-    "prepare": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "release": "package-releaser",
     "release:dry-run": "package-releaser --dry-run",
-    "dist:pack": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts && pnpm pack",
-    "dev:natives": "pnpm rebuild node-datachannel @napi-rs/keyring @roamhq/wrtc",
-    "dev:link": "pnpm run dev:natives && node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts && openclaw plugins install \"file:$PWD\" --dangerously-force-unsafe-install && openclaw plugins enable ac2-open-claw-reference",
-    "dev:relink": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts && openclaw plugins update ac2-open-claw-reference",
-    "dev:unlink": "openclaw plugins uninstall ac2-open-claw-reference"
+    "install:plugin": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts && TGZ=\"$(node scripts/pack-plugin.mjs --pack-destination /tmp | tail -n1)\" && openclaw plugins install \"file:$TGZ\" --dangerously-force-unsafe-install --force && npm rebuild --prefix \"${OPENCLAW_HOME:-$HOME/.openclaw}/extensions/ac2-open-claw-reference\" node-datachannel @napi-rs/keyring && openclaw plugins enable ac2-open-claw-reference",
+    "uninstall:plugin": "openclaw plugins uninstall ac2-open-claw-reference"
   },
   "release": null,
   "dependencies": {

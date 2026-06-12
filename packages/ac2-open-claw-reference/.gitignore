@@ -1,3 +1,1 @@
-# Self-contained, dereferenced bundle produced by `npm run link`
-# (scripts/build-link-bundle.mjs) for `openclaw plugins install --link`.
-.link-bundle/
+dist/
