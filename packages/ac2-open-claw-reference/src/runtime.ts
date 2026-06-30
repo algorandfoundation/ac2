@@ -12,6 +12,13 @@ export type OpenClawApi = OpenClawPluginApi;
 export interface ResolvedConfig {
   liquidAuthServer?: string;
   defaultTimeoutMs?: number;
+  x402MaxAmountAtomic?: string;
+  x402AllowedNetworks?: string[];
+  x402AllowedAssets?: string[];
+  x402AllowedPayTo?: string[];
+  x402NetworkPreferences?: string[];
+  x402AlgodUrl?: string;
+  x402AlgodToken?: string;
 }
 
 let activeApi: OpenClawApi | null = null;

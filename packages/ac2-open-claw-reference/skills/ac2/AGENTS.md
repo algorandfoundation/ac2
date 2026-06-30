@@ -197,3 +197,8 @@ The agent MAY load extensions that add patterns or message families.
 Extensions MUST NOT weaken the core invariants in `SOUL.md`. If a peer does
 not advertise an extension, the agent MUST fall back to the core Signature
 Request pattern or refuse the operation.
+
+This reference plugin additionally exposes `ac2_x402_fetch` as
+`ac2-ext-x402/fetch`. It is an application/tool capability, not a new AC2 wire
+message: x402 Algorand payments still use ordinary `ac2/SigningRequest`
+messages for wallet approval.

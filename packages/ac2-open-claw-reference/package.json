@@ -1,7 +1,7 @@
 {
   "name": "@algorandfoundation/ac2-open-claw-reference",
   "version": "1.0.0-canary.2",
-  "description": "Reference OpenClaw plugin for the AC2 protocol. Implements both tool and channel interfaces for signing and chat over Liquid Auth.",
+  "description": "Reference OpenClaw plugin for the AC2 protocol. Implements signing, chat, and x402 Algorand paid fetch over Liquid Auth.",
   "keywords": [
     "ac2",
     "algorand",
@@ -11,7 +11,9 @@
     "webrtc",
     "liquid-auth",
     "wallet",
-    "signing"
+    "signing",
+    "x402",
+    "payments"
   ],
   "license": "Apache-2.0",
   "homepage": "https://github.com/algorandfoundation/ac2/tree/main/packages/ac2-open-claw-reference#readme",
@@ -57,11 +59,15 @@
   "release": null,
   "dependencies": {
     "@algorandfoundation/ac2-sdk": "1.0.0-canary.1",
+    "@algorandfoundation/algokit-utils": "10.0.0-beta.4",
     "@algorandfoundation/keystore": "1.0.0-canary.16",
     "@algorandfoundation/liquid-client": "1.0.0-canary.8",
     "@napi-rs/keyring": "^1.3.0",
     "@sinclair/typebox": "^0.32.0",
     "@tanstack/store": "^0.9.1",
+    "@x402/avm": "^2.11.0",
+    "@x402/core": "^2.11.0",
+    "@x402/fetch": "^2.11.0",
     "node-datachannel": "^0.32.3",
     "qrcode-terminal": "^0.12.0",
     "socket.io-client": "^4.7.5"
@@ -93,7 +99,8 @@
     "contracts": {
       "tools": [
         "ac2_sign",
-        "ac2_capabilities"
+        "ac2_capabilities",
+        "ac2_x402_fetch"
       ],
       "commands": [
         "ac2"

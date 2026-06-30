@@ -1,7 +1,7 @@
 {
   "id": "ac2-open-claw-reference",
   "name": "AC2 Reference",
-  "description": "Reference OpenClaw plugin for the AC2 protocol. The `ac2` channel owns pairing over Liquid Auth + WebRTC; `ac2_sign` and `ac2_capabilities` route through the active channel session.",
+  "description": "Reference OpenClaw plugin for the AC2 protocol. The `ac2` channel owns pairing over Liquid Auth + WebRTC; signing, capabilities, and x402 paid fetch tools route through the active channel session.",
   "version": "0.1.0",
   "channels": ["ac2"],
   "channelEnvVars": [
@@ -27,15 +27,51 @@
         "type": "number",
         "default": 120000,
         "description": "Default ceiling for awaiting pairing and SigningResponse, in milliseconds."
+      },
+      "x402MaxAmountAtomic": {
+        "type": "string",
+        "default": "1000000",
+        "description": "Default maximum x402 payment amount, in asset atomic units. Defaults to 1000000 (1 USDC for 6-decimal USDC)."
+      },
+      "x402AllowedNetworks": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Optional allow-list of x402 CAIP-2 Algorand networks. Defaults to Algorand TestNet and MainNet."
+      },
+      "x402AllowedAssets": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Optional allow-list of x402 assets. Defaults to Algorand USDC asset identifiers and USDC."
+      },
+      "x402AllowedPayTo": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Optional allow-list of x402 recipient Algorand addresses."
+      },
+      "x402NetworkPreferences": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Preferred x402 Algorand networks when a resource offers multiple accepted payment routes."
+      },
+      "x402AlgodUrl": {
+        "type": "string",
+        "description": "Optional Algod URL override for constructing x402 Algorand payment transactions."
+      },
+      "x402AlgodToken": {
+        "type": "string",
+        "description": "Optional Algod API token used with x402AlgodUrl."
       }
     },
     "required": []
   },
   "uiHints": {
-    "liquidAuthServer": { "label": "Liquid Auth Server" }
+    "liquidAuthServer": { "label": "Liquid Auth Server" },
+    "x402MaxAmountAtomic": { "label": "x402 Max Amount (Atomic)" },
+    "x402AlgodUrl": { "label": "x402 Algod URL" },
+    "x402AlgodToken": { "label": "x402 Algod Token" }
   },
   "contracts": {
-    "tools": ["ac2_sign", "ac2_capabilities"],
+    "tools": ["ac2_sign", "ac2_capabilities", "ac2_x402_fetch"],
     "commands": ["ac2"]
   },
   "toolMetadata": {
@@ -52,6 +88,10 @@
           "payload_base64": {
             "type": "string",
             "description": "Base64-encoded raw bytes the wallet will sign. The core reference signs these bytes as-is under the selected curve; downstream plugins may apply additional encodings based on `sig_hint`."
+          },
+          "schema": {
+            "type": "string",
+            "description": "Optional schema identifier for the payload. Useful for wallet UX and domain-specific signing requests such as x402 Algorand payment bytes."
           },
           "sig_hint": {
             "type": "string",
@@ -87,12 +127,74 @@
         },
         "additionalProperties": false
       }
+    },
+    "ac2_x402_fetch": {
+      "label": "AC2 x402 Fetch",
+      "description": "Fetch an HTTP(S) resource that may require x402 payment. When the server returns 402, this tool uses x402 exact payments on Algorand, asks the paired wallet to approve the required Algorand transaction signing over AC2, retries with PAYMENT-SIGNATURE, and returns the HTTP/payment result. Requires an active `ac2` channel.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Absolute HTTP(S) URL to fetch."
+          },
+          "method": {
+            "type": "string",
+            "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+            "description": "HTTP method. Defaults to GET unless a body is supplied."
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Optional HTTP headers for the request."
+          },
+          "body": {
+            "type": "string",
+            "description": "Optional UTF-8 request body. Do not pass with body_base64."
+          },
+          "body_base64": {
+            "type": "string",
+            "description": "Optional base64 request body for binary payloads. Do not pass with body."
+          },
+          "max_amount_atomic": {
+            "type": "string",
+            "description": "Maximum payment amount in the asset atomic units. Defaults to plugin config x402MaxAmountAtomic or 1000000."
+          },
+          "allowed_networks": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Per-call allow-list of x402 Algorand CAIP-2 networks. Defaults to plugin config or Algorand TestNet/MainNet."
+          },
+          "allowed_assets": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Per-call allow-list of x402 assets. Defaults to plugin config or Algorand USDC."
+          },
+          "allowed_pay_to": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Per-call allow-list of recipient Algorand addresses."
+          },
+          "network_preferences": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Preferred x402 Algorand networks when a resource offers several accepted options."
+          },
+          "include_response_body": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to include the response body text/JSON in the tool result. Defaults to true."
+          }
+        },
+        "required": ["url"],
+        "additionalProperties": false
+      }
     }
   },
   "channelConfigs": {
     "ac2": {
       "label": "AC2",
-      "description": "Pair an AC2 Controller / wallet over Liquid Auth + WebRTC. Once paired, `ac2_sign` and `ac2_capabilities` route through the active DataChannel.",
+      "description": "Pair an AC2 Controller / wallet over Liquid Auth + WebRTC. Once paired, `ac2_sign`, `ac2_capabilities`, and `ac2_x402_fetch` route through the active DataChannel.",
       "schema": {
         "type": "object",
         "additionalProperties": false,

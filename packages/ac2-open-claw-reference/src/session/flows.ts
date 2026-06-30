@@ -17,6 +17,7 @@ export function buildFinalizeFrame(text: string, thid = 'default'): string {
 export interface SignParams {
   description: string;
   payload_base64: string;
+  schema?: SigningRequestBody['schema'];
   sig_hint?: SigningRequestBody['sig_hint'];
   display_hint?: SigningRequestBody['display_hint'];
   key_type?: SigningRequestBody['key_type'];
@@ -67,6 +68,7 @@ export async function signFlow(
       description: params.description,
       encoding: 'base64',
       payload: params.payload_base64,
+      ...(params.schema !== undefined ? { schema: params.schema } : {}),
       ...(params.sig_hint !== undefined ? { sig_hint: params.sig_hint } : {}),
       ...(params.display_hint !== undefined ? { display_hint: params.display_hint } : {}),
       ...(params.key_type !== undefined ? { key_type: params.key_type } : {}),

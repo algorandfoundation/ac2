@@ -8,6 +8,7 @@ import { getToolPluginMetadata } from '../session/contracts.js';
 import { NoActiveSessionError } from '../session/manager.js';
 import { capabilitiesFlow, signFlow, type SignParams } from '../session/flows.js';
 import type { SigningRequestBody } from '@algorandfoundation/ac2-sdk/schema';
+import { normalizeX402FetchParams, x402FetchFlow } from '../x402/fetch-flow.js';
 
 function manifestTools(): ReadonlyArray<{
   name: string;
@@ -48,6 +49,7 @@ export function buildSignTool(): AnyAgentTool {
       const signParams: SignParams = {
         description: String(params.description ?? ''),
         payload_base64: String(params.payload_base64 ?? ''),
+        ...(typeof params.schema === 'string' ? { schema: params.schema } : {}),
         ...(typeof params.sig_hint === 'string'
           ? { sig_hint: params.sig_hint as SigningRequestBody['sig_hint'] }
           : {}),
@@ -90,6 +92,61 @@ export function buildSignTool(): AnyAgentTool {
         const msg = err instanceof Error ? err.message : String(err);
         return {
           content: [textResult(`Sign error: ${msg}`)],
+          details: { status: 'error', error: msg },
+        };
+      }
+    },
+  };
+  return tool as unknown as AnyAgentTool;
+}
+
+function describeX402Result(result: Awaited<ReturnType<typeof x402FetchFlow>>): string {
+  if (result.status === 'paid') {
+    const payment = result.selectedPayment
+      ? ` Paid ${result.selectedPayment.amount} of ${result.selectedPayment.asset} on ${result.selectedPayment.network}.`
+      : '';
+    return `x402 fetch succeeded with HTTP ${result.http.status}.${payment}`;
+  }
+  if (result.status === 'http_error') {
+    return `x402 fetch completed with HTTP ${result.http.status} ${result.http.statusText}.`;
+  }
+  if (result.status === 'payment_required') {
+    return `x402 fetch still requires payment: ${result.reason}`;
+  }
+  if (result.status === 'rejected') {
+    return `x402 payment rejected: ${result.reason}`;
+  }
+  if (result.status === 'error') {
+    return `x402 fetch error: ${result.error}`;
+  }
+  return 'x402 fetch completed.';
+}
+
+export function buildX402FetchTool(): AnyAgentTool {
+  const tool = {
+    name: 'ac2_x402_fetch',
+    label: 'AC2 · x402 Fetch',
+    description: findToolDescription('ac2_x402_fetch'),
+    parameters: findToolParametersSchema('ac2_x402_fetch'),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+    ): Promise<{
+      content: Array<{ type: 'text'; text: string }>;
+      details: unknown;
+    }> {
+      const config = resolveConfig(getActiveApi() || ({} as any));
+      const fetchParams = normalizeX402FetchParams(params);
+      try {
+        const result = await x402FetchFlow(fetchParams, config);
+        return {
+          content: [textResult(describeX402Result(result))],
+          details: result,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [textResult(`x402 fetch error: ${msg}`)],
           details: { status: 'error', error: msg },
         };
       }
