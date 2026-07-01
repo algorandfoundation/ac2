@@ -1,6 +1,7 @@
 /** Long-running channel runtime: pair via Liquid Auth, then hold the DataChannel open. */
 
 import { Ac2Client } from '@algorandfoundation/ac2-sdk';
+import { isValidAddress } from '@algorandfoundation/algokit-utils/common';
 import type { Ac2ChannelProvider, Ac2PairedChannel } from '@algorandfoundation/ac2-sdk/signaling';
 import { LiquidAuthChannelProvider, renderPairingQr } from '../providers/liquid-auth.js';
 import type { ChannelContext, PluginConfig } from './contracts.js';
@@ -14,6 +15,11 @@ const NO_IDENTITY_NOTICE =
   "⚠️ I don't have an identity key yet, so I can't sign or act on your behalf. " +
   'Please approve the identity (key) request in your AC2 Controller to grant me one. ' +
   'You can keep chatting in the meantime — signing is disabled until then.';
+
+function linkedWalletAddress(paired: Ac2PairedChannel): string | undefined {
+  const wallet = (paired.peer as { wallet?: unknown } | undefined)?.wallet;
+  return typeof wallet === 'string' && isValidAddress(wallet) ? wallet : undefined;
+}
 
 function resolveLiquidAuthServer(config: PluginConfig): string | undefined {
   const fromEnv = typeof process !== 'undefined' ? process.env?.AC2_LIQUID_AUTH_SERVER : undefined;
@@ -80,6 +86,7 @@ export async function runAc2Channel(
 
     // Identity bootstrap. Failure is non-fatal — chat stays open, signing locked.
     const peerDidOpt = paired.peer?.did !== undefined ? { peerDid: paired.peer.did } : {};
+    const walletAddress = linkedWalletAddress(paired);
     const timeoutOpt =
       config.defaultTimeoutMs !== undefined ? { timeoutMs: config.defaultTimeoutMs } : {};
     try {
@@ -96,6 +103,7 @@ export async function runAc2Channel(
         client,
         controllerDid,
         agentDid,
+        ...(walletAddress !== undefined ? { walletAddress } : {}),
       });
       context.logger?.info('[ac2-open-claw] channel connected; tools are live');
     } catch (err) {

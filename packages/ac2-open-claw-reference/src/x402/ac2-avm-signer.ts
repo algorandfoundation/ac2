@@ -16,7 +16,12 @@ import type { PaymentRequirements, ResourceInfo } from '@x402/core/types';
 import { extractEd25519PublicKey } from '../identity/did.js';
 import type { PluginConfig, ToolContext } from '../session/contracts.js';
 import { signFlow, type SignDeps } from '../session/flows.js';
-import { NoActiveSessionError, sessionManager, type SessionManager } from '../session/manager.js';
+import {
+  NoActiveSessionError,
+  sessionManager,
+  type ActiveSession,
+  type SessionManager,
+} from '../session/manager.js';
 
 export const X402_ALGORAND_SIGNING_SCHEMA =
   'x402/exact/algorand/v2/transaction-signing-bytes';
@@ -63,6 +68,13 @@ export function controllerDidToAlgorandAddress(controllerDid: string): string | 
   if (!publicKey) return undefined;
   const address = encodeAddress(publicKey);
   return isValidAddress(address) ? address : undefined;
+}
+
+function sessionAlgorandAddress(active: ActiveSession): string | undefined {
+  if (active.walletAddress && isValidAddress(active.walletAddress)) {
+    return active.walletAddress;
+  }
+  return controllerDidToAlgorandAddress(active.controllerDid);
 }
 
 function decodeUnsignedTransaction(txnBytes: Uint8Array, index: number): Transaction {
@@ -163,7 +175,7 @@ function assertSignature(bytes: Uint8Array, index: number): void {
 export function createAc2AvmSigner(options: Ac2AvmSignerOptions): ClientAvmSigner {
   const manager = managerFromDeps(options.deps);
   const active = manager.requireActive();
-  const address = controllerDidToAlgorandAddress(active.controllerDid);
+  const address = sessionAlgorandAddress(active);
   if (!address) throw new X402ControllerAddressError(active.controllerDid);
 
   return {

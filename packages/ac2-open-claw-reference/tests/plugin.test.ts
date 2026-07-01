@@ -394,6 +394,63 @@ describe('ac2-open-claw-reference plugin', () => {
       expect(observedRequest.body.description).toContain('x402 exact payment');
       expect(observedRequest.body.description).toContain(receiver.toString());
     });
+
+    it('uses the linked AC2 wallet address as the x402 payment sender', async () => {
+      const sender = new Address(new Uint8Array(32).fill(4));
+      const receiver = new Address(new Uint8Array(32).fill(5));
+      const txn = new Transaction({
+        type: TransactionType.AssetTransfer,
+        sender,
+        fee: 1_000n,
+        firstValid: 1n,
+        lastValid: 1_000n,
+        genesisHash: new Uint8Array(32).fill(3),
+        genesisId: 'testnet-v1.0',
+        assetTransfer: {
+          assetId: 10_458_941n,
+          amount: 1_000n,
+          receiver,
+        },
+      });
+      const signature = new Uint8Array(64).fill(8);
+      let observedRequest: any;
+
+      const manager = new SessionManager();
+      manager.setActive({
+        transport: {} as never,
+        client: {
+          requestSignature: async (args: any) => {
+            observedRequest = args;
+            return {
+              kind: 'response',
+              message: {
+                thid: 'x402-wallet-address-thread',
+                body: {
+                  signature: Buffer.from(signature).toString('base64'),
+                  public_key: Buffer.from(sender.publicKey).toString('base64'),
+                  address: sender.toString(),
+                  key_type: 'account',
+                },
+              },
+            };
+          },
+        } as never,
+        controllerDid: STUB_CONTROLLER_DID,
+        walletAddress: sender.toString(),
+        agentDid: STUB_AGENT_DID,
+      });
+
+      const signer = createAc2AvmSigner({
+        config: { defaultTimeoutMs: 2_000 },
+        deps: { manager },
+      });
+
+      expect(signer.address).toBe(sender.toString());
+      const signed = await signer.signTransactions([encodeTransactionRaw(txn)], [0]);
+      expect(signed[0]).toBeInstanceOf(Uint8Array);
+      expect(observedRequest.body.description).toContain(`as ${sender.toString()}`);
+      expect(observedRequest.body.description).toContain(`Sender: ${sender.toString()}`);
+    });
   });
 
   describe('identity bootstrap', () => {

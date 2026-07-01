@@ -2,6 +2,7 @@
 
 import qrcode from 'qrcode-terminal';
 import { Ac2Client } from '@algorandfoundation/ac2-sdk';
+import { isValidAddress } from '@algorandfoundation/algokit-utils/common';
 import { resolveConfig, safeLog, type OpenClawApi } from '../runtime.js';
 import {
   BootstrapError,
@@ -196,6 +197,10 @@ export function buildAc2Command(api: OpenClawApi): unknown {
               typeof connected.peer?.['wallet'] === 'string'
                 ? (connected.peer['wallet'] as string)
                 : undefined;
+            const walletAddress =
+              connectedAccount !== undefined && isValidAddress(connectedAccount)
+                ? connectedAccount
+                : undefined;
             const connectedAccountDid =
               connectedAccount !== undefined
                 ? normalizeDidKey(`did:key:${connectedAccount}`)
@@ -282,6 +287,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
               controllerDid,
               agentDid,
               identityGranted,
+              ...(walletAddress ? { walletAddress } : {}),
               ...(connectionRequestId ? { requestId: connectionRequestId } : {}),
             });
             safeLog(
