@@ -111,7 +111,14 @@ function describeX402Result(result: Awaited<ReturnType<typeof x402FetchFlow>>): 
     return `x402 fetch completed with HTTP ${result.http.status} ${result.http.statusText}.`;
   }
   if (result.status === 'payment_required') {
-    return `x402 fetch still requires payment: ${result.reason}`;
+    const selected = result.selectedPayment
+      ? ` Selected ${result.selectedPayment.amount} of ${result.selectedPayment.asset} on ${result.selectedPayment.network} to ${result.selectedPayment.payTo}.`
+      : '';
+    const http = result.http ? ` HTTP ${result.http.status} ${result.http.statusText}.` : '';
+    const responseStatus = result.paymentResponse?.paymentStatus
+      ? ` x402 status: ${result.paymentResponse.paymentStatus}.`
+      : '';
+    return `x402 fetch still requires payment: ${result.reason}${http}${responseStatus}${selected}`;
   }
   if (result.status === 'rejected') {
     return `x402 payment rejected: ${result.reason}`;

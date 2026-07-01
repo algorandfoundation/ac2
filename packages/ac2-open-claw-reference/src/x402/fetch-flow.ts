@@ -14,6 +14,7 @@ import {
   wrapFetchWithPayment,
   x402Client,
   x402HTTPClient,
+  type HTTPResourceResponse,
   type PaymentPolicy,
   type PaymentRequired,
   type PaymentRequirements,
@@ -79,7 +80,18 @@ export type X402FetchResult =
   | {
       status: 'payment_required';
       url: string;
+      http?: {
+        status: number;
+        ok: boolean;
+        statusText: string;
+        contentType?: string;
+      };
       paymentRequired?: PaymentRequired;
+      paymentResponse?: HTTPResourceResponse;
+      selectedPayment?: X402PaymentSelection;
+      paymentPayload?: PaymentPayload;
+      bodyText?: string;
+      bodyJson?: unknown;
       reason: string;
     }
   | {
@@ -245,6 +257,30 @@ function paymentRequiredFromResponse(
   }
 }
 
+function paymentResultFromResponse(
+  httpClient: x402HTTPClient,
+  response: Response,
+  body: { bodyText?: string; bodyJson?: unknown },
+): HTTPResourceResponse | undefined {
+  try {
+    return httpClient.parsePaymentResult({
+      status: response.status,
+      getHeader: (name) => response.headers.get(name),
+      body: body.bodyJson ?? body.bodyText ?? null,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function paymentRequiredReason(paymentRequired: PaymentRequired | undefined): string {
+  const serverError = paymentRequired?.error?.trim();
+  if (serverError) {
+    return `The resource returned 402 after x402 payment negotiation: ${serverError}`;
+  }
+  return 'The resource still returned 402 after x402 payment negotiation.';
+}
+
 export async function x402FetchFlow(
   params: X402FetchParams,
   config: PluginConfig,
@@ -317,11 +353,24 @@ export async function x402FetchFlow(
 
     if (isPaymentRequiredResponse(response)) {
       const paymentRequired = paymentRequiredFromResponse(httpClient, response, body.bodyJson);
+      const paymentResponse = paymentResultFromResponse(httpClient, response, body);
       return {
         status: 'payment_required',
         url,
+        http: {
+          status: response.status,
+          ok: response.ok,
+          statusText: response.statusText,
+          ...(response.headers.get('content-type') !== null
+            ? { contentType: response.headers.get('content-type') as string }
+            : {}),
+        },
         ...(paymentRequired !== undefined ? { paymentRequired } : {}),
-        reason: 'The resource still returned 402 after x402 payment negotiation.',
+        ...(paymentResponse !== undefined ? { paymentResponse } : {}),
+        ...(selectedPayment !== undefined ? { selectedPayment } : {}),
+        ...(paymentPayload !== undefined ? { paymentPayload } : {}),
+        ...body,
+        reason: paymentRequiredReason(paymentRequired),
       };
     }
 
