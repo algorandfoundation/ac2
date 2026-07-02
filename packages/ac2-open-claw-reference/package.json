@@ -51,7 +51,7 @@
     "test:watch": "vitest",
     "release": "package-releaser",
     "release:dry-run": "package-releaser --dry-run",
-    "install:plugin": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts && TGZ=\"$(node scripts/pack-plugin.mjs --pack-destination /tmp | tail -n1)\" && openclaw plugins install \"file:$TGZ\" --dangerously-force-unsafe-install --force && npm rebuild --prefix \"${OPENCLAW_HOME:-$HOME/.openclaw}/extensions/ac2-open-claw-reference\" node-datachannel @napi-rs/keyring && openclaw plugins enable ac2-open-claw-reference",
+    "install:plugin": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts && TGZ=\"$(node scripts/pack-plugin.mjs --pack-destination /tmp | tail -n1)\" && openclaw plugins install \"file:$TGZ\" --dangerously-force-unsafe-install --force && npm rebuild --prefix \"${OPENCLAW_HOME:-$HOME/.openclaw}/extensions/ac2-open-claw-reference\" @napi-rs/keyring && NDC=\"${OPENCLAW_HOME:-$HOME/.openclaw}/extensions/ac2-open-claw-reference/node_modules/node-datachannel\" && (cd \"$NDC\" && npm install --ignore-scripts --production=false && npx cmake-js clean && npx cmake-js configure --CDUSE_NICE=1 && npx cmake-js build) && openclaw plugins enable ac2-open-claw-reference",
     "uninstall:plugin": "openclaw plugins uninstall ac2-open-claw-reference"
   },
   "release": null,
