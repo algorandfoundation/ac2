@@ -1,3 +1,13 @@
+# [ac2-open-claw-reference@1.0.0-canary.3](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.2...ac2-open-claw-reference@1.0.0-canary.3) (2026-07-02)
+
+
+### Bug Fixes
+
+* drop rebuild:node-datachannel script from consumer-facing package.json ([f62134b](https://github.com/algorandfoundation/ac2/commit/f62134b24c90272afe19f6857d4b27306220f7f4))
+* update install script to include node-datachannel rebuild step ([abd4f3a](https://github.com/algorandfoundation/ac2/commit/abd4f3ae89d531d35d4f4b495efe0e113e4d51fd))
+* update README with instructions for building node-datachannel against libnice for TURN support ([b8201d7](https://github.com/algorandfoundation/ac2/commit/b8201d7b1812c4d7ce6466992f3976edea3fbcd0))
+* use libnice ICE backend for TURN TCP/TLS transport support ([b75e76e](https://github.com/algorandfoundation/ac2/commit/b75e76e40a0b4ad28f28748e3dd3b2fe6fca50c9))
+
 # [ac2-open-claw-reference@1.0.0-canary.2](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.1...ac2-open-claw-reference@1.0.0-canary.2) (2026-06-12)
 
 
