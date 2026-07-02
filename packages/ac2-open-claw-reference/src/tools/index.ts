@@ -10,6 +10,8 @@ import { capabilitiesFlow, signFlow, type SignParams } from '../session/flows.js
 import type { SigningRequestBody } from '@algorandfoundation/ac2-sdk/schema';
 import { normalizeX402FetchParams, x402FetchFlow } from '../x402/fetch-flow.js';
 
+const TOOL_BODY_LIMIT_CHARS = 32_000;
+
 function manifestTools(): ReadonlyArray<{
   name: string;
   parameters: unknown;
@@ -100,15 +102,33 @@ export function buildSignTool(): AnyAgentTool {
   return tool as unknown as AnyAgentTool;
 }
 
-function describeX402Result(result: Awaited<ReturnType<typeof x402FetchFlow>>): string {
+function truncateToolBody(text: string): string {
+  if (text.length <= TOOL_BODY_LIMIT_CHARS) return text;
+  return `${text.slice(0, TOOL_BODY_LIMIT_CHARS)}\n[truncated]`;
+}
+
+function responseBodyBlock(result: Awaited<ReturnType<typeof x402FetchFlow>>): string {
+  if (!('bodyJson' in result || 'bodyText' in result)) return '';
+
+  if ('bodyJson' in result && result.bodyJson !== undefined) {
+    return `\n\nResponse body:\n\`\`\`json\n${truncateToolBody(JSON.stringify(result.bodyJson, null, 2))}\n\`\`\``;
+  }
+  if ('bodyText' in result && result.bodyText !== undefined) {
+    const language = result.http?.contentType?.toLowerCase().includes('json') ? 'json' : 'text';
+    return `\n\nResponse body:\n\`\`\`${language}\n${truncateToolBody(result.bodyText)}\n\`\`\``;
+  }
+  return '';
+}
+
+export function describeX402Result(result: Awaited<ReturnType<typeof x402FetchFlow>>): string {
   if (result.status === 'paid') {
     const payment = result.selectedPayment
       ? ` Paid ${result.selectedPayment.amount} of ${result.selectedPayment.asset} on ${result.selectedPayment.network}.`
       : '';
-    return `x402 fetch succeeded with HTTP ${result.http.status}.${payment}`;
+    return `x402 fetch succeeded with HTTP ${result.http.status}.${payment}${responseBodyBlock(result)}`;
   }
   if (result.status === 'http_error') {
-    return `x402 fetch completed with HTTP ${result.http.status} ${result.http.statusText}.`;
+    return `x402 fetch completed with HTTP ${result.http.status} ${result.http.statusText}.${responseBodyBlock(result)}`;
   }
   if (result.status === 'payment_required') {
     const selected = result.selectedPayment
@@ -118,7 +138,7 @@ function describeX402Result(result: Awaited<ReturnType<typeof x402FetchFlow>>): 
     const responseStatus = result.paymentResponse?.paymentStatus
       ? ` x402 status: ${result.paymentResponse.paymentStatus}.`
       : '';
-    return `x402 fetch still requires payment: ${result.reason}${http}${responseStatus}${selected}`;
+    return `x402 fetch still requires payment: ${result.reason}${http}${responseStatus}${selected}${responseBodyBlock(result)}`;
   }
   if (result.status === 'rejected') {
     return `x402 payment rejected: ${result.reason}`;

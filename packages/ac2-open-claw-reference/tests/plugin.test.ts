@@ -38,6 +38,7 @@ import {
   createAc2AvmSigner,
   X402_ALGORAND_SIGNING_SCHEMA,
 } from '../src/index.js';
+import { describeX402Result } from '../src/tools/index.js';
 import { publicKeyToDidKey } from '../src/identity/did.js';
 
 /**
@@ -450,6 +451,44 @@ describe('ac2-open-claw-reference plugin', () => {
       expect(signed[0]).toBeInstanceOf(Uint8Array);
       expect(observedRequest.body.description).toContain(`as ${sender.toString()}`);
       expect(observedRequest.body.description).toContain(`Sender: ${sender.toString()}`);
+    });
+  });
+
+  describe('x402 fetch tool response rendering', () => {
+    it('includes successful JSON response bodies in visible tool content', () => {
+      const text = describeX402Result({
+        status: 'paid',
+        url: 'https://example.test/weather',
+        http: {
+          status: 200,
+          ok: true,
+          statusText: 'OK',
+          contentType: 'application/json',
+        },
+        bodyText: '{"temperature":72}',
+        bodyJson: { temperature: 72 },
+      });
+
+      expect(text).toContain('x402 fetch succeeded with HTTP 200');
+      expect(text).toContain('Response body');
+      expect(text).toContain('"temperature": 72');
+    });
+
+    it('includes successful text response bodies in visible tool content', () => {
+      const text = describeX402Result({
+        status: 'paid',
+        url: 'https://example.test/plain',
+        http: {
+          status: 200,
+          ok: true,
+          statusText: 'OK',
+          contentType: 'text/plain',
+        },
+        bodyText: 'paid response body',
+      });
+
+      expect(text).toContain('```text');
+      expect(text).toContain('paid response body');
     });
   });
 
