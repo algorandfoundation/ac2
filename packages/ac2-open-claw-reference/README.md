@@ -32,6 +32,14 @@ agent never touches the user's account keys or passkeys.
 - A C/C++ toolchain (the plugin pulls in native addons —
   `node-datachannel`, `@napi-rs/keyring` — that are rebuilt against your
   Node version at install time)
+- **`cmake` and `libnice`** (with its development headers) — required to
+  build `node-datachannel` against the libnice ICE backend, which supports
+  TURN over TCP and TURNs (TURN over TLS). On macOS:
+  ```bash
+  brew install cmake libnice
+  ```
+  On Debian/Ubuntu: `apt install cmake libnice-dev`. Other platforms: see
+  your package manager for an equivalent `libnice` development package.
 
 ### Install the plugin into OpenClaw
 
@@ -40,12 +48,21 @@ agent never touches the user's account keys or passkeys.
 ```bash
 openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.2
 
-# Rebuild native addons — `openclaw plugins install` runs `npm install
-# --ignore-scripts`, so the prebuilt `.node` binaries are not produced
-# automatically. Find the npm project directory openclaw created for the
-# plugin and rebuild from there:
+# openclaw plugins install runs `npm install --ignore-scripts`, so native
+# addons are not built automatically. Rebuild them from the plugin project dir:
 PLUGIN_DIR="$(ls -d "${OPENCLAW_HOME:-$HOME/.openclaw}"/npm/projects/algorandfoundation-ac2-open-claw-reference-* | head -n1)"
-npm rebuild --prefix "$PLUGIN_DIR" node-datachannel @napi-rs/keyring
+
+# @napi-rs/keyring — standard prebuild-install path:
+npm rebuild --prefix "$PLUGIN_DIR" @napi-rs/keyring
+
+# node-datachannel — must be built from source against libnice (USE_NICE=1)
+# so that TURN over TCP and TURNs are supported (the prebuilt binary uses
+# libjuice which is UDP-only for TURN):
+NDC="$PLUGIN_DIR/node_modules/node-datachannel"
+(cd "$NDC" && npm install --ignore-scripts --production=false \
+  && npx cmake-js clean \
+  && npx cmake-js configure --CDUSE_NICE=1 \
+  && npx cmake-js build)
 
 openclaw plugins enable ac2-open-claw-reference
 openclaw ac2 setup                                    # wire channel + tools into openclaw.json
@@ -56,9 +73,7 @@ The npm-registry install lays the plugin out at
 `${OPENCLAW_HOME:-~/.openclaw}/npm/projects/algorandfoundation-ac2-open-claw-reference-<hash>/node_modules/@algorandfoundation/ac2-open-claw-reference`,
 so `npm rebuild --prefix` must point at the **project root** (the
 `npm/projects/<slug>/` directory), not at the inner package — that's
-where the rebuildable `node_modules/` tree lives. If you skip the
-rebuild, the gateway register step fails with
-`Cannot find module '.../build/Release/node_datachannel.node'`.
+where the rebuildable `node_modules/` tree lives.
 
 #### From this monorepo (pre-release / development)
 
@@ -75,10 +90,11 @@ openclaw gateway restart
 
 `pnpm install:plugin` builds the flat tree-shakeable `dist/`, packs a
 tarball with workspace-only devDependencies stripped, installs it into
-`${OPENCLAW_HOME:-~/.openclaw}/extensions/ac2-open-claw-reference`, then
-runs `npm rebuild` inside that directory to produce the native
-`.node` binaries (same `--ignore-scripts` constraint as above —
-`install:plugin` re-triggers it for you).
+`${OPENCLAW_HOME:-~/.openclaw}/extensions/ac2-open-claw-reference`, rebuilds
+`@napi-rs/keyring` via `npm rebuild`, then compiles `node-datachannel` from
+source against libnice (`USE_NICE=1`) via `pnpm rebuild:node-datachannel`.
+You can also run `pnpm rebuild:node-datachannel` on its own to re-compile the
+native ICE layer without repeating the full install cycle.
 
 To uninstall (either install path):
 
