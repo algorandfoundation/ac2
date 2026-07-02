@@ -48,6 +48,7 @@ const SCRIPTS_TO_DROP = new Set([
   'release',
   'release:dry-run',
   'dist:pack',
+  'rebuild:node-datachannel',
   'install:plugin',
   'uninstall:plugin',
   'dev:natives',
