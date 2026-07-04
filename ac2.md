@@ -12,13 +12,13 @@ created: 2026-04-01
 
 ## Abstract
 
-This specification defines the **AC2 (Agentic Communication and Control) Protocol**, a peer-to-peer authenticated messaging system designed for secure communication between users and AI agents. AC2 enables human-in-the-loop digital signing operations at core and accepts aextensions by design for autonomous signings by agents guardrailed by HITL patternes the core spec provides, where agents can request signatures from users, who validate and approve through their own wallet or application, with signatures then delegated back to the agent for continued operations.(see **Extensions** below).
+This specification defines the **AC2 (Agentic Communication and Control) Protocol**, a peer-to-peer authenticated messaging system designed for secure communication between users and AI agents. AC2 enables human-in-the-loop digital signing at its core: agents request signatures from users, who validate and approve through their own wallet or application, with signatures then returned to the agent for continued operations. The core is extensible by design — autonomous signing flows, guardrailed by the HITL patterns the core provides, are defined by separate extensions (see **Extensions** below).
 
 AC2 uses **Liquid Auth** as its transport mechanism - an authenticated peer-to-peer connection establishment protocol that leverages FIDO2/WebAuthn and WebRTC DataChannels to create sovereign, end-to-end encrypted communication channels between controllers (users) and agents. Unlike traditional messaging systems, AC2 does not rely on centralized message relay servers; instead, it establishes direct P2P connections through a signaling service that facilitates the initial handshake.
 
 The protocol supports both real-time streaming for AI interactions (voice, text, or video from the Controller to the agent; voice, text, or file artifacts back from the agent) and request/response patterns for discrete operations. AC2 uses **DIDComm-compliant message formats** [[didcomm-messaging](https://identity.foundation/didcomm-messaging/spec/)], enabling interoperability with existing decentralized identity infrastructure while extending the protocol for real-time streaming use cases.
 
-Authentication leverages Decentralized Identifiers (DIDs) with Passkey-based credentials, providing phishing-resistant security without passwords. AC2 is use-case agnostic, supporting web3 workflows (x402 payments, MPP machine payments — both `charge` and `session` intents), code signing (git commits), document signatures, and any other digital signing operation where the signing key is held by the user and the signature is requested per-operation. Operations on keys held by the agent's tooling, including autonomous operation within pre-authorized bounds, are defined by separate AC2 extensions.
+Authentication leverages Decentralized Identifiers (DIDs) with Passkey-based credentials, providing phishing-resistant security without passwords. AC2 is use-case agnostic, supporting web3 workflows (x402 payments), code signing (git commits), document signatures, and any other digital signing operation where the user holds the keys. Operations on keys held by the agent's tooling, including autonomous operation within pre-authorized bounds, are defined by separate AC2 extensions.
 
 ## Status of This Document
 
@@ -77,19 +77,8 @@ AC2 addresses these gaps by providing a protocol where:
 1. Agent identifies need to pay for API access
 2. Agent sends signing request to user
 3. User reviews payment details in wallet app
-4. User signs the request and the signature is returned to the agent
+4. User signs requests and the signature is delegated back to agent
 5. Agent completes payment with user's signature
-
-**MPP Charge (one-off payment — HTTP Payment Authentication Scheme, `charge` intent)**:
-1. Agent makes a request to a paid resource
-2. Server responds with `402 Payment Required` carrying an MPP challenge for the `charge` intent (e.g., the `algorand` payment method — see draft-algorand-charge)
-3. Agent forwards the payment authorization to the user for signing (Signature Request pattern); the user signs and the signature is returned to the agent
-4. Agent submits the signed transaction
-
-**MPP Session (metered / streaming — HTTP Payment Authentication Scheme, `session` intent)**:
-1. Agent makes a request to a metered API (e.g., LLM inference, streaming data)
-2. Server responds with `402 Payment Required` carrying an MPP challenge for the `session` intent (e.g., the `algorand` payment method — see draft-algorand-session)
-3. Agent forwards the channel-open authorization to the user for signing (Signature Request pattern); the user signs the deposit transaction group, the signature is returned to the agent, and the agent presents vouchers per metered unit
 
 **Git Commit Signing**:
 1. Agent prepares code changes
@@ -136,7 +125,7 @@ graph TD;
     User -- "returns signature" --> Agent;
 ```
 
-Agents MUST NOT hold keys. Keys for the agent's own identity are held by the agent's tooling (e.g., agent-internal tools, MCP tools, or OWS wallet toolings); the agent invokes tool calls and the tooling performs any signing the agent's tooling is configured to perform.
+Agents MUST NOT hold keys. Keys for the agent's own identity are held by the agent's tooling (e.g., agent-internal tools, MCP tools, or OWS wallet tooling); the agent invokes tool calls and the tooling performs any signing it is configured to perform.
 
 **Controller Components**:
 - **Wallet/Identity Manager**: Liquid Auth-compatible wallet with FIDO2/WebAuthn support
@@ -195,7 +184,9 @@ AC2 assumes a **semi-trusted Agent model**:
 
 ## Data Model
 
-AC2 messages MUST be compliant with [DIDComm v2.0 message formats](https://identity.foundation/didcomm-messaging/spec). Core defines the signing trio and the streaming initiation message; extensions add additional message families (capability grants, discovery, attachments, etc.).
+AC2 messages MUST be compliant with [DIDComm v2.0 message formats](https://identity.foundation/didcomm-messaging/spec). Core adopts the DIDComm v2 **plaintext envelope** — structure, headers, threading (`thid`/`pthid`), and the attachments format. Full DIDComm encrypted/signed envelope profiles and routing are deferred to a future version of this specification; channel confidentiality and peer authentication are currently provided by the Liquid Auth transport (FIDO2-bound session over DTLS-encrypted WebRTC).
+
+Core defines the capability exchange, the signing trio, and the streaming initiation message; extensions add additional message families (capability grants, attachments, etc.).
 
 ### Examples
 
@@ -254,7 +245,84 @@ The following structure is based on DIDcommv2 message format, re-used for AC2 me
 
 #### AC2 Message Examples
 
-Capability discovery is **not** in the core spec. If two peers need to negotiate which extensions or message families they both support, they SHOULD use an AC2 discovery extension or an extension-specific discovery mechanism (e.g. an agent-card-style descriptor). Core peers MAY assume signing trio support by default. Problems are reported via DIDComm `report-problem/2.0`.
+Peers SHOULD exchange capabilities after session establishment: either side sends `ac2/CapabilityRequest` and the peer answers with `ac2/Capabilities`. The exchange is advisory and additive — receivers MUST ignore unknown fields, and a peer that never sends capabilities still interoperates (core peers MAY assume signing-trio support by default). Problems are reported via DIDComm `report-problem/2.0`.
+
+##### Capability Request
+
+```json
+{
+  "@context": ["https://ac2.io/v1"],
+  "type": "ac2/CapabilityRequest",
+  "from": "did:example:agent",
+  "to": ["did:example:user"],
+  "created_time": 1700000000,
+  "body": {}
+}
+```
+
+##### Capabilities
+
+An **agent** answers with its implementation descriptor and supported signing operations:
+
+```json
+{
+  "@context": ["https://ac2.io/v1"],
+  "type": "ac2/Capabilities",
+  "from": "did:example:agent",
+  "to": ["did:example:user"],
+  "created_time": 1700000001,
+  "body": {
+    "role": "agent",
+    "protocol": "1.0",
+    "impl": { "name": "ac2-plugin-example", "version": "1.0.0", "sdk": "0.0.8" },
+    "features": ["signing", "verify", "status", "notice", "capabilities"],
+    "sig_hints": ["raw-ed25519", "message-algorand", "message-evm", "transaction-algorand"],
+    "tools": ["ac2_sign", "ac2_capabilities", "ac2_verify_raw_ed25519"]
+  }
+}
+```
+
+A **wallet** (Controller) answers with the identities and accounts it exposes to this peer:
+
+```json
+{
+  "@context": ["https://ac2.io/v1"],
+  "type": "ac2/Capabilities",
+  "from": "did:example:user",
+  "to": ["did:example:agent"],
+  "created_time": 1700000002,
+  "body": {
+    "role": "wallet",
+    "protocol": "1.0",
+    "impl": { "name": "example-wallet", "version": "1.0.0" },
+    "features": ["signing", "capabilities"],
+    "identities": [
+      { "did": "did:key:z6Mk...", "public_key": "<base64 32-byte key>", "label": "Primary", "bip_method": "BIP32-Ed25519" }
+    ],
+    "accounts": [
+      { "chain": "algorand", "addresses": ["<58-char address>"] },
+      { "chain": "base", "addresses": ["0x..."] }
+    ],
+    "primary_accounts": [
+      { "bip_method": "BIP32-Ed25519", "addresses": ["<base64 public key>"] }
+    ]
+  }
+}
+```
+
+`body` fields:
+
+- `role` (REQUIRED, `"agent"` | `"wallet"`) — which side of the channel is describing itself.
+- `protocol` (REQUIRED, string) — AC2 protocol version the sender speaks (the `@context` major, e.g. `"1.0"`).
+- `impl` (REQUIRED, object) — implementation descriptor: `name`, `version`, and OPTIONAL `sdk` version.
+- `features` (REQUIRED, string array) — coarse feature flags (e.g. `signing`, `verify`, `status`, `notice`, `capabilities`). Unknown flags MUST be ignored.
+- `sig_hints` (agent, OPTIONAL) — the `sig_hint` values the agent can request and verify (see Signing Request).
+- `tools` (agent, OPTIONAL) — tool names the agent exposes on this channel.
+- `identities` (wallet, REQUIRED) — DID-bound identity signing keys: `public_key` (base64), OPTIONAL `did`, `label`, and `bip_method` (set for primary identities, e.g. `BIP32-Ed25519`; the derivation method identifies the key's curve).
+- `accounts` (wallet, REQUIRED) — derived, transactable on-chain accounts grouped by `chain` (e.g. `algorand`, `base`, `solana`).
+- `primary_accounts` (wallet, OPTIONAL) — primary (identity-only, non-transactable) roots grouped by `bip_method` rather than chain; primary keys are chain-agnostic at the user-visible layer.
+
+**Multi-account support.** A wallet MAY expose any number of identities and per-chain accounts. The agent selects the signer per request via `key_type` and `sig_hint`, and derives what is actually available from `identities` (curve, via `bip_method`) and `accounts` (chains) — not from any static list. Wallets MAY re-announce `ac2/Capabilities` when their account set changes; either peer MAY re-request at any time.
 
 ##### Signing Request
 
@@ -311,9 +379,9 @@ The `payload` field MUST be shown to the user in both its raw form and a human-r
 
 `body` fields:
 
-- `signature` (REQUIRED, base64 string) — Ed25519 signature over the raw bytes of the request `payload`.
+- `signature` (REQUIRED, base64 string) — signature over the request `payload`, produced per the request's `sig_hint` (when absent: Ed25519 over the raw bytes, the historical default).
 - `public_key` (REQUIRED, base64 string) — the 32-byte Ed25519 public key the signature verifies against. REQUIRED for self-contained verification when the signer uses an account key whose public key is not embedded in `from`.
-- `address` (OPTIONAL, string) — 58-character Algorand address derived from `public_key`. Convenience field for human-readable audit logs.
+- `address` (OPTIONAL, string) — chain-appropriate address of the signing account (e.g. a 58-character Algorand address, a `0x`-prefixed EVM address). Convenience field for human-readable audit logs; MAY be expressed as a [[caip-10](https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/caip-10.md)] identifier.
 - `key_type` (OPTIONAL, `"account"` | `"identity"`, default `"account"`) — which key actually signed; mirrors the request's `key_type`.
 
 **Naming convention.** All AC2 message body fields use **`snake_case`** for consistency with DIDComm v2 envelope headers. Implementations MUST NOT emit `camelCase` variants of these fields.
@@ -415,9 +483,10 @@ The signaling server facilitates the WebRTC handshake without accessing message 
 **Normative Requirements**:
 
 1. **DID Methods**: Implementations MUST support `did:key` per [[did-key](https://w3c-ccg.github.io/did-method-key/)] and SHOULD support `did:web`
-2. **Key Types**: Ed25519 keys REQUIRED for signatures; secp256k1 OPTIONAL for blockchain operations;
+2. **Key Types**: Ed25519 keys REQUIRED for signatures; secp256k1 OPTIONAL for blockchain operations
 3. **Resolution**: Implementations MUST resolve DIDs per [[did-resolution](https://w3c-ccg.github.io/did-resolution/)]
-4. **Discovery**: Agent DIDs MUST be discoverable via `.well-known/did.json` (for `did:web` DIDs) or `.well-known/did-configuration.json` per [[well-known-did-configuration](https://identity.foundation/.well-known/resources/did-configuration/)] (for any DID method, including `did:key`)
+
+Core peers exchange DIDs over the authenticated Liquid Auth channel; no out-of-band DID discovery is required. Public agent-DID discoverability (e.g. `.well-known/did.json`, `.well-known/did-configuration.json` per [[well-known-did-configuration](https://identity.foundation/.well-known/resources/did-configuration/)]) is out of core scope and is expected to be defined by an extension (e.g. a future A2A extension — see **Extensions** for the rules such an extension follows).
 
 ### Agent DID Key Origin
 
@@ -441,7 +510,7 @@ Consumers MUST NOT rely on `keyOrigin` for trust decisions.
 
 ### Capability Identifier Namespacing
 
-Capability discovery itself is out of core scope (covered by an AC2 discovery extension, or by an extension-specific mechanism such as an agent-card-style descriptor). When peers do exchange capability identifiers, the identifiers SHOULD follow this three-tier namespacing convention:
+Capability identifiers are exchanged via the core capability exchange (`ac2/CapabilityRequest` / `ac2/Capabilities`, see Data Model) or via extension-specific mechanisms (e.g. an agent-card-style descriptor). Identifiers SHOULD follow this three-tier namespacing convention:
 
 | Tier | Namespace pattern | Defined by | Example |
 |------|-------------------|-----------|---------|
@@ -476,7 +545,7 @@ Controller                          Agent
 
 ## Extensions
 
-AC2 is designed to be extended. Extensions add new communication patterns, message types, and behaviors on top of the core foundation (DID-based identity, Liquid Auth transport, DIDComm message format, the signing trio, the streaming pattern, plugin model). Discovery, attachments, and HITL approvals are extensions, not core. The streaming **pattern** is core (see *Communication Patterns* and *Streaming Protocol*); concrete stream-chunk **framing** is implementation-profiled.
+AC2 is designed to be extended. Extensions add new communication patterns, message types, and behaviors on top of the core foundation (DID-based identity, Liquid Auth transport, DIDComm message format, the signing trio, the streaming pattern, plugin model). Attachments and HITL approvals are extensions, not core; the capability exchange is core (see Data Model). The streaming **pattern** is core (see *Communication Patterns* and *Streaming Protocol*); concrete stream-chunk **framing** is implementation-profiled.
 
 **Extension naming**: extension message types use the `ac2/` namespace and SHOULD include a JSON-LD context entry of the form `https://ac2.io/ext/<extension-name>/v<version>`.
 
@@ -485,12 +554,6 @@ AC2 is designed to be extended. Extensions add new communication patterns, messa
 **Layering**: extensions MAY define new patterns; MAY introduce new message types; MAY add fields to permit additional flows over Signature Request, Agent DID Key Origin, and Passkey Authentication; MUST NOT weaken the core invariants (in particular, an extension MUST NOT permit an agent to access or sign on the Controller's keys).
 
 **Fallback**: if a peer does not advertise an extension, parties using flows defined by that extension MUST fall back to the core Signature Request pattern (or refuse the operation).
-
-**Illustrative extensions** (placeholders — none are part of this core specification; each would be published as its own separate document under the rules above):
-
-- A **discovery extension** that adds `ac2/CapabilityList` (push/pull) and `ac2/GetCapability` messages for cross-extension capability enumeration. Opt-in; core peers MAY assume signing-trio support without exchanging a list.
-- A **pre-authorized operations extension** that adds a pre-authorized communication pattern (e.g. tooling-controlled account or on-chain vault scenarios) and messages along the lines of `AgentTopUpRequest`, `AgentCapabilityGrant`, `AgentSpendReceipt`. Scoped to payments and asset-transfer signing.
-- An **A2A (Agent-to-Agent) extension** that translates the Google A2A protocol's AgentCard, task lifecycle, message parts, and streaming patterns into DIDComm messages over AC2 transport, with DID-based mutual agent authentication and Verifiable-Credential-based owner consent for agent-to-agent connections.
 
 ## Streaming Protocol
 
@@ -558,57 +621,7 @@ The wire format for `ac2/SigningRequest` and `ac2/SigningResponse` is defined in
 
 The keypair held by the agent's tooling is provisioned outside the AC2 wire protocol using one of the two methods defined in **Agent DID Key Origin** (Authentication section).
 
-#### AC2 KeyRequest / KeyResponse (OPTIONAL — HD-derived provisioning only)
-
-`ac2/KeyRequest` and `ac2/KeyResponse` are **OPTIONAL** messages. They are used only when (a) the Controller chooses HD-derived provisioning of the key held by the agent's tooling, and (b) the tooling supports receiving derived keys via AC2 rather than deriving locally.
-
-When in use, the tooling MAY ask the Controller to derive a keypair at a specified HD path (e.g., BIP32-Ed25519 / [[ARC-52](https://github.com/algorandfoundation/ARCs/blob/main/ARCs/arc-0052.md)]) and deliver the resulting derived private key over AC2. `KeyRequest` MUST NOT be used for independently-generated keys and MUST NEVER be used to request the Controller's root key or any non-derived key.
-
-Origin and destination: the **agent's tooling** originates the request; the agent runtime forwards it over AC2 as a message. The matching response is routed by the plugin directly into the tooling — it MUST NOT be placed in the agent runtime's LLM-visible context.
-
-**KeyRequest** (tooling → Controller, via the agent over AC2):
-
-```json
-{
-  "@context": ["https://ac2.io/v1"],
-  "type": "ac2/KeyRequest",
-  "from": "did:example:agent",
-  "to": ["did:example:user"],
-  "body": {
-    "key_type": "ed25519" | "secp256k1",
-    "derivationPath": "m/44'/283'/1'/0/0",
-    "purpose": "<WHY_NEEDED>",
-    "for_operation": "<WHAT_OPERATION>"
-  }
-}
-```
-
-**KeyResponse** (Controller → tooling, via the agent over AC2):
-
-```json
-{
-  "@context": ["https://ac2.io/v1"],
-  "type": "ac2/KeyResponse",
-  "from": "did:example:user",
-  "to": ["did:example:agent"],
-  "body": {
-    "status": "approved" | "rejected",
-    "derivationPath": "m/44'/283'/1'/0/0",
-    "key_type": "ed25519",
-    "material": "<BASE64_OR_ENCRYPTED_KEY_PAYLOAD>",
-    "public_key": "<BASE64_PUBLIC_KEY>",
-    "reason": "<OPTIONAL_REJECTION_REASON>"
-  }
-}
-```
-
-**Normative constraints**:
-
-1. **Scope**: `KeyRequest` MUST only be used for HD-derived provisioning of a key to be installed in the agent's tooling. It MUST NOT be used to request the Controller's root key, an existing signing key, or any key not produced by fresh derivation at the requested path.
-2. **Confidentiality**: `material` in `KeyResponse` carries a private key. The AC2 transport (Liquid Auth WebRTC DTLS) provides the channel encryption. Implementations SHOULD additionally wrap `material` in an application-layer encryption keyed to the specific tooling (e.g., a session-bound symmetric key negotiated between Controller and tooling).
-3. **Runtime isolation**: The AC2 plugin MUST route `KeyResponse` directly to the tooling without placing `material` in the agent runtime's conversational context, logs, or memory. The agent runtime MUST NOT observe `material`.
-4. **Single-shot**: A `KeyResponse` delivers the derived key exactly once. Re-derivation requires a fresh `KeyRequest` at the same path (the Controller's seed produces the same key).
-5. **User consent**: The Controller MUST explicitly approve each `KeyRequest` via their wallet or key-management tool, with clear display of `derivationPath`, `purpose`, and `for_operation`.
+Public-key and account discovery — including multi-account enumeration — is handled by the capability exchange (`ac2/CapabilityRequest` / `ac2/Capabilities`, see Data Model); AC2 defines no message that transfers private key material.
 
 ### Framework-Specific Configuration Examples
 
@@ -655,7 +668,7 @@ records, receipt logs).
 - `name` — human-readable name
 - `capabilities` — AC2 capability identifiers this agent supports
 
-Capabilities are exchanged via an AC2 discovery extension or an extension-specific discovery mechanism (e.g. an agent-card-style descriptor); core does not mandate a discovery exchange.
+Capabilities are exchanged via `ac2/CapabilityRequest` / `ac2/Capabilities` (see Data Model).
 ```
 
 ## References
@@ -665,7 +678,6 @@ Capabilities are exchanged via an AC2 discovery extension or an extension-specif
 - [[did-core](https://www.w3.org/TR/did-core/)] W3C. *Decentralized Identifiers (DIDs) v1.0*. W3C Recommendation. June 2022.
 - [[did-key](https://w3c-ccg.github.io/did-method-key/)] CCG. *The did:key Method v1.0*. W3C CCG Draft.
 - [[did-resolution](https://w3c-ccg.github.io/did-resolution/)] CCG. *DID Resolution v1.0*. W3C CCG Draft.
-- [[well-known-did-configuration](https://identity.foundation/.well-known/resources/did-configuration/)] DIF. *Well-Known DID Configuration*. DIF Spec.
 - [[webauthn-2](https://www.w3.org/TR/webauthn-2/)] W3C. *Web Authentication: An API for accessing Public Key Credentials Level 2*. W3C Recommendation.
 - [[didcomm-messaging](https://identity.foundation/didcomm-messaging/spec/)] DIF. *DIDComm Messaging Specification v2.0*. DIF Ratified Specification.
 - [[RFC2119](https://www.rfc-editor.org/rfc/rfc2119)] Bradner, S. *Key words for use in RFCs to Indicate Requirement Levels*. RFC 2119.
@@ -677,9 +689,7 @@ Capabilities are exchanged via an AC2 discovery extension or an extension-specif
 
 - [[caip-10](https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/caip-10.md)] CASA. *CAIP-10: Account ID Specification*. (chain-agnostic account identifier format)
 - [[x402](https://x402.org)] x402 Protocol. *Cross-Platform Payment Standard*.
-- [[mpp-httpauth-payment](https://datatracker.ietf.org/doc/draft-ietf-httpauth-payment/)] Moxey, J. *The "Payment" HTTP Authentication Scheme*. IETF Draft. (Machine Payment Protocol — defines the `charge` and `session` intents framework)
-- [[mpp-algorand-charge](https://datatracker.ietf.org/doc/)] Ghiasi, M. *Algorand Charge Intent for HTTP Payment Authentication (draft-algorand-charge)*. Independent Submission. (MPP `charge` intent — one-off payments on Algorand)
-- [[mpp-algorand-session](https://datatracker.ietf.org/doc/)] Ghiasi, M. *Algorand Session Intent for HTTP Payment Authentication (draft-algorand-session)*. Independent Submission. (MPP `session` intent — metered / streaming payments on Algorand)
+- [[well-known-did-configuration](https://identity.foundation/.well-known/resources/did-configuration/)] DIF. *Well-Known DID Configuration*. DIF Spec.
 - [[a2a](https://github.com/google/A2A)] Google. *Agent2Agent Protocol*.
 - [[mcp](https://github.com/modelcontextprotocol)] Anthropic. *Model Context Protocol*.
 - [[ows](https://openwallet.sh/)] *Open Wallet Standard (OWS)*. GitHub: [open-wallet-standard](https://github.com/open-wallet-standard).
