@@ -319,8 +319,8 @@ A **wallet** (Controller) answers with the identities and accounts it exposes to
 - `sig_hints` (agent, OPTIONAL) — the `sig_hint` values the agent can request and verify (see Signing Request).
 - `tools` (agent, OPTIONAL) — tool names the agent exposes on this channel.
 - `identities` (wallet, REQUIRED) — DID-bound identity signing keys: `public_key` (base64), OPTIONAL `did`, `label`, and `bip_method` (set for primary identities, e.g. `BIP32-Ed25519`; the derivation method identifies the key's curve).
-- `accounts` (wallet, REQUIRED) — derived, transactable on-chain accounts grouped by `chain` (e.g. `algorand`, `base`, `solana`).
-- `primary_accounts` (wallet, OPTIONAL) — primary (identity-only, non-transactable) roots grouped by `bip_method` rather than chain; primary keys are chain-agnostic at the user-visible layer.
+- `accounts` (wallet, OPTIONAL) — HD derived, transactable on-chain accounts grouped by `chain` (e.g. `algorand`, `base`, `solana`).
+- `primary_accounts` (wallet, REQUIRED) — primary (identity-only, non-transactable) roots grouped by `bip_method` rather than chain; primary keys are chain-agnostic at the user-visible layer.
 
 **Multi-account support.** A wallet MAY expose any number of identities and per-chain accounts. The agent selects the signer per request via `key_type` and `sig_hint`, and derives what is actually available from `identities` (curve, via `bip_method`) and `accounts` (chains) — not from any static list. Wallets MAY re-announce `ac2/Capabilities` when their account set changes; either peer MAY re-request at any time.
 
@@ -352,7 +352,7 @@ A **wallet** (Controller) answers with the identities and accounts it exposes to
 - `encoding` (REQUIRED, MUST be `"base64"`) — encoding of `payload`.
 - `payload` (REQUIRED, base64 string) — raw bytes the signer will sign. Whether the signer applies a chain-specific prefix or encoding before signing is determined by `sig_hint` below; when `sig_hint` is absent, the signer signs the raw bytes as Ed25519 input (the historical Algorand-only default).
 - `schema` (OPTIONAL, string) — schema identifier for the payload (e.g., x402 payment schema).
-- `key_type` (OPTIONAL, `"account"` | `"identity"`, default `"account"`) — which key the signer SHOULD use. The signer MAY refuse a `key_type` it does not support and respond with `ac2/SigningRejected`.
+- `key_type` (OPTIONAL, `"account"` | `"identity"`, default `"identity"`) — which key the signer SHOULD use. The signer MAY refuse a `key_type` it does not support and respond with `ac2/SigningRejected`.
 - `display_hint` (OPTIONAL, `"text"` | `"json"` | `"hex"`) — UX hint for how the wallet SHOULD preview `payload` to the user. Has no cryptographic effect. The wallet MAY auto-detect if the field is absent.
 - `sig_hint` (OPTIONAL, one of `"raw-ed25519"` | `"raw-secp256k1"` | `"message-algorand"` | `"message-evm"` | `"message-solana"` | `"typed-data-evm"` | `"transaction-algorand"` | `"transaction-evm"` | `"transaction-solana"`) — explicit cryptographic-operation selector. Each value identifies one operation (curve, prefix, canonical encoding) the signer performs, and the format of the signature returned. Has no effect on UX preview (that's `display_hint`'s job). When absent, the signer performs Ed25519 over raw `payload` bytes (the historical default). Implementations MUST reject unknown values or pairings inconsistent with the selected signer's chain/curve via `ac2/SigningRejected`. The per-value byte-level semantics are defined by chain conventions (ARC-60, EIP-191, EIP-712, EIP-2718, Algorand canonical `TX`-prefixed msgpack, etc.) and agreed on out-of-band between signer and verifier; new values are added by extension.
 
@@ -382,7 +382,7 @@ The `payload` field MUST be shown to the user in both its raw form and a human-r
 - `signature` (REQUIRED, base64 string) — signature over the request `payload`, produced per the request's `sig_hint` (when absent: Ed25519 over the raw bytes, the historical default).
 - `public_key` (REQUIRED, base64 string) — the 32-byte Ed25519 public key the signature verifies against. REQUIRED for self-contained verification when the signer uses an account key whose public key is not embedded in `from`.
 - `address` (OPTIONAL, string) — chain-appropriate address of the signing account (e.g. a 58-character Algorand address, a `0x`-prefixed EVM address). Convenience field for human-readable audit logs; MAY be expressed as a [[caip-10](https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/caip-10.md)] identifier.
-- `key_type` (OPTIONAL, `"account"` | `"identity"`, default `"account"`) — which key actually signed; mirrors the request's `key_type`.
+- `key_type` (OPTIONAL, `"account"` | `"identity"`, default `"identity"`) — which key actually signed; mirrors the request's `key_type`.
 
 **Naming convention.** All AC2 message body fields use **`snake_case`** for consistency with DIDComm v2 envelope headers. Implementations MUST NOT emit `camelCase` variants of these fields.
 
