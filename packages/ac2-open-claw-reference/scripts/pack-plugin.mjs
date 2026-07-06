@@ -33,6 +33,15 @@ const dest = destArgIdx >= 0 ? process.argv[destArgIdx + 1] : '/tmp';
 const original = readFileSync(pkgJsonPath, 'utf8');
 const pkg = JSON.parse(original);
 
+const vendorResult = spawnSync('node', ['scripts/build-node-datachannel-vendor.mjs', '--if-missing'], {
+  cwd: pkgRoot,
+  encoding: 'utf8',
+  stdio: 'inherit',
+});
+if (vendorResult.status !== 0) {
+  process.exit(vendorResult.status ?? 1);
+}
+
 // Build the consumer-facing package.json: drop dev-only fields.
 const stripped = { ...pkg };
 delete stripped.devDependencies;
@@ -45,10 +54,10 @@ const SCRIPTS_TO_DROP = new Set([
   'type-check',
   'test',
   'test:watch',
+  'build:node-datachannel-vendor',
   'release',
   'release:dry-run',
   'dist:pack',
-  'rebuild:node-datachannel',
   'install:plugin',
   'uninstall:plugin',
   'dev:natives',
