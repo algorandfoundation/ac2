@@ -11,7 +11,7 @@ Liquid Auth + WebRTC via [`@algorandfoundation/ac2-sdk`](../ac2-sdk).
 | ----------------------- | -------------------------------------------------------------------------- |
 | Channel `ac2`           | Owns Liquid Auth + WebRTC pairing and the active session.                  |
 | Tool `ac2_capabilities` | Agent DID + `sig_hint` catalog.                                            |
-| Tool `ac2_sign`         | Routes a `SigningRequest` to the wallet over the active channel.           |
+| Tool `ac2_sign`         | Routes a `SigningRequest` and returns signature details to the agent.      |
 | Tool `ac2_x402_fetch`   | Pays x402 exact Algorand resources using wallet-approved AC2 signing.      |
 | Setup entry             | `openclaw ac2 setup` writes the channel/tools wiring into `openclaw.json`. |
 
