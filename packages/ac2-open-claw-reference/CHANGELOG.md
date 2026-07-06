@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.10](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.9...ac2-open-claw-reference@1.0.0-canary.10) (2026-07-06)
+
+
+### Bug Fixes
+
+* **ac2-open-claw-reference:** report missing native pairing dependency ([5c82adc](https://github.com/algorandfoundation/ac2/commit/5c82adc1468f2238a7f0788c39735228038a8fb6))
+
 # [ac2-open-claw-reference@1.0.0-canary.9](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.8...ac2-open-claw-reference@1.0.0-canary.9) (2026-07-06)
 
 
