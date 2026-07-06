@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.6](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.5...ac2-open-claw-reference@1.0.0-canary.6) (2026-07-06)
+
+
+### Bug Fixes
+
+* **ac2-open-claw-reference:** document sign tool signature output ([96c7ab9](https://github.com/algorandfoundation/ac2/commit/96c7ab9e9d8e4b43d47ec00452d2600a9cbfc44d))
+
 # [ac2-open-claw-reference@1.0.0-canary.5](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.4...ac2-open-claw-reference@1.0.0-canary.5) (2026-07-06)
 
 
