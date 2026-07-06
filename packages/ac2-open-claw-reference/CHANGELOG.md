@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.5](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.4...ac2-open-claw-reference@1.0.0-canary.5) (2026-07-06)
+
+
+### Features
+
+* add x402 OpenClaw integration ([e7bbb2a](https://github.com/algorandfoundation/ac2/commit/e7bbb2ac378ffdca96da288bb06390f5ddbdf48c))
+
 # [ac2-open-claw-reference@1.0.0-canary.4](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.3...ac2-open-claw-reference@1.0.0-canary.4) (2026-07-06)
 
 
