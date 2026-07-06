@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.4](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.3...ac2-open-claw-reference@1.0.0-canary.4) (2026-07-06)
+
+
+### Bug Fixes
+
+* enhance LiquidAuthChannelProvider with ICE candidate handling ([#8](https://github.com/algorandfoundation/ac2/issues/8)) ([899c917](https://github.com/algorandfoundation/ac2/commit/899c91781441b7660485afbb8fb98d5046216c00))
+
 # [ac2-open-claw-reference@1.0.0-canary.3](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.2...ac2-open-claw-reference@1.0.0-canary.3) (2026-07-02)
 
 
