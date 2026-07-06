@@ -4,6 +4,7 @@ import {
   buildKeyResponse,
   buildSigningRejected,
   buildSigningResponse,
+  type BuildSigningRequestArgs,
 } from '@algorandfoundation/ac2-sdk/protocol';
 import {
   isKeyRequest,
@@ -37,6 +38,7 @@ import {
   pluginManifest as plugin,
   createAc2AvmSigner,
   X402_ALGORAND_SIGNING_SCHEMA,
+  buildSignTool,
 } from '../src/index.js';
 import { describeX402Result } from '../src/tools/index.js';
 import { publicKeyToDidKey } from '../src/identity/did.js';
@@ -212,6 +214,59 @@ describe('ac2-open-claw-reference plugin', () => {
   });
 
   describe('signFlow through an active channel', () => {
+    it('renders the signature details in the OpenClaw tool content', async () => {
+      sessionManager.setActive({
+        transport: {} as never,
+        client: {
+          requestSignature: async (args: BuildSigningRequestArgs) => ({
+            kind: 'signed',
+            message: {
+              id: 'response-1',
+              type: 'SigningResponse',
+              from: args.to,
+              to: args.from,
+              thid: 'request-1',
+              created_time: 1,
+              body: {
+                signature: Buffer.from('sig').toString('base64'),
+                public_key: Buffer.from('pk').toString('base64'),
+                address: 'ADDR',
+                key_type: 'account',
+              },
+            },
+          }),
+        } as never,
+        controllerDid: STUB_CONTROLLER_DID,
+        agentDid: STUB_AGENT_DID,
+        identityGranted: true,
+      });
+
+      try {
+        const tool = buildSignTool() as unknown as {
+          execute: (
+            id: string,
+            params: Record<string, unknown>,
+          ) => Promise<{ content: Array<{ type: 'text'; text: string }>; details: unknown }>;
+        };
+        const result = await tool.execute('tool-call-1', {
+          description: 'Sign test payload',
+          payload_base64: Buffer.from('hello').toString('base64'),
+        });
+
+        expect(result.content[0]?.text).toContain('Signed payload:');
+        expect(result.content[0]?.text).toContain('"status": "signed"');
+        expect(result.content[0]?.text).toContain('"signature": "c2ln"');
+        expect(result.content[0]?.text).toContain('"public_key": "cGs="');
+        expect(result.details).toMatchObject({
+          status: 'signed',
+          signature: Buffer.from('sig').toString('base64'),
+          public_key: Buffer.from('pk').toString('base64'),
+        });
+      } finally {
+        sessionManager.clearActive();
+      }
+    });
+
     it('round-trips a SigningRequest/Response across the channel session', async () => {
       let observedSchema: string | undefined;
       const provider = makeClient((req, peer) => {
