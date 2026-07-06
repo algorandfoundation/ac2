@@ -34,6 +34,7 @@ class _Ac2RTCPeerConnection extends (ndc as any).RTCPeerConnection {
   private _ac2RemoteDescReady = false;
 
   async setRemoteDescription(desc: any): Promise<void> {
+    this._ac2RemoteDescReady = false;
     await super.setRemoteDescription(desc);
     this._ac2RemoteDescReady = true;
     const queued = this._ac2PendingCandidates.splice(0);
