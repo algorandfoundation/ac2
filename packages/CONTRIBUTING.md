@@ -125,7 +125,7 @@ pnpm build               # bundle + tsc + flatten d.ts
 pnpm test                # vitest, loads sources from src/
 pnpm dev:link            # rebuild natives, build, install into local openclaw
 pnpm dev:relink          # rebuild + `openclaw plugins update`
-pnpm dev:unlink          # `openclaw plugins uninstall ac2-open-claw-reference`
+pnpm dev:unlink          # `openclaw plugins uninstall ac2`
 ```
 
 ### Releasing the plugin

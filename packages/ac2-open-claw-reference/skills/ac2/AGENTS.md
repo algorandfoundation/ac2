@@ -6,7 +6,7 @@ metadata:
     'openclaw':
       {
         'emoji': '📜',
-        'requires': { 'config': ['plugins.entries.ac2-open-claw-reference.enabled'] },
+        'requires': { 'config': ['plugins.entries.ac2.enabled'] },
       },
   }
 ---

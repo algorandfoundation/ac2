@@ -6,7 +6,7 @@ metadata:
     'openclaw':
       {
         'emoji': '🪪',
-        'requires': { 'config': ['plugins.entries.ac2-open-claw-reference.enabled'] },
+        'requires': { 'config': ['plugins.entries.ac2.enabled'] },
       },
   }
 ---
@@ -29,7 +29,7 @@ The agent presents itself via these fields, populated at runtime by
 | Field           | Source                                   | Meaning                                                                                                                 |
 | --------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `did`           | `ac2_capabilities.agent.did`             | The agent's own `did:key`, issued by the Controller's wallet during pairing. The agent signs its envelopes as this DID. |
-| `name`          | `ac2_capabilities.agent.plugin.id`       | Human-readable plugin identifier (`ac2-open-claw-reference`).                                                           |
+| `name`          | `ac2_capabilities.agent.plugin.id`       | Human-readable plugin identifier (`ac2`).                                                           |
 | `version`       | `ac2_capabilities.agent.plugin.version`  | Plugin semver.                                                                                                          |
 | `controllerDid` | `ac2_capabilities.session.controllerDid` | The Controller account currently paired (NOT part of the agent's identity — it identifies the _peer_).                  |
 

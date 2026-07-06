@@ -47,7 +47,7 @@ agent never touches the user's account keys or passkeys.
 #### From the npm registry (canary)
 
 ```bash
-openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.6
+openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.7
 
 # openclaw plugins install runs `npm install --ignore-scripts`, so native
 # addons are not built automatically. Rebuild them from the plugin project dir:
@@ -65,7 +65,7 @@ NDC="$PLUGIN_DIR/node_modules/node-datachannel"
   && npx cmake-js configure --CDUSE_NICE=1 \
   && npx cmake-js build)
 
-openclaw plugins enable ac2-open-claw-reference
+openclaw plugins enable ac2
 openclaw ac2 setup                                    # wire channel + tools into openclaw.json
 openclaw gateway restart
 ```
@@ -91,7 +91,7 @@ openclaw gateway restart
 
 `pnpm install:plugin` builds the flat tree-shakeable `dist/`, packs a
 tarball with workspace-only devDependencies stripped, installs it into
-`${OPENCLAW_HOME:-~/.openclaw}/extensions/ac2-open-claw-reference`, rebuilds
+`${OPENCLAW_HOME:-~/.openclaw}/extensions/ac2`, rebuilds
 `@napi-rs/keyring` via `npm rebuild`, then compiles `node-datachannel` from
 source against libnice (`USE_NICE=1`) via `pnpm rebuild:node-datachannel`.
 You can also run `pnpm rebuild:node-datachannel` on its own to re-compile the
@@ -100,7 +100,7 @@ native ICE layer without repeating the full install cycle.
 To uninstall (either install path):
 
 ```bash
-openclaw plugins uninstall ac2-open-claw-reference
+openclaw plugins uninstall ac2
 # or, from the monorepo:
 pnpm uninstall:plugin
 ```
@@ -111,12 +111,16 @@ Once installed, `openclaw.json` will contain an entry like:
 
 ```json5
 {
-  'ac2-open-claw-reference': {
-    enabled: true,
-    config: {
+  plugins: {
+    entries: {
+      ac2: {
+        enabled: true,
+      },
+    },
+  },
+  channels: {
+    ac2: {
       liquidAuthServer: 'https://debug.liquidauth.com',
-      defaultTimeoutMs: 120000,
-      x402MaxAmountAtomic: '1000000',
     },
   },
 }

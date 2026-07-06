@@ -4,13 +4,9 @@ import qrcode from 'qrcode-terminal';
 import { Ac2Client } from '@algorandfoundation/ac2-sdk';
 import { isValidAddress } from '@algorandfoundation/algokit-utils/common';
 import { resolveConfig, safeLog, type OpenClawApi } from '../runtime.js';
-import {
-  BootstrapError,
-  bootstrapAgentIdentity,
-  sessionManager,
-  type ChannelContext,
-} from '../session/index.js';
-import { LiquidAuthChannelProvider } from '../providers/liquid-auth.js';
+import { BootstrapError, bootstrapAgentIdentity } from '../session/bootstrap.js';
+import type { ChannelContext } from '../session/contracts.js';
+import { sessionManager } from '../session/manager.js';
 import {
   clearAc2State,
   ensureConversation,
@@ -124,6 +120,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
         }> => {
           // Reuse a persisted requestId so the wallet reconnects to the same connection.
           const persistedRequestId = loadAc2State().requestId;
+          const { LiquidAuthChannelProvider } = await import('../providers/liquid-auth.js');
           const provider: import('@algorandfoundation/ac2-sdk/signaling').Ac2ChannelProvider =
             new LiquidAuthChannelProvider({
               origin,

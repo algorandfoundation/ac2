@@ -10,7 +10,7 @@ import { capabilitiesFlow, signFlow } from '../session/flows.js';
 import { normalizeX402FetchParams, x402FetchFlow } from '../x402/fetch-flow.js';
 
 const plugin = defineToolPlugin({
-  id: 'ac2-open-claw-reference',
+  id: 'ac2',
   name: 'AC2 Reference',
   description:
     'Reference OpenClaw plugin for the AC2 protocol. The `ac2` channel owns pairing over Liquid Auth + WebRTC; signing and x402 paid fetch tools route through that channel.',

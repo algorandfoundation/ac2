@@ -139,12 +139,12 @@ async function bootChannel(
   };
 }
 
-describe('ac2-open-claw-reference plugin', () => {
+describe('ac2 plugin', () => {
   it('exposes the expected plugin manifest shape', () => {
     // The manifest is a genuine SDK `defineToolPlugin` entry; its catalog is
     // re-read through the supported `getToolPluginMetadata` accessor.
     const metadata = getToolPluginMetadata(plugin);
-    expect(metadata?.id).toBe('ac2-open-claw-reference');
+    expect(metadata?.id).toBe('ac2');
     const names = (metadata?.tools ?? []).map((t) => t.name);
     expect(names).toContain('ac2_sign');
     expect(names).toContain('ac2_capabilities');

@@ -8,7 +8,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-export const PLUGIN_ID = 'ac2-open-claw-reference';
+export const PLUGIN_ID = 'ac2';
 export const CHANNEL_ID = 'ac2';
 export const DEFAULT_LIQUID_AUTH_SERVER = 'https://debug.liquidauth.com';
 
@@ -35,6 +35,8 @@ export function resolveOpenClawConfigPath(): string {
   if (stateDirEnv) return join(stateDirEnv, 'openclaw.json');
   const configPathEnv = process.env['OPENCLAW_CONFIG_PATH']?.trim();
   if (configPathEnv) return configPathEnv;
+  const homeEnv = process.env['OPENCLAW_HOME']?.trim();
+  if (homeEnv) return join(homeEnv, 'openclaw.json');
   return join(homedir(), '.openclaw', 'openclaw.json');
 }
 

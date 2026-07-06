@@ -128,7 +128,7 @@ export function capabilitiesFlow(_config: PluginConfig, deps: SignDeps = {}): Ca
     status: active ? 'ok' : 'no_active_session',
     agent: {
       did: hasIdentity ? active.agentDid : null,
-      plugin: { id: 'ac2-open-claw-reference', version: '0.1.0' },
+      plugin: { id: 'ac2', version: '0.1.0' },
       sigHintsCatalog: SIG_HINTS_CATALOG as unknown as ReadonlyArray<
         SigningRequestBody['sig_hint']
       >,

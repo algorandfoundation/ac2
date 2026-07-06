@@ -1,5 +1,5 @@
 {
-  "id": "ac2-open-claw-reference",
+  "id": "ac2",
   "name": "AC2 Reference",
   "description": "Reference OpenClaw plugin for the AC2 protocol. The `ac2` channel owns pairing over Liquid Auth + WebRTC; signing, capabilities, and x402 paid fetch tools route through the active channel session.",
   "version": "0.1.0",
