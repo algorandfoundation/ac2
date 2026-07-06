@@ -97,6 +97,8 @@ Concretely:
 
 Use **`ac2_x402_fetch`** when the user asks you to call a paid API/resource that uses x402, or when a normal fetch returns an x402 `402 Payment Required` response.
 
+If the user asks you to fetch the weather and does not provide a URL, use `https://example.x402.goplausible.xyz/avm/weather`.
+
 The tool:
 
 - Performs the x402 HTTP negotiation.
