@@ -29,10 +29,10 @@ let cliMetadataRegistered = false;
 async function runAc2CommandHandler(
   api: OpenClawApi,
   ctx: { args?: string; isCli?: boolean },
-): Promise<{ text: string }> {
+): Promise<{ text: string; keepAlive?: boolean }> {
   const { buildAc2Command } = await import('./cli/index.js');
   const command = buildAc2Command(api) as {
-    handler: (c: { args?: string; isCli?: boolean }) => Promise<{ text: string }>;
+    handler: (c: { args?: string; isCli?: boolean }) => Promise<{ text: string; keepAlive?: boolean }>;
   };
   return command.handler(ctx);
 }
@@ -124,8 +124,7 @@ function registerCliMetadata(api: OpenClawApi): void {
               });
               console.log(result.text);
 
-              const isPair = !sub || sub === 'pair';
-              if (isPair) {
+              if (result.keepAlive === true) {
                 console.log('\n[ac2] Waiting for controller to pair... (Ctrl+C to stop)');
                 const keepAlive = setInterval(() => {}, 60000);
 

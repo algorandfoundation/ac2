@@ -44,13 +44,39 @@ const NO_IDENTITY_NOTICE =
   'actions. When you are ready, approve the identity request in your wallet to ' +
   'continue.';
 
+function isMissingNodeDataChannelError(err: unknown): boolean {
+  const message = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
+  return message.includes('node_datachannel.node') || message.includes('node-datachannel');
+}
+
+function nativeRebuildInstructions(): string {
+  return [
+    'AC2 pairing needs the native node-datachannel module, but it is not built yet.',
+    '',
+    'Rebuild the native dependencies from the installed plugin project root:',
+    '',
+    '```bash',
+    'PLUGIN_ROOT="$(ls -d "${OPENCLAW_HOME:-$HOME/.openclaw}"/npm/projects/algorandfoundation-ac2-open-claw-reference-* | head -n1)"',
+    'npm rebuild --prefix "$PLUGIN_ROOT" @napi-rs/keyring',
+    'NDC="$PLUGIN_ROOT/node_modules/node-datachannel"',
+    'cd "$NDC"',
+    'npm install --ignore-scripts --production=false',
+    'npx cmake-js clean',
+    'npx cmake-js configure --CDUSE_NICE=1',
+    'npx cmake-js build',
+    '```',
+    '',
+    'Then run `openclaw ac2 pair` again.',
+  ].join('\n');
+}
+
 export function buildAc2Command(api: OpenClawApi): unknown {
   return {
     name: 'ac2',
     description: 'AC2 channel control (pair, status, forget).',
     acceptsArgs: true,
     requireAuth: false,
-    async handler(ctx: any): Promise<{ text: string }> {
+    async handler(ctx: any): Promise<{ text: string; keepAlive?: boolean }> {
       const args = (ctx.args ?? '').trim();
       const tokens = args.split(/\s+/).filter(Boolean);
       const sub = tokens[0] ?? 'pair';
@@ -155,7 +181,15 @@ export function buildAc2Command(api: OpenClawApi): unknown {
             'Scan the QR code with your AC2 Controller. The channel will activate once paired.',
           ].join('\n');
 
-        const firstCycle = await startPairingCycle();
+        let firstCycle: Awaited<ReturnType<typeof startPairingCycle>>;
+        try {
+          firstCycle = await startPairingCycle();
+        } catch (err) {
+          if (isMissingNodeDataChannelError(err)) {
+            return { text: nativeRebuildInstructions() };
+          }
+          throw err;
+        }
 
         const context: ChannelContext = {
           logger: {
@@ -410,6 +444,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
 
         return {
           text: buildInvitationText(firstCycle.pairing, firstCycle.qrString),
+          keepAlive: true,
         };
       }
 
