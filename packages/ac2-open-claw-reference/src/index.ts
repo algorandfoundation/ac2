@@ -8,6 +8,8 @@ export {
   signFlow,
   capabilitiesFlow,
   runAc2Channel,
+  renderPairingQr,
+  renderPairingQr as renderQr,
   defineToolPlugin,
   getToolPluginMetadata,
   SessionManager,
@@ -59,12 +61,12 @@ export {
   type X402PaymentContext,
   type X402PaymentSelection,
 } from './x402/index.js';
-export {
-  LiquidAuthChannelProvider,
-  renderPairingQr,
-  renderPairingQr as renderQr,
-  type LiquidAuthChannelProviderOptions,
-} from './providers/liquid-auth.js';
+export type { LiquidAuthChannelProviderOptions } from './providers/liquid-auth.js';
+export async function loadLiquidAuthChannelProvider(): Promise<
+  typeof import('./providers/liquid-auth.js')
+> {
+  return import('./providers/liquid-auth.js');
+}
 export {
   InMemoryChannelProvider,
   type InMemoryChannelProviderOptions,

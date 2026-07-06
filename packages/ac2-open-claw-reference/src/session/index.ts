@@ -33,4 +33,4 @@ export {
   type SignDeps,
   type CapabilitiesResult,
 } from './flows.js';
-export { runAc2Channel, type ChannelDeps } from './channel-runtime.js';
+export { runAc2Channel, renderPairingQr, type ChannelDeps } from './channel-runtime.js';
