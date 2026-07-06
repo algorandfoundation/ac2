@@ -67,6 +67,7 @@ NDC="$PLUGIN_DIR/node_modules/node-datachannel"
 
 openclaw plugins enable ac2
 openclaw ac2 setup                                    # wire channel + tools into openclaw.json
+openclaw ac2 status                                   # works before pairing; pair requires the native rebuild above
 openclaw gateway restart
 ```
 
