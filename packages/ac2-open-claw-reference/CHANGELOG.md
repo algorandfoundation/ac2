@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.9](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.8...ac2-open-claw-reference@1.0.0-canary.9) (2026-07-06)
+
+
+### Bug Fixes
+
+* **ac2-open-claw-reference:** defer node-datachannel polyfill import ([93dc622](https://github.com/algorandfoundation/ac2/commit/93dc622f6c84ad3127e4e68ef300e03266933d73))
+
 # [ac2-open-claw-reference@1.0.0-canary.8](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.7...ac2-open-claw-reference@1.0.0-canary.8) (2026-07-06)
 
 
