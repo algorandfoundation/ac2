@@ -114,7 +114,7 @@ export interface LiquidAuthChannelProviderOptions {
 }
 
 export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
-  constructor(private readonly defaults: LiquidAuthChannelProviderOptions = {}) { }
+  constructor(private readonly defaults: LiquidAuthChannelProviderOptions = {}) {}
 
   async startPairing(_opts: Ac2StartPairingOptions = {}): Promise<Ac2PairingHandle> {
     const origin = this.defaults.origin ?? 'https://debug.liquidauth.com';
