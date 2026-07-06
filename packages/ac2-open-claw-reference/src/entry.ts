@@ -10,7 +10,7 @@ import pluginManifest from './tools/manifest.js';
 import { PLUGIN_ID, setActiveApi, setActiveRuntime, type OpenClawApi } from './runtime.js';
 import { getToolPluginMetadata } from './session/contracts.js';
 import { sessionManager } from './session/manager.js';
-import { buildSignTool, buildCapabilitiesTool } from './tools/index.js';
+import { buildSignTool, buildCapabilitiesTool, buildX402FetchTool } from './tools/index.js';
 import { cmdSetup } from './setup/config.js';
 import { listConnections } from './identity/state.js';
 
@@ -186,13 +186,14 @@ function registerCliMetadata(api: OpenClawApi): void {
   }
 }
 
-/** SDK `registerFull` — register the `ac2_sign` and `ac2_capabilities` tools. */
+/** SDK `registerFull` — register the AC2 signing/capabilities/x402 tools. */
 function registerFull(api: OpenClawApi): void {
   setActive(api);
   try {
     if (typeof api.registerTool === 'function') {
       api.registerTool(buildSignTool());
       api.registerTool(buildCapabilitiesTool());
+      api.registerTool(buildX402FetchTool());
     }
   } catch (err) {
     console.error(`[${PLUGIN_ID}] registerTool failed: ${err}`);

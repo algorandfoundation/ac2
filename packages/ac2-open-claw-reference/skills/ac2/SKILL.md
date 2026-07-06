@@ -15,16 +15,16 @@ metadata:
 
 AC2 connects you to the **user's wallet** over a live WebRTC data channel hosted by the `ac2` channel. The user is the human on the other end. The wallet is the key custodian: **you never see or hold private keys.** You ask the wallet to sign; the user approves each request in-wallet, then the signature comes back to you.
 
-This is the **upstream reference** plugin. It exposes only the core methods AC2 itself defines:
+This is the **upstream reference** plugin. It exposes the core AC2 methods plus an x402 convenience tool that uses those same signing requests:
 
 - one channel: `ac2`
-- two tools: `ac2_capabilities`, `ac2_sign`
+- three tools: `ac2_capabilities`, `ac2_sign`, `ac2_x402_fetch`
 
 Chain-specific verifier tools (`ac2_verify_*`) and richer wallet introspection live in downstream wallet plugins. If you have them available, prefer them. If you don't, this skill is enough.
 
 ## The connection comes first
 
-`ac2_sign` cannot pair on its own. It runs through the `ac2` channel's already-paired DataChannel and rejects with `{ status: "rejected", reason: "no_active_session" }` if no channel is connected. If you see that result:
+`ac2_sign` and `ac2_x402_fetch` cannot pair on their own. They run through the `ac2` channel's already-paired DataChannel and reject with `{ status: "rejected", reason: "no_active_session" }` if no channel is connected. If you see that result:
 
 1. Tell the user to open and connect their AC2 Controller / wallet on the `ac2` channel.
 2. Do **not** retry in a loop. Stop and wait for the user.
@@ -93,14 +93,39 @@ Concretely:
 3. On approval you get back a base64 `signature` plus the signer's `publicKey` (and optionally `address`/`keyType`).
 4. On decline you get `{ status: "rejected", reason }` — treat that as a **normal outcome**, not an error. Tell the user what was declined.
 
+## Paid HTTP with x402 on Algorand
+
+Use **`ac2_x402_fetch`** when the user asks you to call a paid API/resource that uses x402, or when a normal fetch returns an x402 `402 Payment Required` response.
+
+If the user asks you to fetch the weather and does not provide a URL, use `https://example.x402.goplausible.xyz/avm/weather`.
+
+The tool:
+
+- Performs the x402 HTTP negotiation.
+- Selects only `exact` Algorand payment requirements that pass the configured/per-call spend policy.
+- Builds the Algorand payment transaction group through the x402 AVM client.
+- Asks the paired wallet to approve the required Algorand transaction signing over AC2.
+- Retries the resource with `PAYMENT-SIGNATURE` and returns the HTTP/payment result.
+
+You do **not** need to call `ac2_sign` manually for x402 payments. Prefer `ac2_x402_fetch` so the spend limit, network/asset/payee allow-lists, signing description, and signed transaction packaging stay consistent.
+
+Important parameters:
+
+- `url` — absolute HTTP(S) URL.
+- `max_amount_atomic` — maximum asset atomic units for this call. Omit to use plugin config.
+- `allowed_networks`, `allowed_assets`, `allowed_pay_to` — optional per-call policy gates.
+- `network_preferences` — preferred Algorand networks when a resource offers more than one.
+
+Treat `{ status: "rejected" }` as a normal user decision. Do not retry the same payment after a rejection.
+
 ## `sig_hint` catalog (what the core reference defines)
 
 `sig_hint` selects the curve the wallet uses. **Always set it explicitly.** Omitting it falls back to plain Ed25519 over raw bytes.
 
 | `sig_hint`      | `key_type` | Use                                            |
 | --------------- | ---------- | ---------------------------------------------- |
-| `raw-ed25519`   | `identity` | Ed25519 signature over the raw payload bytes   |
-| `raw-secp256k1` | `identity` | secp256k1 signature over the raw payload bytes |
+| `raw-ed25519`   | `account` or `identity` | Ed25519 signature over the raw payload bytes   |
+| `raw-secp256k1` | `account` or `identity` | secp256k1 signature over the raw payload bytes |
 
 `key_type` defaults to `account`; use `identity` for DID-bound keys that never custody funds (sign-in, attestations, mandates).
 
@@ -139,7 +164,7 @@ These markdowns ship alongside this `SKILL.md` in the same directory. OpenClaw o
 
 The companion files above are not just reference — they are **the shape you are expected to take**. Treat them as your operating contract:
 
-1. **Load them before acting.** On the first AC2-related turn of a conversation (any call to `ac2_capabilities` / `ac2_sign`, or any user request that involves signing, identity, wallets, or pairing), read every companion file you have not already read this session. If your host environment exposes filesystem tools (Claude Code, OpenClaw's `read_file`, etc.), open them by name from this directory; if it does not, ask the host/user to surface them. Do **not** proceed on stale assumptions when the files are available.
+1. **Load them before acting.** On the first AC2-related turn of a conversation (any call to `ac2_capabilities`, `ac2_sign`, or `ac2_x402_fetch`, or any user request that involves signing, identity, wallets, x402 payments, or pairing), read every companion file you have not already read this session. If your host environment exposes filesystem tools (Claude Code, OpenClaw's `read_file`, etc.), open them by name from this directory; if it does not, ask the host/user to surface them. Do **not** proceed on stale assumptions when the files are available.
 2. **Adopt their voice and constraints.** Your tone, refusals, descriptions, error explanations, and the fields you populate on every AC2 envelope MUST conform to `SOUL.md` and `AGENTS.md`. When a companion file states a MUST / MUST NOT, treat it as binding on your next action, not as advice.
 3. **Resolve conflicts by precedence.** If two companion files disagree: `SOUL.md` > `IDENTITY.md` > `AGENTS.md` ≡ `CLAUDE.md` > `MEMORY.md` > `USER.md` > `SKILL.md`. If a runtime value from `ac2_capabilities` disagrees with `IDENTITY.md`, the **runtime value wins** for facts (what is true right now) and the file wins for **policy** (what MUST be true).
 

@@ -77,6 +77,9 @@ importers:
       '@algorandfoundation/ac2-sdk':
         specifier: 1.0.0-canary.1
         version: 1.0.0-canary.1
+      '@algorandfoundation/algokit-utils':
+        specifier: 10.0.0-beta.4
+        version: 10.0.0-beta.4
       '@algorandfoundation/keystore':
         specifier: 1.0.0-canary.16
         version: 1.0.0-canary.16(@tanstack/store@0.9.3)(before-after-hook@4.0.0)
@@ -92,6 +95,15 @@ importers:
       '@tanstack/store':
         specifier: ^0.9.1
         version: 0.9.3
+      '@x402/avm':
+        specifier: ^2.11.0
+        version: 2.17.0
+      '@x402/core':
+        specifier: ^2.11.0
+        version: 2.17.0
+      '@x402/fetch':
+        specifier: ^2.11.0
+        version: 2.17.0
       node-datachannel:
         specifier: ^0.32.3
         version: 0.32.3
@@ -170,6 +182,10 @@ packages:
 
   '@algorandfoundation/ac2-sdk@1.0.0-canary.1':
     resolution: {integrity: sha512-OYP/TpCWTLpcjWtG9+RLxMhCKFb7mQwmF2KgI/Kv/7F5vILZoSoE8jAnrbkRfjo4zylvhmI7bb4G92AGzlZM1A==}
+
+  '@algorandfoundation/algokit-utils@10.0.0-alpha.46':
+    resolution: {integrity: sha512-Lx56ET6RmrDCFGwx6qyIr7YRX3Q3MyKgqkNeumLkFHXVkqMnXnK1aLeEbV59EOK8UHQ5UPJofSj1zvRMm9Du7w==}
+    engines: {node: '>=20.0'}
 
   '@algorandfoundation/algokit-utils@10.0.0-beta.4':
     resolution: {integrity: sha512-+X06PW7w2zWJWPp91pHoLMQizrq7E33Y1Mj/Hz/hkLiASXWwMKVX5QsQCbvsMYk+guqayCwB6782VngLR8d1RA==}
@@ -1188,6 +1204,15 @@ packages:
 
   '@vitest/utils@3.2.6':
     resolution: {integrity: sha512-lI23nIs4bnT3T8NIoh+vFaz5s2/DdP0Jgt2jxwgWljvwn82cLJtyi/If+fjFyoLMGIOz0U/fKvWE0d4jsNQEfg==}
+
+  '@x402/avm@2.17.0':
+    resolution: {integrity: sha512-NSsnVOVGT89ufsqllEJX5fLosW5nVUec+Y4VA4H5qtwjdxAHVdEE/xS5Vmg7FzKBsIwUB9pLLqncewXTX5rkPg==}
+
+  '@x402/core@2.17.0':
+    resolution: {integrity: sha512-BBooe9Kewl5KLaKadElFwhZzZ+n/X/m2djzGtc7OY51D8fk2vHTVvDZtBFEJYdJxtQoUZMKX73hew0ss81FENQ==}
+
+  '@x402/fetch@2.17.0':
+    resolution: {integrity: sha512-iy6ar1JTgs4gzdlc2q2Z7nuL5keBkQhoD4v5niVlTwLoivVvHnAA0p/wK5WTWRrJ1b+el8pthkjFS0Jc3nMIIg==}
 
   abort-controller@3.0.0:
     resolution: {integrity: sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==}
@@ -3536,6 +3561,9 @@ packages:
     peerDependencies:
       zod: ^3.25.28 || ^4
 
+  zod@3.25.76:
+    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
+
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
@@ -3564,6 +3592,20 @@ snapshots:
   '@algorandfoundation/ac2-sdk@1.0.0-canary.1':
     dependencies:
       ajv: 8.20.0
+
+  '@algorandfoundation/algokit-utils@10.0.0-alpha.46':
+    dependencies:
+      '@algorandfoundation/xhd-wallet-api': 2.0.0-canary.1
+      '@noble/curves': 2.2.0
+      '@noble/ed25519': 3.1.0
+      '@noble/hashes': 2.2.0
+      algorand-msgpack: 1.1.0
+      buffer: 6.0.3
+      dotenv: 16.6.1
+      hi-base32: 0.5.1
+      json-bigint: 1.0.0
+      tweetnacl: 1.0.3
+      vlq: 2.0.4
 
   '@algorandfoundation/algokit-utils@10.0.0-beta.4':
     dependencies:
@@ -3611,7 +3653,7 @@ snapshots:
     dependencies:
       '@noble/ciphers': 2.2.0
       '@noble/curves': 2.2.0
-      '@noble/hashes': 2.0.1
+      '@noble/hashes': 2.2.0
       ajv: 8.20.0
       algo-msgpack-with-bigint: 2.1.1
       bn.js: 5.2.3
@@ -4418,6 +4460,19 @@ snapshots:
       '@vitest/pretty-format': 3.2.6
       loupe: 3.2.1
       tinyrainbow: 2.0.0
+
+  '@x402/avm@2.17.0':
+    dependencies:
+      '@algorandfoundation/algokit-utils': 10.0.0-alpha.46
+      '@x402/core': 2.17.0
+
+  '@x402/core@2.17.0':
+    dependencies:
+      zod: 3.25.76
+
+  '@x402/fetch@2.17.0':
+    dependencies:
+      '@x402/core': 2.17.0
 
   abort-controller@3.0.0:
     dependencies:
@@ -6779,5 +6834,7 @@ snapshots:
   zod-to-json-schema@3.25.2(zod@4.4.3):
     dependencies:
       zod: 4.4.3
+
+  zod@3.25.76: {}
 
   zod@4.4.3: {}

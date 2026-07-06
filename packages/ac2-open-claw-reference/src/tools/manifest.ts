@@ -1,4 +1,4 @@
-/** Tool-plugin manifest (`defineToolPlugin`): `ac2_sign` + `ac2_capabilities`. */
+/** Tool-plugin manifest (`defineToolPlugin`): AC2 signing, capabilities, and x402 fetch. */
 
 import { Type } from '@sinclair/typebox';
 import type { SigningRequestBody } from '@algorandfoundation/ac2-sdk/schema';
@@ -7,12 +7,13 @@ import type { SigningRequestBody } from '@algorandfoundation/ac2-sdk/schema';
 import { ConfigSchema, defineToolPlugin } from '../session/contracts.js';
 import { NoActiveSessionError } from '../session/manager.js';
 import { capabilitiesFlow, signFlow } from '../session/flows.js';
+import { normalizeX402FetchParams, x402FetchFlow } from '../x402/fetch-flow.js';
 
 const plugin = defineToolPlugin({
   id: 'ac2-open-claw-reference',
   name: 'AC2 Reference',
   description:
-    'Reference OpenClaw plugin for the AC2 protocol. The `ac2` channel owns pairing over Liquid Auth + WebRTC; the `ac2_sign` and `ac2_capabilities` tools route through that channel.',
+    'Reference OpenClaw plugin for the AC2 protocol. The `ac2` channel owns pairing over Liquid Auth + WebRTC; signing and x402 paid fetch tools route through that channel.',
   configSchema: ConfigSchema,
   tools: (tool) => [
     tool({
@@ -29,6 +30,12 @@ const plugin = defineToolPlugin({
           description:
             'Base64-encoded raw bytes the wallet will sign. The core reference signs these bytes as-is under the selected curve; downstream plugins may apply additional encodings based on `sig_hint`.',
         }),
+        schema: Type.Optional(
+          Type.String({
+            description:
+              'Optional schema identifier for the payload. Useful for wallet UX and domain-specific signing requests such as x402 Algorand payment bytes.',
+          }),
+        ),
         sig_hint: Type.Optional(
           Type.String({
             description:
@@ -61,6 +68,7 @@ const plugin = defineToolPlugin({
             {
               description: params.description ?? '',
               payload_base64: params.payload_base64 ?? '',
+              ...(params.schema !== undefined ? { schema: params.schema } : {}),
               ...(params.sig_hint !== undefined
                 ? { sig_hint: params.sig_hint as SigningRequestBody['sig_hint'] }
                 : {}),
@@ -106,6 +114,86 @@ const plugin = defineToolPlugin({
       }),
       async execute(_params, config, _context) {
         return capabilitiesFlow(config);
+      },
+    }),
+    tool({
+      name: 'ac2_x402_fetch',
+      label: 'AC2 x402 Fetch',
+      description:
+        'Fetch an HTTP(S) resource that may require x402 payment. When the server returns 402, this tool uses x402 exact payments on Algorand, asks the paired wallet to approve the required Algorand transaction signing over AC2, retries with PAYMENT-SIGNATURE, and returns the HTTP/payment result. Requires an active `ac2` channel.',
+      parameters: Type.Object({
+        url: Type.String({
+          description: 'Absolute HTTP(S) URL to fetch.',
+        }),
+        method: Type.Optional(
+          Type.Union(
+            [
+              Type.Literal('GET'),
+              Type.Literal('POST'),
+              Type.Literal('PUT'),
+              Type.Literal('PATCH'),
+              Type.Literal('DELETE'),
+            ],
+            {
+              description: 'HTTP method. Defaults to GET unless a body is supplied.',
+            },
+          ),
+        ),
+        headers: Type.Optional(
+          Type.Record(Type.String(), Type.String(), {
+            description: 'Optional HTTP headers for the request.',
+          }),
+        ),
+        body: Type.Optional(
+          Type.String({
+            description: 'Optional UTF-8 request body. Do not pass with body_base64.',
+          }),
+        ),
+        body_base64: Type.Optional(
+          Type.String({
+            description: 'Optional base64 request body for binary payloads. Do not pass with body.',
+          }),
+        ),
+        max_amount_atomic: Type.Optional(
+          Type.String({
+            description:
+              'Maximum payment amount in the asset atomic units. Defaults to plugin config x402MaxAmountAtomic or 1000000.',
+          }),
+        ),
+        allowed_networks: Type.Optional(
+          Type.Array(Type.String(), {
+            description:
+              'Per-call allow-list of x402 Algorand CAIP-2 networks. Defaults to plugin config or Algorand TestNet/MainNet.',
+          }),
+        ),
+        allowed_assets: Type.Optional(
+          Type.Array(Type.String(), {
+            description:
+              'Per-call allow-list of x402 assets. Defaults to plugin config or Algorand USDC.',
+          }),
+        ),
+        allowed_pay_to: Type.Optional(
+          Type.Array(Type.String(), {
+            description: 'Per-call allow-list of recipient Algorand addresses.',
+          }),
+        ),
+        network_preferences: Type.Optional(
+          Type.Array(Type.String(), {
+            description:
+              'Preferred x402 Algorand networks when a resource offers several accepted options.',
+          }),
+        ),
+        include_response_body: Type.Optional(
+          Type.Boolean({
+            description:
+              'Whether to include the response body text/JSON in the tool result. Defaults to true.',
+            default: true,
+          }),
+        ),
+      }),
+      async execute(params, config, context) {
+        context.signal?.throwIfAborted();
+        return x402FetchFlow(normalizeX402FetchParams(params), config, {}, context);
       },
     }),
   ],

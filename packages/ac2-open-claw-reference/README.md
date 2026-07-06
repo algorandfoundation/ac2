@@ -1,9 +1,9 @@
 # `@algorandfoundation/ac2-open-claw-reference`
 
 Reference [OpenClaw](https://docs.openclaw.ai/) plugin for the **AC2**
-protocol. It implements both the tool and channel interfaces — `ac2_sign`
-/ `ac2_capabilities` tools plus the `ac2` channel — over Liquid Auth +
-WebRTC via [`@algorandfoundation/ac2-sdk`](../ac2-sdk).
+protocol. It implements both the tool and channel interfaces — `ac2_sign`,
+`ac2_capabilities`, and `ac2_x402_fetch` tools plus the `ac2` channel — over
+Liquid Auth + WebRTC via [`@algorandfoundation/ac2-sdk`](../ac2-sdk).
 
 ## What AC2 contributes to OpenClaw
 
@@ -12,6 +12,7 @@ WebRTC via [`@algorandfoundation/ac2-sdk`](../ac2-sdk).
 | Channel `ac2`           | Owns Liquid Auth + WebRTC pairing and the active session.                  |
 | Tool `ac2_capabilities` | Agent DID + `sig_hint` catalog.                                            |
 | Tool `ac2_sign`         | Routes a `SigningRequest` to the wallet over the active channel.           |
+| Tool `ac2_x402_fetch`   | Pays x402 exact Algorand resources using wallet-approved AC2 signing.      |
 | Setup entry             | `openclaw ac2 setup` writes the channel/tools wiring into `openclaw.json`. |
 
 **Channels own the lifecycle; tools are pure consumers.** The `ac2`
@@ -115,6 +116,7 @@ Once installed, `openclaw.json` will contain an entry like:
     config: {
       liquidAuthServer: 'https://debug.liquidauth.com',
       defaultTimeoutMs: 120000,
+      x402MaxAmountAtomic: '1000000',
     },
   },
 }
@@ -126,13 +128,16 @@ Once installed, `openclaw.json` will contain an entry like:
 
 In a conversation, enable the `ac2` channel, scan the QR with your AC2
 Controller / wallet, then the model can call `ac2_capabilities`
-followed by `ac2_sign`. See
-[DISCOVERY §3.2](https://github.com/algorandfoundation/ac2-sdk) for the
-request/response shapes.
+followed by `ac2_sign` for raw signing or `ac2_x402_fetch` for paid HTTP
+resources that advertise x402 exact payments on Algorand. `ac2_x402_fetch`
+does the x402 402-response negotiation, asks the wallet to approve the
+Algorand payment transaction signing over AC2, retries with
+`PAYMENT-SIGNATURE`, and returns the HTTP/payment result.
 
 ## Scope
 
 - ✅ Liquid Auth pairing, AC2 signing trio, `thid`-bound responses,
-  channel-owned sessions, wallet-issued agent identity.
+  channel-owned sessions, wallet-issued agent identity, x402 exact Algorand
+  paid fetch via wallet-approved signing.
 - ❌ Chain-specific verifiers, wallet introspection, holding user keys,
   a bundled Node WebRTC stack — these belong in downstream plugins.

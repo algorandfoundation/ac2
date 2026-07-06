@@ -43,7 +43,22 @@ export {
   type Ac2OutboundSessionRoute,
 } from './channel/index.js';
 export { buildAc2Command } from './cli/index.js';
-export { buildSignTool, buildCapabilitiesTool } from './tools/index.js';
+export { buildSignTool, buildCapabilitiesTool, buildX402FetchTool } from './tools/index.js';
+export {
+  X402_ALGORAND_SIGNING_SCHEMA,
+  X402ControllerAddressError,
+  X402SigningRejectedError,
+  classifyX402SigningError,
+  controllerDidToAlgorandAddress,
+  createAc2AvmSigner,
+  normalizeX402FetchParams,
+  x402FetchFlow,
+  type Ac2AvmSignerOptions,
+  type X402FetchParams,
+  type X402FetchResult,
+  type X402PaymentContext,
+  type X402PaymentSelection,
+} from './x402/index.js';
 export {
   LiquidAuthChannelProvider,
   renderPairingQr,

@@ -10,8 +10,17 @@ import {
   isSigningRequest,
   type AC2BaseMessage as Ac2Message,
   type AC2KeyRequest as KeyRequestMessage,
+  type AC2SigningRequest as SigningRequestMessage,
 } from '@algorandfoundation/ac2-sdk/schema';
 import type { Ac2Transport } from '@algorandfoundation/ac2-sdk/transport';
+import { Address } from '@algorandfoundation/algokit-utils/common';
+import {
+  bytesForSigning,
+  decodeSignedTransaction,
+  encodeTransactionRaw,
+  Transaction,
+  TransactionType,
+} from '@algorandfoundation/algokit-utils/transact';
 import {
   signFlow,
   capabilitiesFlow,
@@ -26,7 +35,11 @@ import {
   AC2_MEDIA_SOURCE_PARAMS,
   getToolPluginMetadata,
   pluginManifest as plugin,
+  createAc2AvmSigner,
+  X402_ALGORAND_SIGNING_SCHEMA,
 } from '../src/index.js';
+import { describeX402Result } from '../src/tools/index.js';
+import { publicKeyToDidKey } from '../src/identity/did.js';
 
 /**
  * Stub controller DID used by the in-memory provider — the wallet's
@@ -133,6 +146,7 @@ describe('ac2-open-claw-reference plugin', () => {
     const names = (metadata?.tools ?? []).map((t) => t.name);
     expect(names).toContain('ac2_sign');
     expect(names).toContain('ac2_capabilities');
+    expect(names).toContain('ac2_x402_fetch');
   });
 
   it('exposes the ac2 channel via the channel object', () => {
@@ -199,7 +213,9 @@ describe('ac2-open-claw-reference plugin', () => {
 
   describe('signFlow through an active channel', () => {
     it('round-trips a SigningRequest/Response across the channel session', async () => {
+      let observedSchema: string | undefined;
       const provider = makeClient((req, peer) => {
+        observedSchema = (req as SigningRequestMessage).body.schema;
         peer.send(
           JSON.stringify(
             buildSigningResponse({
@@ -221,6 +237,7 @@ describe('ac2-open-claw-reference plugin', () => {
           {
             description: 'Sign test payload',
             payload_base64: Buffer.from('hello').toString('base64'),
+            schema: 'test/schema',
             sig_hint: 'raw-ed25519',
           },
           { defaultTimeoutMs: 2_000 },
@@ -232,6 +249,7 @@ describe('ac2-open-claw-reference plugin', () => {
           expect(outcome.public_key).toBe(Buffer.from('pk').toString('base64'));
           expect(outcome.key_type).toBe('account');
         }
+        expect(observedSchema).toBe('test/schema');
       } finally {
         await teardown();
       }
@@ -292,6 +310,185 @@ describe('ac2-open-claw-reference plugin', () => {
       } finally {
         await teardown();
       }
+    });
+  });
+
+  describe('x402 Algorand signing adapter', () => {
+    it('wraps wallet-approved Ed25519 signatures into signed Algorand transactions', async () => {
+      const sender = new Address(new Uint8Array(32).fill(1));
+      const receiver = new Address(new Uint8Array(32).fill(2));
+      const txn = new Transaction({
+        type: TransactionType.AssetTransfer,
+        sender,
+        fee: 1_000n,
+        firstValid: 1n,
+        lastValid: 1_000n,
+        genesisHash: new Uint8Array(32).fill(3),
+        genesisId: 'testnet-v1.0',
+        assetTransfer: {
+          assetId: 10_458_941n,
+          amount: 123n,
+          receiver,
+        },
+      });
+      const unsignedTxn = encodeTransactionRaw(txn);
+      const expectedPayload = Buffer.from(bytesForSigning.transaction(txn)).toString('base64');
+      const rawUnsignedPayload = Buffer.from(unsignedTxn).toString('base64');
+      const signature = new Uint8Array(64).fill(7);
+      let observedRequest: any;
+
+      const manager = new SessionManager();
+      manager.setActive({
+        transport: {} as never,
+        client: {
+          requestSignature: async (args: any) => {
+            observedRequest = args;
+            return {
+              kind: 'response',
+              message: {
+                thid: 'x402-thread',
+                body: {
+                  signature: Buffer.from(signature).toString('base64'),
+                  public_key: Buffer.from(sender.publicKey).toString('base64'),
+                  address: sender.toString(),
+                  key_type: 'account',
+                },
+              },
+            };
+          },
+        } as never,
+        controllerDid: publicKeyToDidKey(sender.publicKey),
+        agentDid: STUB_AGENT_DID,
+      });
+
+      const signer = createAc2AvmSigner({
+        config: { defaultTimeoutMs: 2_000 },
+        deps: { manager },
+        getPaymentContext: () => ({
+          requirements: {
+            scheme: 'exact',
+            network: 'algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=',
+            asset: '10458941',
+            amount: '123',
+            payTo: receiver.toString(),
+            maxTimeoutSeconds: 60,
+            extra: {},
+          },
+        }),
+      });
+
+      expect(signer.address).toBe(sender.toString());
+      const signed = await signer.signTransactions([unsignedTxn], [0]);
+      expect(signed).toHaveLength(1);
+      expect(signed[0]).toBeInstanceOf(Uint8Array);
+
+      const decoded = decodeSignedTransaction(signed[0]!);
+      expect(decoded.txn.txId()).toBe(txn.txId());
+      expect(Buffer.from(decoded.sig ?? new Uint8Array()).toString('base64')).toBe(
+        Buffer.from(signature).toString('base64'),
+      );
+      expect(observedRequest.body.schema).toBe(X402_ALGORAND_SIGNING_SCHEMA);
+      expect(observedRequest.body.sig_hint).toBe('raw-ed25519');
+      expect(observedRequest.body.key_type).toBe('account');
+      expect(observedRequest.body.payload).toBe(expectedPayload);
+      expect(observedRequest.body.payload).not.toBe(rawUnsignedPayload);
+      expect(observedRequest.body.description).toContain('x402 exact payment');
+      expect(observedRequest.body.description).toContain(receiver.toString());
+    });
+
+    it('uses the linked AC2 wallet address as the x402 payment sender', async () => {
+      const sender = new Address(new Uint8Array(32).fill(4));
+      const receiver = new Address(new Uint8Array(32).fill(5));
+      const txn = new Transaction({
+        type: TransactionType.AssetTransfer,
+        sender,
+        fee: 1_000n,
+        firstValid: 1n,
+        lastValid: 1_000n,
+        genesisHash: new Uint8Array(32).fill(3),
+        genesisId: 'testnet-v1.0',
+        assetTransfer: {
+          assetId: 10_458_941n,
+          amount: 1_000n,
+          receiver,
+        },
+      });
+      const signature = new Uint8Array(64).fill(8);
+      let observedRequest: any;
+
+      const manager = new SessionManager();
+      manager.setActive({
+        transport: {} as never,
+        client: {
+          requestSignature: async (args: any) => {
+            observedRequest = args;
+            return {
+              kind: 'response',
+              message: {
+                thid: 'x402-wallet-address-thread',
+                body: {
+                  signature: Buffer.from(signature).toString('base64'),
+                  public_key: Buffer.from(sender.publicKey).toString('base64'),
+                  address: sender.toString(),
+                  key_type: 'account',
+                },
+              },
+            };
+          },
+        } as never,
+        controllerDid: STUB_CONTROLLER_DID,
+        walletAddress: sender.toString(),
+        agentDid: STUB_AGENT_DID,
+      });
+
+      const signer = createAc2AvmSigner({
+        config: { defaultTimeoutMs: 2_000 },
+        deps: { manager },
+      });
+
+      expect(signer.address).toBe(sender.toString());
+      const signed = await signer.signTransactions([encodeTransactionRaw(txn)], [0]);
+      expect(signed[0]).toBeInstanceOf(Uint8Array);
+      expect(observedRequest.body.description).toContain(`as ${sender.toString()}`);
+      expect(observedRequest.body.description).toContain(`Sender: ${sender.toString()}`);
+    });
+  });
+
+  describe('x402 fetch tool response rendering', () => {
+    it('includes successful JSON response bodies in visible tool content', () => {
+      const text = describeX402Result({
+        status: 'paid',
+        url: 'https://example.test/weather',
+        http: {
+          status: 200,
+          ok: true,
+          statusText: 'OK',
+          contentType: 'application/json',
+        },
+        bodyText: '{"temperature":72}',
+        bodyJson: { temperature: 72 },
+      });
+
+      expect(text).toContain('x402 fetch succeeded with HTTP 200');
+      expect(text).toContain('Response body');
+      expect(text).toContain('"temperature": 72');
+    });
+
+    it('includes successful text response bodies in visible tool content', () => {
+      const text = describeX402Result({
+        status: 'paid',
+        url: 'https://example.test/plain',
+        http: {
+          status: 200,
+          ok: true,
+          statusText: 'OK',
+          contentType: 'text/plain',
+        },
+        bodyText: 'paid response body',
+      });
+
+      expect(text).toContain('```text');
+      expect(text).toContain('paid response body');
     });
   });
 

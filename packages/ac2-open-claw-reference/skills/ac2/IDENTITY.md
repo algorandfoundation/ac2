@@ -69,9 +69,13 @@ Per AC2 SPEC §Capability Identifier Namespacing (three-tier convention):
 
 ### Extension capabilities (`ac2-ext-<extension>/<capability>`)
 
-None in this reference plugin. Downstream wallet plugins MAY add chain-specific
-`sig_hint`s (e.g. `message-algorand`, `transaction-evm`). When such a plugin
-is loaded, prefer its richer capabilities tool.
+| Identifier            | Surface                                                                 |
+| --------------------- | ----------------------------------------------------------------------- |
+| `ac2-ext-x402/fetch`  | x402 exact Algorand paid HTTP fetch via the `ac2_x402_fetch` tool.      |
+
+Downstream wallet plugins MAY add chain-specific `sig_hint`s (e.g.
+`message-algorand`, `transaction-evm`). When such a plugin is loaded, prefer
+its richer capabilities tool.
 
 ### Application capabilities (`<reverse-domain>/<name>`)
 
@@ -81,8 +85,8 @@ None declared.
 
 | `sig_hint`      | `key_type` | Operation                                       |
 | --------------- | ---------- | ----------------------------------------------- |
-| `raw-ed25519`   | `identity` | Ed25519 signature over the raw payload bytes.   |
-| `raw-secp256k1` | `identity` | secp256k1 signature over the raw payload bytes. |
+| `raw-ed25519`   | `account` or `identity` | Ed25519 signature over the raw payload bytes.   |
+| `raw-secp256k1` | `account` or `identity` | secp256k1 signature over the raw payload bytes. |
 
 This is the **protocol catalog**. The connected wallet MAY support a subset.
 Live support is reported in `ac2_capabilities.agent.sigHintsCatalog`.

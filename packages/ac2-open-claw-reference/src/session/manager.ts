@@ -12,6 +12,8 @@ export interface ActiveSession {
   readonly agentDid: string;
   /** Liquid Auth pairing id (`requestId`) for this connection. */
   readonly requestId?: string;
+  /** Raw Algorand wallet account from the Liquid Auth link response. */
+  readonly walletAddress?: string;
   /** True once the wallet granted the agent an identity (bootstrap `KeyRequest`). */
   readonly identityGranted?: boolean;
 }
