@@ -47,7 +47,7 @@ agent never touches the user's account keys or passkeys.
 #### From the npm registry (canary)
 
 ```bash
-openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.8
+openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.9
 
 # openclaw plugins install runs `npm install --ignore-scripts`, so native
 # addons are not built automatically. Rebuild them from the plugin project dir:

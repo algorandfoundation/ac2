@@ -20,49 +20,56 @@ import { normalizeDidKey } from '../identity/did.js';
 // @ts-ignore - compiled JS in node_modules
 import { SignalClient } from '@algorandfoundation/liquid-client/signal';
 import { io as createSocketIoClient } from 'socket.io-client';
-// libdatachannel: modern SCTP/DTLS Node WebRTC backend, interops with react-native-webrtc.
-// @ts-ignore - polyfill ships its own types
-import * as ndc from 'node-datachannel/polyfill';
 
-// Subclass node-datachannel's RTCPeerConnection to queue remote ICE candidates
-// that arrive via trickle before setRemoteDescription completes. The Liquid Auth
-// SignalClient can race between trickling candidates and the offer/answer exchange;
-// node-datachannel is stricter than browser WebRTC and throws immediately
-// ("Got a remote candidate without ICE transport") instead of buffering silently.
-class _Ac2RTCPeerConnection extends (ndc as any).RTCPeerConnection {
-  private _ac2PendingCandidates: any[] = [];
-  private _ac2RemoteDescReady = false;
+let webRtcPolyfillReady: Promise<void> | undefined;
 
-  async setRemoteDescription(desc: any): Promise<void> {
-    this._ac2RemoteDescReady = false;
-    await super.setRemoteDescription(desc);
-    this._ac2RemoteDescReady = true;
-    const queued = this._ac2PendingCandidates.splice(0);
-    for (const c of queued) {
-      try {
-        await super.addIceCandidate(c);
-      } catch {
-        // Stale or invalid candidate after drain — safe to ignore.
+async function ensureWebRtcPolyfill(): Promise<void> {
+  if (typeof (globalThis as any).RTCPeerConnection !== 'undefined') return;
+  webRtcPolyfillReady ??= (async () => {
+    // libdatachannel: modern SCTP/DTLS Node WebRTC backend, interops with react-native-webrtc.
+    // Import lazily so plugin discovery/CLI startup does not require the native binary.
+    const ndc = await import('node-datachannel/polyfill');
+
+    // Subclass node-datachannel's RTCPeerConnection to queue remote ICE candidates
+    // that arrive via trickle before setRemoteDescription completes. The Liquid Auth
+    // SignalClient can race between trickling candidates and the offer/answer exchange;
+    // node-datachannel is stricter than browser WebRTC and throws immediately
+    // ("Got a remote candidate without ICE transport") instead of buffering silently.
+    class Ac2RTCPeerConnection extends (ndc as any).RTCPeerConnection {
+      private _ac2PendingCandidates: any[] = [];
+      private _ac2RemoteDescReady = false;
+
+      async setRemoteDescription(desc: any): Promise<void> {
+        this._ac2RemoteDescReady = false;
+        await super.setRemoteDescription(desc);
+        this._ac2RemoteDescReady = true;
+        const queued = this._ac2PendingCandidates.splice(0);
+        for (const c of queued) {
+          try {
+            await super.addIceCandidate(c);
+          } catch {
+            // Stale or invalid candidate after drain — safe to ignore.
+          }
+        }
+      }
+
+      async addIceCandidate(candidate: any): Promise<void> {
+        if (!this._ac2RemoteDescReady) {
+          this._ac2PendingCandidates.push(candidate);
+          return;
+        }
+        return super.addIceCandidate(candidate);
       }
     }
-  }
 
-  async addIceCandidate(candidate: any): Promise<void> {
-    if (!this._ac2RemoteDescReady) {
-      this._ac2PendingCandidates.push(candidate);
-      return;
+    (globalThis as any).RTCPeerConnection = Ac2RTCPeerConnection;
+    (globalThis as any).RTCIceCandidate = (ndc as any).RTCIceCandidate;
+    (globalThis as any).RTCSessionDescription = (ndc as any).RTCSessionDescription;
+    if ((ndc as any).RTCDataChannel) {
+      (globalThis as any).RTCDataChannel = (ndc as any).RTCDataChannel;
     }
-    return super.addIceCandidate(candidate);
-  }
-}
-
-if (typeof (globalThis as any).RTCPeerConnection === 'undefined') {
-  (globalThis as any).RTCPeerConnection = _Ac2RTCPeerConnection;
-  (globalThis as any).RTCIceCandidate = (ndc as any).RTCIceCandidate;
-  (globalThis as any).RTCSessionDescription = (ndc as any).RTCSessionDescription;
-  if ((ndc as any).RTCDataChannel) {
-    (globalThis as any).RTCDataChannel = (ndc as any).RTCDataChannel;
-  }
+  })();
+  await webRtcPolyfillReady;
 }
 
 /** Render a pairing payload to the terminal (QR + raw string). */
@@ -117,6 +124,8 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
   constructor(private readonly defaults: LiquidAuthChannelProviderOptions = {}) {}
 
   async startPairing(_opts: Ac2StartPairingOptions = {}): Promise<Ac2PairingHandle> {
+    await ensureWebRtcPolyfill();
+
     const origin = this.defaults.origin ?? 'https://debug.liquidauth.com';
     const requestId = this.defaults.requestId ?? SignalClient.generateRequestId();
     const includeStream = this.defaults.includeStreamChannel ?? true;
