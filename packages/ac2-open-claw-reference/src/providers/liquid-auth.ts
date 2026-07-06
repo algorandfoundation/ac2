@@ -24,8 +24,39 @@ import { io as createSocketIoClient } from 'socket.io-client';
 // @ts-ignore - polyfill ships its own types
 import * as ndc from 'node-datachannel/polyfill';
 
+// Subclass node-datachannel's RTCPeerConnection to queue remote ICE candidates
+// that arrive via trickle before setRemoteDescription completes. The Liquid Auth
+// SignalClient can race between trickling candidates and the offer/answer exchange;
+// node-datachannel is stricter than browser WebRTC and throws immediately
+// ("Got a remote candidate without ICE transport") instead of buffering silently.
+class _Ac2RTCPeerConnection extends (ndc as any).RTCPeerConnection {
+  private _ac2PendingCandidates: any[] = [];
+  private _ac2RemoteDescReady = false;
+
+  async setRemoteDescription(desc: any): Promise<void> {
+    await super.setRemoteDescription(desc);
+    this._ac2RemoteDescReady = true;
+    const queued = this._ac2PendingCandidates.splice(0);
+    for (const c of queued) {
+      try {
+        await super.addIceCandidate(c);
+      } catch {
+        // Stale or invalid candidate after drain — safe to ignore.
+      }
+    }
+  }
+
+  async addIceCandidate(candidate: any): Promise<void> {
+    if (!this._ac2RemoteDescReady) {
+      this._ac2PendingCandidates.push(candidate);
+      return;
+    }
+    return super.addIceCandidate(candidate);
+  }
+}
+
 if (typeof (globalThis as any).RTCPeerConnection === 'undefined') {
-  (globalThis as any).RTCPeerConnection = (ndc as any).RTCPeerConnection;
+  (globalThis as any).RTCPeerConnection = _Ac2RTCPeerConnection;
   (globalThis as any).RTCIceCandidate = (ndc as any).RTCIceCandidate;
   (globalThis as any).RTCSessionDescription = (ndc as any).RTCSessionDescription;
   if ((ndc as any).RTCDataChannel) {
@@ -82,7 +113,7 @@ export interface LiquidAuthChannelProviderOptions {
 }
 
 export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
-  constructor(private readonly defaults: LiquidAuthChannelProviderOptions = {}) {}
+  constructor(private readonly defaults: LiquidAuthChannelProviderOptions = {}) { }
 
   async startPairing(_opts: Ac2StartPairingOptions = {}): Promise<Ac2PairingHandle> {
     const origin = this.defaults.origin ?? 'https://debug.liquidauth.com';
@@ -193,7 +224,7 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       if (controlChannel.label !== AC2_CONTROL_LABEL) {
         throw new Error(
           `[ac2-open-claw] Expected control channel labeled "${AC2_CONTROL_LABEL}", got "${controlChannel.label}". ` +
-            `The Controller app must use the latest liquid-auth-js with ac2-v1 support.`,
+          `The Controller app must use the latest liquid-auth-js with ac2-v1 support.`,
         );
       }
 
@@ -285,11 +316,11 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         // Bind the real connected wallet (normalized to canonical `did:key:z…`).
         ...(linkedWallet !== undefined
           ? {
-              peer: {
-                did: normalizeDidKey(`did:key:${linkedWallet}`),
-                wallet: linkedWallet,
-              },
-            }
+            peer: {
+              did: normalizeDidKey(`did:key:${linkedWallet}`),
+              wallet: linkedWallet,
+            },
+          }
           : {}),
         close,
       };
