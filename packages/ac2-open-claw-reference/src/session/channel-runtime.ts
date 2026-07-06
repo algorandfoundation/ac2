@@ -3,7 +3,7 @@
 import { Ac2Client } from '@algorandfoundation/ac2-sdk';
 import { isValidAddress } from '@algorandfoundation/algokit-utils/common';
 import type { Ac2ChannelProvider, Ac2PairedChannel } from '@algorandfoundation/ac2-sdk/signaling';
-import { LiquidAuthChannelProvider, renderPairingQr } from '../providers/liquid-auth.js';
+import qrcode from 'qrcode-terminal';
 import type { ChannelContext, PluginConfig } from './contracts.js';
 import { SessionManager, sessionManager } from './manager.js';
 import { bootstrapAgentIdentity } from './bootstrap.js';
@@ -26,6 +26,14 @@ function resolveLiquidAuthServer(config: PluginConfig): string | undefined {
   return fromEnv ?? config.liquidAuthServer ?? undefined;
 }
 
+/** Render a pairing payload to the terminal (QR + raw string). */
+export function renderPairingQr(pairing: { qrPayload: string }): void {
+  const isTty = typeof process !== 'undefined' && Boolean(process.stdout?.isTTY);
+  if (isTty) qrcode.generate(pairing.qrPayload, { small: true });
+  // eslint-disable-next-line no-console
+  console.log(`[ac2-open-claw] Pair with Controller: ${pairing.qrPayload}`);
+}
+
 export interface ChannelDeps {
   /** Channel bringup provider; defaults to `LiquidAuthChannelProvider`. */
   provider?: Ac2ChannelProvider;
@@ -41,7 +49,9 @@ export async function runAc2Channel(
   context: ChannelContext,
 ): Promise<void> {
   const origin = resolveLiquidAuthServer(config) ?? DEFAULT_LIQUID_AUTH_SERVER;
-  const provider: Ac2ChannelProvider = deps.provider ?? new LiquidAuthChannelProvider({ origin });
+  const provider: Ac2ChannelProvider =
+    deps.provider ??
+    new (await import('../providers/liquid-auth.js')).LiquidAuthChannelProvider({ origin });
   const renderQr = deps.renderQr ?? renderPairingQr;
   const manager = deps.manager ?? sessionManager;
 

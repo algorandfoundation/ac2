@@ -3,7 +3,7 @@
 import type { ChannelPlugin } from 'openclaw/plugin-sdk';
 
 import { CHANNEL_ID } from '../runtime.js';
-import { sessionManager } from '../session/index.js';
+import { sessionManager } from '../session/manager.js';
 import { AC2_CHANNEL_ENV_VARS } from '../setup/config.js';
 import {
   AC2_DEFAULT_ACK_POLICY,

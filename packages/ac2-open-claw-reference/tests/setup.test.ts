@@ -3,7 +3,12 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { AC2_CHANNEL_ENV_VARS, readChannelStatus, cmdSetup } from '../src/setup/config.js';
+import {
+  AC2_CHANNEL_ENV_VARS,
+  readChannelStatus,
+  cmdSetup,
+  resolveOpenClawConfigPath,
+} from '../src/setup/config.js';
 import { setupEntry } from '../src/setup/index.js';
 import { buildChannelObject } from '../src/index.js';
 
@@ -15,20 +20,30 @@ import { buildChannelObject } from '../src/index.js';
  */
 describe('setup entry + channel env vars (OpenClaw setup-entry contract)', () => {
   let prevStateDir: string | undefined;
+  let prevConfigPath: string | undefined;
+  let prevOpenClawHome: string | undefined;
   let prevServer: string | undefined;
   let dir: string;
 
   beforeEach(() => {
     prevStateDir = process.env['OPENCLAW_STATE_DIR'];
+    prevConfigPath = process.env['OPENCLAW_CONFIG_PATH'];
+    prevOpenClawHome = process.env['OPENCLAW_HOME'];
     prevServer = process.env['AC2_LIQUID_AUTH_SERVER'];
     dir = mkdtempSync(join(tmpdir(), 'ac2-setup-'));
     process.env['OPENCLAW_STATE_DIR'] = dir;
+    delete process.env['OPENCLAW_CONFIG_PATH'];
+    delete process.env['OPENCLAW_HOME'];
     delete process.env['AC2_LIQUID_AUTH_SERVER'];
   });
 
   afterEach(() => {
     if (prevStateDir === undefined) delete process.env['OPENCLAW_STATE_DIR'];
     else process.env['OPENCLAW_STATE_DIR'] = prevStateDir;
+    if (prevConfigPath === undefined) delete process.env['OPENCLAW_CONFIG_PATH'];
+    else process.env['OPENCLAW_CONFIG_PATH'] = prevConfigPath;
+    if (prevOpenClawHome === undefined) delete process.env['OPENCLAW_HOME'];
+    else process.env['OPENCLAW_HOME'] = prevOpenClawHome;
     if (prevServer === undefined) delete process.env['AC2_LIQUID_AUTH_SERVER'];
     else process.env['AC2_LIQUID_AUTH_SERVER'] = prevServer;
     rmSync(dir, { recursive: true, force: true });
@@ -56,7 +71,7 @@ describe('setup entry + channel env vars (OpenClaw setup-entry contract)', () =>
       status?: () => unknown;
       setup?: () => string;
     };
-    expect(entry.id).toBe('ac2-open-claw-reference');
+    expect(entry.id).toBe('ac2');
     expect(entry.channels).toContain('ac2');
     expect(entry.channelEnvVars?.length).toBeGreaterThan(0);
     expect(typeof entry.status).toBe('function');
@@ -79,6 +94,13 @@ describe('setup entry + channel env vars (OpenClaw setup-entry contract)', () =>
     const status = readChannelStatus();
     expect(status.liquidAuthServer).toBe('https://example.test');
     expect(status.liquidAuthServerSource).toBe('env');
+  });
+
+  it('uses OPENCLAW_HOME when no explicit state/config path is set', () => {
+    delete process.env['OPENCLAW_STATE_DIR'];
+    delete process.env['OPENCLAW_CONFIG_PATH'];
+    process.env['OPENCLAW_HOME'] = dir;
+    expect(resolveOpenClawConfigPath()).toBe(join(dir, 'openclaw.json'));
   });
 
   it('cmdSetup makes the channel ready and is idempotent', () => {

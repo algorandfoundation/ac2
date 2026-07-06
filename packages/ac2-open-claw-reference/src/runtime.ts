@@ -2,7 +2,7 @@
 
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 
-export const PLUGIN_ID = 'ac2-open-claw-reference';
+export const PLUGIN_ID = 'ac2';
 export const CHANNEL_ID = 'ac2';
 
 /** Host API injected into `register(api)` (SDK `OpenClawPluginApi`). */
