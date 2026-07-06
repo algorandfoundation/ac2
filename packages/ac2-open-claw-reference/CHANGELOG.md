@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.7](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.6...ac2-open-claw-reference@1.0.0-canary.7) (2026-07-06)
+
+
+### Bug Fixes
+
+* **ac2-open-claw-reference:** avoid native import during command registration ([58e73a4](https://github.com/algorandfoundation/ac2/commit/58e73a4645bb7dc8b33934fc7a5fe5611dbd1190))
+
 # [ac2-open-claw-reference@1.0.0-canary.6](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.5...ac2-open-claw-reference@1.0.0-canary.6) (2026-07-06)
 
 
