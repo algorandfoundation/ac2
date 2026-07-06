@@ -12,6 +12,10 @@ import { normalizeX402FetchParams, x402FetchFlow } from '../x402/fetch-flow.js';
 
 const TOOL_BODY_LIMIT_CHARS = 32_000;
 
+function jsonBlock(value: unknown): string {
+  return `\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
+}
+
 function manifestTools(): ReadonlyArray<{
   name: string;
   parameters: unknown;
@@ -76,7 +80,7 @@ export function buildSignTool(): AnyAgentTool {
           };
         }
         return {
-          content: [textResult('Signed.')],
+          content: [textResult(`Signed payload:\n${jsonBlock(result)}`)],
           details: result,
         };
       } catch (err) {
