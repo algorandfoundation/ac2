@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.8](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.7...ac2-open-claw-reference@1.0.0-canary.8) (2026-07-06)
+
+
+### Bug Fixes
+
+* **ac2-open-claw-reference:** lazy load native provider from package root ([ba6a1c0](https://github.com/algorandfoundation/ac2/commit/ba6a1c062a76cbe9473737a34a78952956c456e8))
+
 # [ac2-open-claw-reference@1.0.0-canary.7](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.6...ac2-open-claw-reference@1.0.0-canary.7) (2026-07-06)
 
 
