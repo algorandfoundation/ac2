@@ -429,6 +429,11 @@ describe('ac2 plugin', () => {
             maxTimeoutSeconds: 60,
             extra: {},
           },
+          resource: {
+            description: 'Weather data',
+            url: 'https://example.x402.goplausible.xyz/avm/weather',
+            mimeType: 'application/json',
+          },
         }),
       });
 
@@ -447,8 +452,13 @@ describe('ac2 plugin', () => {
       expect(observedRequest.body.key_type).toBe('account');
       expect(observedRequest.body.payload).toBe(expectedPayload);
       expect(observedRequest.body.payload).not.toBe(rawUnsignedPayload);
-      expect(observedRequest.body.description).toContain('x402 exact payment');
-      expect(observedRequest.body.description).toContain(receiver.toString());
+      expect(observedRequest.body.description).toContain('Approve x402 payment for Weather data.');
+      expect(observedRequest.body.description).toContain('Payment: 123 of asset 10458941');
+      expect(observedRequest.body.description).toContain('Network: Algorand TestNet.');
+      expect(observedRequest.body.description).toContain(
+        `${receiver.toString().slice(0, 8)}...${receiver.toString().slice(-6)}`,
+      );
+      expect(observedRequest.body.description).not.toContain(receiver.toString());
     });
 
     it('uses the linked AC2 wallet address as the x402 payment sender', async () => {
@@ -504,8 +514,12 @@ describe('ac2 plugin', () => {
       expect(signer.address).toBe(sender.toString());
       const signed = await signer.signTransactions([encodeTransactionRaw(txn)], [0]);
       expect(signed[0]).toBeInstanceOf(Uint8Array);
-      expect(observedRequest.body.description).toContain(`as ${sender.toString()}`);
-      expect(observedRequest.body.description).toContain(`Sender: ${sender.toString()}`);
+      expect(observedRequest.body.description).toContain(
+        `as ${sender.toString().slice(0, 8)}...${sender.toString().slice(-6)}`,
+      );
+      expect(observedRequest.body.description).toContain(
+        `Sender: ${sender.toString().slice(0, 8)}...${sender.toString().slice(-6)}`,
+      );
     });
   });
 

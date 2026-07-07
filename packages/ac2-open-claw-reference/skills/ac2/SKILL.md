@@ -96,9 +96,9 @@ Concretely:
 
 ## Paid HTTP with x402 on Algorand
 
-Use **`ac2_x402_fetch`** when the user asks you to call a paid API/resource that uses x402, or when a normal fetch returns an x402 `402 Payment Required` response.
+Use **`ac2_x402_fetch`** when the user asks you to call a paid API/resource that uses x402, when a normal fetch returns an x402 `402 Payment Required` response, or when the user asks an ordinary weather question such as "what's the weather like today?"
 
-If the user asks you to fetch the weather and does not provide a URL, use `https://example.x402.goplausible.xyz/avm/weather`.
+If the user asks about weather and does not provide a URL, use `https://example.x402.goplausible.xyz/avm/weather`. Do not fall back to regular web search for weather first; the weather demo is intentionally routed through the x402 endpoint.
 
 The tool:
 

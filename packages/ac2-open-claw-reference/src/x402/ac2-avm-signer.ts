@@ -90,6 +90,21 @@ function formatAmount(amount: bigint | undefined): string {
   return amount === undefined ? 'unknown amount' : amount.toString();
 }
 
+function compactAddress(address: string): string {
+  return address.length > 16 ? `${address.slice(0, 8)}...${address.slice(-6)}` : address;
+}
+
+function formatNetwork(network: string | undefined): string {
+  if (!network) return 'Algorand';
+  if (network.includes('SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=')) {
+    return 'Algorand TestNet';
+  }
+  if (network.includes('wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=')) {
+    return 'Algorand MainNet';
+  }
+  return network.startsWith('algorand:') ? 'Algorand' : network;
+}
+
 function summarizeTransaction(txn: Transaction): string {
   if (txn.type === TransactionType.AssetTransfer && txn.assetTransfer) {
     const xfer = txn.assetTransfer;
@@ -97,7 +112,7 @@ function summarizeTransaction(txn: Transaction): string {
       'ASA transfer',
       `asset ${xfer.assetId.toString()}`,
       `amount ${formatAmount(xfer.amount)}`,
-      `to ${xfer.receiver.toString()}`,
+      `to ${compactAddress(xfer.receiver.toString())}`,
     ].join(' · ');
   }
 
@@ -106,22 +121,24 @@ function summarizeTransaction(txn: Transaction): string {
     return [
       'ALGO payment',
       `${formatAmount(payment.amount)} microAlgos`,
-      `to ${payment.receiver.toString()}`,
+      `to ${compactAddress(payment.receiver.toString())}`,
     ].join(' · ');
   }
 
   return `Algorand ${txn.type} transaction`;
 }
 
-function formatResource(resource?: ResourceInfo): string {
+function resourceName(resource?: ResourceInfo): string {
+  const name = resource?.description ?? resource?.serviceName;
+  return typeof name === 'string' && name.trim().length > 0 ? name.trim() : 'paid resource';
+}
+
+function resourceDetails(resource?: ResourceInfo): string {
   if (!resource) return '';
-  const parts = [
-    resource.description,
-    resource.serviceName,
-    resource.url,
-    resource.mimeType,
-  ].filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
-  return parts.length > 0 ? `\nResource: ${parts.join(' · ')}` : '';
+  const parts = [resource.url, resource.mimeType].filter(
+    (v): v is string => typeof v === 'string' && v.trim().length > 0,
+  );
+  return parts.length > 0 ? `Resource: ${parts.join(' · ')}` : '';
 }
 
 function buildSigningDescription(args: {
@@ -132,22 +149,25 @@ function buildSigningDescription(args: {
   readonly paymentContext?: X402PaymentContext;
 }): string {
   const req = args.paymentContext?.requirements;
-  const requirementLine = req
-    ? [
-        `x402 exact payment`,
-        `network ${req.network}`,
-        `asset ${req.asset}`,
-        `amount ${req.amount}`,
-        `payTo ${req.payTo}`,
-      ].join(' · ')
-    : 'x402 exact Algorand payment';
+  const resource = args.paymentContext?.resource;
+  const title = `Approve x402 payment for ${resourceName(resource)}.`;
+  const paymentLine = req
+    ? `Payment: ${req.amount} of asset ${req.asset} to ${compactAddress(req.payTo)}.`
+    : 'Payment: exact Algorand payment.';
+  const networkLine = `Network: ${formatNetwork(req?.network)}.`;
+  const signingLine = `Sign transaction ${args.txnIndex + 1} of ${args.groupSize} as ${compactAddress(
+    args.signerAddress,
+  )}.`;
+  const senderLine = `Sender: ${compactAddress(args.txn.sender.toString())}.`;
 
   return [
-    requirementLine,
-    `Sign transaction ${args.txnIndex + 1} of ${args.groupSize} as ${args.signerAddress}.`,
+    title,
+    paymentLine,
+    networkLine,
+    signingLine,
     summarizeTransaction(args.txn),
-    `Sender: ${args.txn.sender.toString()}`,
-    formatResource(args.paymentContext?.resource),
+    senderLine,
+    resourceDetails(resource),
   ]
     .filter(Boolean)
     .join('\n');
