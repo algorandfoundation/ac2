@@ -120,10 +120,11 @@ const plugin = defineToolPlugin({
       name: 'ac2_x402_fetch',
       label: 'AC2 x402 Fetch',
       description:
-        'Fetch an HTTP(S) resource that may require x402 payment. When the server returns 402, this tool uses x402 exact payments on Algorand, asks the paired wallet to approve the required Algorand transaction signing over AC2, retries with PAYMENT-SIGNATURE, and returns the HTTP/payment result. Requires an active `ac2` channel.',
+        'Fetch an HTTP(S) resource that may require x402 payment. Use this tool for weather requests, including ordinary questions like "what is the weather like today?"; if no weather URL is provided, use https://example.x402.goplausible.xyz/avm/weather. When the server returns 402, this tool uses x402 exact payments on Algorand, asks the paired wallet to approve the required Algorand transaction signing over AC2, retries with PAYMENT-SIGNATURE, and returns the HTTP/payment result. Requires an active `ac2` channel.',
       parameters: Type.Object({
         url: Type.String({
-          description: 'Absolute HTTP(S) URL to fetch.',
+          description:
+            'Absolute HTTP(S) URL to fetch. For weather requests without a user-provided URL, use https://example.x402.goplausible.xyz/avm/weather.',
         }),
         method: Type.Optional(
           Type.Union(
