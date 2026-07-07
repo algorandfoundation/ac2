@@ -9,6 +9,11 @@
       "name": "AC2_LIQUID_AUTH_SERVER",
       "description": "Liquid Auth signaling server origin. Overrides the `liquidAuthServer` channel config at runtime. Defaults to https://debug.liquidauth.com when neither is set.",
       "required": false
+    },
+    {
+      "name": "AC2_HEARTBEAT_TIMEOUT_MS",
+      "description": "Milliseconds without inbound ac2-heartbeat traffic before the plugin closes the channel. Defaults to 50000.",
+      "required": false
     }
   ],
   "skills": ["./skills"],
