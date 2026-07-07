@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.16](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.15...ac2-open-claw-reference@1.0.0-canary.16) (2026-07-07)
+
+
+### Bug Fixes
+
+* **openclaw:** unwind data channels on heartbeat close ([8cfdb46](https://github.com/algorandfoundation/ac2/commit/8cfdb46d7d7fa80be48cf15e22898f132816f43d))
+
 # [ac2-open-claw-reference@1.0.0-canary.15](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.14...ac2-open-claw-reference@1.0.0-canary.15) (2026-07-07)
 
 
