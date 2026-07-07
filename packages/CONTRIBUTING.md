@@ -112,7 +112,7 @@ Key entry points (declared in `openclaw.plugin.json` and `package.json#openclaw`
 
 ### Native dependencies
 
-The plugin pulls in three native addons: `node-datachannel` (WebRTC transport), `@napi-rs/keyring` (OS keystore), and `@roamhq/wrtc` (test transport). They are listed in the workspace-root `pnpm-workspace.yaml#onlyBuiltDependencies` so a plain `pnpm install` builds them automatically — no manual `pnpm rebuild` step is needed for tests or local development. If you ever need to force a rebuild (e.g. after switching Node versions), run `pnpm run dev:natives` inside the package.
+The plugin pulls in two native addons: `@roamhq/wrtc` (WebRTC transport) and `@napi-rs/keyring` (OS keystore). Both ship prebuilt platform binaries, and `@napi-rs/keyring` is listed in the workspace-root `pnpm-workspace.yaml#onlyBuiltDependencies` so a plain `pnpm install` builds it automatically — no manual `pnpm rebuild` step is needed for tests or local development. If you ever need to force a rebuild (e.g. after switching Node versions), run `pnpm run dev:natives` inside the package.
 
 ### Build layout
 

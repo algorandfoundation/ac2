@@ -44,23 +44,24 @@ const NO_IDENTITY_NOTICE =
   'actions. When you are ready, approve the identity request in your wallet to ' +
   'continue.';
 
-function isMissingNodeDataChannelError(err: unknown): boolean {
+function isMissingWebRtcError(err: unknown): boolean {
   const message = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
-  return message.includes('node_datachannel.node') || message.includes('node-datachannel');
+  return message.includes('@roamhq/wrtc') || message.includes('wrtc');
 }
 
-function nativeRebuildInstructions(): string {
+function webRtcUnavailableInstructions(): string {
   return [
-    'AC2 pairing needs the native node-datachannel module, but it is not built yet.',
+    'AC2 pairing could not load the @roamhq/wrtc WebRTC module for this platform.',
     '',
-    'Rebuild the native dependencies from the installed plugin project root:',
+    '@roamhq/wrtc ships prebuilt binaries, so this usually means the matching',
+    'platform package was not installed. Reinstall the plugin to fetch it:',
     '',
     '```bash',
-    'PLUGIN_ROOT="$(ls -d "${OPENCLAW_HOME:-$HOME/.openclaw}"/npm/projects/algorandfoundation-ac2-open-claw-reference-* | head -n1)"',
-    'npm rebuild --prefix "$PLUGIN_ROOT" node-datachannel @napi-rs/keyring',
+    'openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@next --force',
+    'openclaw plugins enable ac2',
     '```',
     '',
-    'Then run `openclaw ac2 pair` again.',
+    'If this persists, this platform may not have a published @roamhq/wrtc prebuilt binary.',
   ].join('\n');
 }
 
@@ -179,8 +180,8 @@ export function buildAc2Command(api: OpenClawApi): unknown {
         try {
           firstCycle = await startPairingCycle();
         } catch (err) {
-          if (isMissingNodeDataChannelError(err)) {
-            return { text: nativeRebuildInstructions() };
+          if (isMissingWebRtcError(err)) {
+            return { text: webRtcUnavailableInstructions() };
           }
           throw err;
         }

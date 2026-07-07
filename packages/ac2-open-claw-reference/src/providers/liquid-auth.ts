@@ -26,16 +26,18 @@ let webRtcPolyfillReady: Promise<void> | undefined;
 async function ensureWebRtcPolyfill(): Promise<void> {
   if (typeof (globalThis as any).RTCPeerConnection !== 'undefined') return;
   webRtcPolyfillReady ??= (async () => {
-    // libdatachannel: modern SCTP/DTLS Node WebRTC backend, interops with react-native-webrtc.
-    // Import lazily so plugin discovery/CLI startup does not require the native binary.
-    const ndc = await import('node-datachannel/polyfill');
+    // @roamhq/wrtc: libwebrtc-backed Node WebRTC bindings, shipped as prebuilt
+    // platform binaries. Import lazily so plugin discovery/CLI startup does not
+    // require loading the native module.
+    const wrtc: any = await import('@roamhq/wrtc');
+    const rtc = wrtc.default ?? wrtc;
 
-    // Subclass node-datachannel's RTCPeerConnection to queue remote ICE candidates
-    // that arrive via trickle before setRemoteDescription completes. The Liquid Auth
-    // SignalClient can race between trickling candidates and the offer/answer exchange;
-    // node-datachannel is stricter than browser WebRTC and throws immediately
-    // ("Got a remote candidate without ICE transport") instead of buffering silently.
-    class Ac2RTCPeerConnection extends (ndc as any).RTCPeerConnection {
+    // Subclass RTCPeerConnection to queue remote ICE candidates that arrive via
+    // trickle before setRemoteDescription completes. The Liquid Auth SignalClient
+    // can race between trickling candidates and the offer/answer exchange, and
+    // adding a candidate before the remote description is set can throw instead
+    // of buffering silently.
+    class Ac2RTCPeerConnection extends rtc.RTCPeerConnection {
       private _ac2PendingCandidates: any[] = [];
       private _ac2RemoteDescReady = false;
 
@@ -63,10 +65,10 @@ async function ensureWebRtcPolyfill(): Promise<void> {
     }
 
     (globalThis as any).RTCPeerConnection = Ac2RTCPeerConnection;
-    (globalThis as any).RTCIceCandidate = (ndc as any).RTCIceCandidate;
-    (globalThis as any).RTCSessionDescription = (ndc as any).RTCSessionDescription;
-    if ((ndc as any).RTCDataChannel) {
-      (globalThis as any).RTCDataChannel = (ndc as any).RTCDataChannel;
+    (globalThis as any).RTCIceCandidate = rtc.RTCIceCandidate;
+    (globalThis as any).RTCSessionDescription = rtc.RTCSessionDescription;
+    if (rtc.RTCDataChannel) {
+      (globalThis as any).RTCDataChannel = rtc.RTCDataChannel;
     }
   })();
   await webRtcPolyfillReady;
