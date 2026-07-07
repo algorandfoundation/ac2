@@ -1,3 +1,10 @@
+# [ac2-sdk@1.0.0-canary.2](https://github.com/algorandfoundation/ac2/compare/ac2-sdk@1.0.0-canary.1...ac2-sdk@1.0.0-canary.2) (2026-07-07)
+
+
+### Features
+
+* **ac2-open-claw-reference:** use @roamhq/wrtc for WebRTC transport ([124f4b2](https://github.com/algorandfoundation/ac2/commit/124f4b2cf0f4016320c5593f5fff55cbf8903ac9))
+
 # ac2-sdk@1.0.0-canary.1 (2026-06-08)
 
 
