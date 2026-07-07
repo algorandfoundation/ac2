@@ -4,7 +4,7 @@
  * The spec mandates WebRTC DataChannel as the transport (label `ac2-v1`,
  * `ordered: true`, one AC2 message per DataChannel send). To keep the SDK
  * testable and reusable across runtimes (browser, React Native WebRTC,
- * Node + node-datachannel, in-memory pairs), we model the transport as a
+ * Node + @roamhq/wrtc, in-memory pairs), we model the transport as a
  * tiny duplex interface and ship two adapters:
  *
  *   - `rtcDataChannelTransport(channel)` — wraps an existing
@@ -104,7 +104,7 @@ export function rtcDataChannelTransport(channel: RtcDataChannelLike): Ac2Transpo
   if (channel.label !== AC2_DATACHANNEL_LABEL) {
     throw new Error(
       `[ac2-sdk] DataChannel label MUST be "${AC2_DATACHANNEL_LABEL}" ` +
-        `(got "${channel.label}")`,
+      `(got "${channel.label}")`,
     );
   }
 

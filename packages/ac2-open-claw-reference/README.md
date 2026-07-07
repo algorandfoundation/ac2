@@ -54,10 +54,10 @@ openclaw ac2 status
 openclaw gateway restart
 ```
 
-The registry package includes AC2-built libnice-backed `node-datachannel`
-artifacts for supported platforms. `openclaw ac2 pair` installs the matching
-artifact into the dependency tree before loading WebRTC, so users do not need
-`cmake`, `libnice`, or a local native rebuild.
+The registry package depends on the prebuilt `@roamhq/wrtc` native WebRTC
+backend, which `npm install` fetches for supported platforms. Native addons
+are rebuilt against your Node version at install time, so users do not need a
+local WebRTC source build.
 
 #### From this monorepo (pre-release / development)
 
@@ -67,7 +67,7 @@ cd ac2
 pnpm install                                          # once, at the repo root
 
 cd packages/ac2-open-claw-reference
-pnpm install:plugin                                   # build → pack with local libnice artifact → install → enable
+pnpm install:plugin                                   # build → pack → install → rebuild natives → enable
 openclaw ac2 setup                                    # wire channel + tools into openclaw.json
 openclaw gateway restart
 ```

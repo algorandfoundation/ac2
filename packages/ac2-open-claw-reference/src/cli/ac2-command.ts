@@ -44,26 +44,6 @@ const NO_IDENTITY_NOTICE =
   'actions. When you are ready, approve the identity request in your wallet to ' +
   'continue.';
 
-function isMissingNodeDataChannelError(err: unknown): boolean {
-  const message = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
-  return message.includes('node_datachannel.node') || message.includes('node-datachannel');
-}
-
-function nativeRebuildInstructions(): string {
-  return [
-    'AC2 pairing could not load its bundled libnice node-datachannel WebRTC artifact.',
-    '',
-    'This should not require a local rebuild. Reinstall the latest canary:',
-    '',
-    '```bash',
-    'openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@next --force',
-    'openclaw plugins enable ac2',
-    '```',
-    '',
-    'If this still fails, the published package is missing an AC2 WebRTC artifact for your platform.',
-  ].join('\n');
-}
-
 export function buildAc2Command(api: OpenClawApi): unknown {
   return {
     name: 'ac2',
@@ -175,15 +155,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
             'Scan the QR code with your AC2 Controller. The channel will activate once paired.',
           ].join('\n');
 
-        let firstCycle: Awaited<ReturnType<typeof startPairingCycle>>;
-        try {
-          firstCycle = await startPairingCycle();
-        } catch (err) {
-          if (isMissingNodeDataChannelError(err)) {
-            return { text: nativeRebuildInstructions() };
-          }
-          throw err;
-        }
+        const firstCycle = await startPairingCycle();
 
         const context: ChannelContext = {
           logger: {
@@ -282,7 +254,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
                 ) {
                   throw new BootstrapError(
                     `[ac2-open-claw] KeyResponse.from (${bootstrapped.controllerDid}) does not match ` +
-                      `the linked account (${connectedAccountDid}); refusing to grant identity.`,
+                    `the linked account (${connectedAccountDid}); refusing to grant identity.`,
                   );
                 }
                 controllerDid = connectedAccountDid ?? bootstrapped.controllerDid;
@@ -324,11 +296,11 @@ export function buildAc2Command(api: OpenClawApi): unknown {
             // Adapter to give `streamChannel` a `send` + `isOpen` surface.
             const streamSendable = streamTransport
               ? {
-                  send: (payload: string) => streamTransport.send(payload),
-                  get isOpen() {
-                    return streamTransport.readyState === 'open';
-                  },
-                }
+                send: (payload: string) => streamTransport.send(payload),
+                get isOpen() {
+                  return streamTransport.readyState === 'open';
+                },
+              }
               : undefined;
             const controlSendable = streamSendable ?? transport;
 

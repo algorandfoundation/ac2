@@ -27,7 +27,6 @@
   },
   "files": [
     "dist",
-    "vendor",
     "openclaw.plugin.json",
     "skills",
     "README.md",
@@ -52,10 +51,9 @@
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build:node-datachannel-vendor": "node scripts/build-node-datachannel-vendor.mjs",
     "release": "package-releaser",
     "release:dry-run": "package-releaser --dry-run",
-    "install:plugin": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts && TGZ=\"$(node scripts/pack-plugin.mjs --pack-destination /tmp | tail -n1)\" && openclaw plugins install \"file:$TGZ\" --dangerously-force-unsafe-install --force && npm rebuild --prefix \"${OPENCLAW_HOME:-$HOME/.openclaw}/extensions/ac2-open-claw-reference\" @napi-rs/keyring @roamhq/wrtc && openclaw plugins enable ac2",
+    "install:plugin": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts && TGZ=\"$(node scripts/pack-plugin.mjs --pack-destination /tmp | tail -n1)\" && openclaw plugins install \"file:$TGZ\" --dangerously-force-unsafe-install --force && npm rebuild --prefix \"${OPENCLAW_HOME:-$HOME/.openclaw}/extensions/ac2\" @napi-rs/keyring @roamhq/wrtc && openclaw plugins enable ac2",
     "uninstall:plugin": "openclaw plugins uninstall ac2"
   },
   "release": null,
