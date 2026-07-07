@@ -214,7 +214,7 @@ describe('ac2 plugin', () => {
   });
 
   describe('signFlow through an active channel', () => {
-    it('renders the signature details in the OpenClaw tool content', async () => {
+    it('returns signature details in the OpenClaw tool details', async () => {
       sessionManager.setActive({
         transport: {} as never,
         client: {
@@ -253,10 +253,7 @@ describe('ac2 plugin', () => {
           payload_base64: Buffer.from('hello').toString('base64'),
         });
 
-        expect(result.content[0]?.text).toContain('Signed payload:');
-        expect(result.content[0]?.text).toContain('"status": "signed"');
-        expect(result.content[0]?.text).toContain('"signature": "c2ln"');
-        expect(result.content[0]?.text).toContain('"public_key": "cGs="');
+        expect(result.content[0]?.text).toBe('Signed.');
         expect(result.details).toMatchObject({
           status: 'signed',
           signature: Buffer.from('sig').toString('base64'),
