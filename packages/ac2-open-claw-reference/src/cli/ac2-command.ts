@@ -44,9 +44,24 @@ const NO_IDENTITY_NOTICE =
   'actions. When you are ready, approve the identity request in your wallet to ' +
   'continue.';
 
-function isMissingWebRtcError(err: unknown): boolean {
-  const message = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
-  return message.includes('@roamhq/wrtc') || message.includes('wrtc');
+const NODE_MODULE_LOAD_ERROR_CODES = new Set(['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND']);
+const ROAMHQ_WRTC_PACKAGE_PATTERN = /@roamhq\/wrtc(?:-[a-z0-9-]+)?/i;
+
+export function isMissingWebRtcError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+
+  const message = err.message;
+  const code = (err as { code?: unknown }).code;
+  const isNodeModuleLoadError =
+    typeof code === 'string' &&
+    NODE_MODULE_LOAD_ERROR_CODES.has(code) &&
+    ROAMHQ_WRTC_PACKAGE_PATTERN.test(message);
+
+  const isMissingWrtcBinary =
+    message.startsWith('Could not find wrtc binary on any of the paths:') &&
+    ROAMHQ_WRTC_PACKAGE_PATTERN.test(message);
+
+  return isNodeModuleLoadError || isMissingWrtcBinary;
 }
 
 function webRtcUnavailableInstructions(): string {
@@ -57,7 +72,7 @@ function webRtcUnavailableInstructions(): string {
     'platform package was not installed. Reinstall the plugin to fetch it:',
     '',
     '```bash',
-    'openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@next --force',
+    'openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference --force',
     'openclaw plugins enable ac2',
     '```',
     '',
