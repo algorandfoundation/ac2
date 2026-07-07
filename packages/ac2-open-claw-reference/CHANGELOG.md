@@ -1,3 +1,18 @@
+# [ac2-open-claw-reference@1.0.0-canary.11](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.10...ac2-open-claw-reference@1.0.0-canary.11) (2026-07-07)
+
+
+### Bug Fixes
+
+* **ac2-open-claw-reference:** bundle libnice node-datachannel artifacts ([6eb5ad8](https://github.com/algorandfoundation/ac2/commit/6eb5ad8ef3494ceb2463d53a71b88f06773b2b16))
+* **ac2-open-claw-reference:** keep signature model-visible ([4fcc8bf](https://github.com/algorandfoundation/ac2/commit/4fcc8bf56b07726c227bfbfbe3086fac51c2a6d4))
+
+
+### Reverts
+
+* **ac2-open-claw-reference:** keep signature in tool details ([4fb3062](https://github.com/algorandfoundation/ac2/commit/4fb3062d1a0abc4b620d00c6ec5b2db1533847d9))
+* **ac2-open-claw-reference:** remove libnice rebuild path ([027cded](https://github.com/algorandfoundation/ac2/commit/027cdedf195b694b01150807a6619070d3aaae0a))
+* Revert "Merge pull request [#18](https://github.com/algorandfoundation/ac2/issues/18) from algorandfoundation/fix/ac2-bundle-node-datachannel-libnice" ([16c21d6](https://github.com/algorandfoundation/ac2/commit/16c21d64f5301e794a50e266298f0b67788a445b))
+
 # [ac2-open-claw-reference@1.0.0-canary.10](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.9...ac2-open-claw-reference@1.0.0-canary.10) (2026-07-06)
 
 
