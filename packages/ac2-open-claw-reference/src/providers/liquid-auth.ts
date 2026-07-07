@@ -13,7 +13,7 @@ import type {
   Ac2PairingInfo,
   Ac2StartPairingOptions,
 } from '@algorandfoundation/ac2-sdk/signaling';
-import { rtcDataChannelTransport } from '@algorandfoundation/ac2-sdk/transport';
+import { rtcDataChannelTransport, type Ac2Transport } from '@algorandfoundation/ac2-sdk/transport';
 import qrcode from 'qrcode-terminal';
 import { normalizeDidKey } from '../identity/did.js';
 
@@ -125,6 +125,57 @@ export function closeRtcDataChannel(channel: unknown): void {
       // Already closing/closed; ignore.
     }
   }
+}
+
+export function closeAwareTransport(base: Ac2Transport): {
+  transport: Ac2Transport;
+  emitClose: () => void;
+} {
+  const closeHandlers = new Set<() => void>();
+  let closeEmitted = false;
+
+  const emitClose = (): void => {
+    if (closeEmitted) return;
+    closeEmitted = true;
+    for (const handler of closeHandlers) {
+      try {
+        handler();
+      } catch {
+        // Close notifications are best-effort; keep notifying the rest.
+      }
+    }
+    closeHandlers.clear();
+  };
+
+  base.onClose(emitClose);
+
+  const transport: Ac2Transport = {
+    send: (payload) => base.send(payload),
+    onMessage: (handler) => base.onMessage(handler),
+    onRawMessage: (handler) => base.onRawMessage?.(handler),
+    onBinaryMessage: (handler) => base.onBinaryMessage?.(handler),
+    onError: (handler) => base.onError(handler),
+    onOpen: (handler) => base.onOpen(handler),
+    onClose: (handler) => {
+      if (closeEmitted) {
+        handler();
+        return;
+      }
+      closeHandlers.add(handler);
+    },
+    close: () => {
+      try {
+        base.close();
+      } finally {
+        emitClose();
+      }
+    },
+    get isOpen() {
+      return base.isOpen;
+    },
+  };
+
+  return { transport, emitClose };
 }
 
 export function resolveHeartbeatTimeoutMs(value?: string): number {
@@ -271,7 +322,7 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       // Brief grace period so the app attaches handlers before resolve.
       await new Promise((resolve) => setTimeout(resolve, 500));
 
-      const transport = rtcDataChannelTransport(controlChannel);
+      const { transport, emitClose } = closeAwareTransport(rtcDataChannelTransport(controlChannel));
 
       if (!transport.isOpen) {
         await new Promise<void>((resolve, reject) => {
@@ -345,6 +396,7 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         closeRtcDataChannel(heartbeatChannel);
         closeRtcDataChannel(streamChannel);
         closeRtcDataChannel(controlChannel);
+        emitClose();
         try {
           client.close(true);
         } catch {
