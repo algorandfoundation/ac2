@@ -1,6 +1,6 @@
 {
   "name": "@algorandfoundation/ac2-sdk",
-  "version": "1.0.0-canary.1",
+  "version": "1.0.0-canary.2",
   "description": "TypeScript SDK for the AC2 (Agentic Communication and Control) protocol.",
   "keywords": [
     "ac2",
