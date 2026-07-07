@@ -7,37 +7,7 @@ concurrency:
   group: Release
   cancel-in-progress: true
 jobs:
-  prebuild-node-datachannel:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-13, macos-14]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v5 # Honors the packageManager field
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24.x"
-          cache: "pnpm"
-      - name: Install libnice build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake libnice-dev patchelf
-      - name: Install libnice build dependencies
-        if: runner.os == 'macOS'
-        run: brew install cmake libnice
-      - run: pnpm install
-      - run: pnpm --filter @algorandfoundation/ac2-open-claw-reference build:node-datachannel-vendor
-      - uses: actions/upload-artifact@v4
-        with:
-          name: node-datachannel-${{ runner.os }}-${{ runner.arch }}
-          path: packages/ac2-open-claw-reference/vendor/node-datachannel
-          if-no-files-found: error
-
   release:
-    needs: prebuild-node-datachannel
     runs-on: ubuntu-latest
     # TODO: add support for environment
     #environment: Production
@@ -58,11 +28,6 @@ jobs:
       - run: pnpm install
       - run: pnpm run --if-present build
       - run: pnpm install # fix broken workspace for binaries
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: node-datachannel-*
-          path: packages/ac2-open-claw-reference/vendor/node-datachannel
-          merge-multiple: true
       - name: Release
         id: release
         run: pnpm run release

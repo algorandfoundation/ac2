@@ -30,23 +30,52 @@ agent never touches the user's account keys or passkeys.
 - Node.js ≥ 22, pnpm ≥ 10
 - `openclaw` CLI on `PATH`
 - `openclaw` already set up with an agent
+- A C/C++ toolchain (the plugin pulls in native addons —
+  `node-datachannel`, `@napi-rs/keyring` — that are rebuilt against your
+  Node version at install time)
+- **`cmake` and `libnice`** (with its development headers) — required to
+  build `node-datachannel` against the libnice ICE backend, which supports
+  TURN over TCP and TURNs (TURN over TLS). On macOS:
+  ```bash
+  brew install cmake libnice
+  ```
+  On Debian/Ubuntu: `apt install cmake libnice-dev`. Other platforms: see
+  your package manager for an equivalent `libnice` development package.
 
 ### Install the plugin into OpenClaw
 
 #### From the npm registry (canary)
 
 ```bash
-openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.11
+openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.10
+
+# openclaw plugins install runs `npm install --ignore-scripts`, so native
+# addons are not built automatically. Rebuild them from the plugin project dir:
+PLUGIN_DIR="$(ls -d "${OPENCLAW_HOME:-$HOME/.openclaw}"/npm/projects/algorandfoundation-ac2-open-claw-reference-* | head -n1)"
+
+# @napi-rs/keyring — standard prebuild-install path:
+npm rebuild --prefix "$PLUGIN_DIR" @napi-rs/keyring
+
+# node-datachannel — must be built from source against libnice (USE_NICE=1)
+# so that TURN over TCP and TURNs are supported (the prebuilt binary uses
+# libjuice which is UDP-only for TURN):
+NDC="$PLUGIN_DIR/node_modules/node-datachannel"
+(cd "$NDC" && npm install --ignore-scripts --production=false \
+  && npx cmake-js clean \
+  && npx cmake-js configure --CDUSE_NICE=1 \
+  && npx cmake-js build)
+
 openclaw plugins enable ac2
 openclaw ac2 setup                                    # wire channel + tools into openclaw.json
-openclaw ac2 status
+openclaw ac2 status                                   # works before pairing; pair requires the native rebuild above
 openclaw gateway restart
 ```
 
-The registry package includes AC2-built libnice-backed `node-datachannel`
-artifacts for supported platforms. `openclaw ac2 pair` installs the matching
-artifact into the dependency tree before loading WebRTC, so users do not need
-`cmake`, `libnice`, or a local native rebuild.
+The npm-registry install lays the plugin out at
+`${OPENCLAW_HOME:-~/.openclaw}/npm/projects/algorandfoundation-ac2-open-claw-reference-<hash>/node_modules/@algorandfoundation/ac2-open-claw-reference`,
+so `npm rebuild --prefix` must point at the **project root** (the
+`npm/projects/<slug>/` directory), not at the inner package — that's
+where the rebuildable `node_modules/` tree lives.
 
 #### From this monorepo (pre-release / development)
 
@@ -56,16 +85,18 @@ cd ac2
 pnpm install                                          # once, at the repo root
 
 cd packages/ac2-open-claw-reference
-pnpm install:plugin                                   # build → pack with local libnice artifact → install → enable
+pnpm install:plugin                                   # build → pack → openclaw plugins install → rebuild natives → enable
 openclaw ac2 setup                                    # wire channel + tools into openclaw.json
 openclaw gateway restart
 ```
 
 `pnpm install:plugin` builds the flat tree-shakeable `dist/`, packs a
 tarball with workspace-only devDependencies stripped, installs it into
-OpenClaw, and enables the plugin. The local pack step builds the current
-platform's libnice-backed `node-datachannel` artifact and includes it in the
-tarball.
+`${OPENCLAW_HOME:-~/.openclaw}/extensions/ac2`, rebuilds
+`@napi-rs/keyring` via `npm rebuild`, then compiles `node-datachannel` from
+source against libnice (`USE_NICE=1`) via `pnpm rebuild:node-datachannel`.
+You can also run `pnpm rebuild:node-datachannel` on its own to re-compile the
+native ICE layer without repeating the full install cycle.
 
 To uninstall (either install path):
 
@@ -114,4 +145,4 @@ Algorand payment transaction signing over AC2, retries with
   channel-owned sessions, wallet-issued agent identity, x402 exact Algorand
   paid fetch via wallet-approved signing.
 - ❌ Chain-specific verifiers, wallet introspection, holding user keys,
-  wallet UI — these belong in downstream plugins.
+  a bundled Node WebRTC stack — these belong in downstream plugins.
