@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.12](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.11...ac2-open-claw-reference@1.0.0-canary.12) (2026-07-07)
+
+
+### Bug Fixes
+
+* **openclaw:** avoid relaying signed payloads by default ([7674cd4](https://github.com/algorandfoundation/ac2/commit/7674cd48a1e85375a8633b18050eb6da93b3a71b))
+
 # [ac2-open-claw-reference@1.0.0-canary.11](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.10...ac2-open-claw-reference@1.0.0-canary.11) (2026-07-07)
 
 
