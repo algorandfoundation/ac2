@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.15](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.14...ac2-open-claw-reference@1.0.0-canary.15) (2026-07-07)
+
+
+### Bug Fixes
+
+* **ac2-open-claw-reference:** document x402 weather demo ([9cbf388](https://github.com/algorandfoundation/ac2/commit/9cbf388d2576e128e19dfe3b8fc9797d1acff7eb))
+
 # [ac2-open-claw-reference@1.0.0-canary.14](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.13...ac2-open-claw-reference@1.0.0-canary.14) (2026-07-07)
 
 
