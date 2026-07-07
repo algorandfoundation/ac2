@@ -53,8 +53,7 @@
     "test:watch": "vitest",
     "release": "package-releaser",
     "release:dry-run": "package-releaser --dry-run",
-    "rebuild:node-datachannel": "NDC=\"${OPENCLAW_HOME:-$HOME/.openclaw}/extensions/ac2/node_modules/node-datachannel\" && (cd \"$NDC\" && npm install --ignore-scripts --production=false && npx cmake-js clean && npx cmake-js configure --CDUSE_NICE=1 && npx cmake-js build)",
-    "install:plugin": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts && TGZ=\"$(node scripts/pack-plugin.mjs --pack-destination /tmp | tail -n1)\" && openclaw plugins install \"file:$TGZ\" --dangerously-force-unsafe-install --force && npm rebuild --prefix \"${OPENCLAW_HOME:-$HOME/.openclaw}/extensions/ac2\" @napi-rs/keyring && pnpm rebuild:node-datachannel && openclaw plugins enable ac2",
+    "install:plugin": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts && TGZ=\"$(node scripts/pack-plugin.mjs --pack-destination /tmp | tail -n1)\" && openclaw plugins install \"file:$TGZ\" --dangerously-force-unsafe-install --force && npm rebuild --prefix \"${OPENCLAW_HOME:-$HOME/.openclaw}/extensions/ac2\" node-datachannel @napi-rs/keyring && openclaw plugins enable ac2",
     "uninstall:plugin": "openclaw plugins uninstall ac2"
   },
   "release": null,
