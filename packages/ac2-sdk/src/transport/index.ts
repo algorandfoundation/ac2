@@ -4,7 +4,7 @@
  * The spec mandates WebRTC DataChannel as the transport (label `ac2-v1`,
  * `ordered: true`, one AC2 message per DataChannel send). To keep the SDK
  * testable and reusable across runtimes (browser, React Native WebRTC,
- * Node + node-datachannel, in-memory pairs), we model the transport as a
+ * Node + @roamhq/wrtc, in-memory pairs), we model the transport as a
  * tiny duplex interface and ship two adapters:
  *
  *   - `rtcDataChannelTransport(channel)` — wraps an existing

@@ -44,23 +44,39 @@ const NO_IDENTITY_NOTICE =
   'actions. When you are ready, approve the identity request in your wallet to ' +
   'continue.';
 
-function isMissingNodeDataChannelError(err: unknown): boolean {
-  const message = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
-  return message.includes('node_datachannel.node') || message.includes('node-datachannel');
+const NODE_MODULE_LOAD_ERROR_CODES = new Set(['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND']);
+const ROAMHQ_WRTC_PACKAGE_PATTERN = /@roamhq\/wrtc(?:-[a-z0-9-]+)?/i;
+
+export function isMissingWebRtcError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+
+  const message = err.message;
+  const code = (err as { code?: unknown }).code;
+  const isNodeModuleLoadError =
+    typeof code === 'string' &&
+    NODE_MODULE_LOAD_ERROR_CODES.has(code) &&
+    ROAMHQ_WRTC_PACKAGE_PATTERN.test(message);
+
+  const isMissingWrtcBinary =
+    message.startsWith('Could not find wrtc binary on any of the paths:') &&
+    ROAMHQ_WRTC_PACKAGE_PATTERN.test(message);
+
+  return isNodeModuleLoadError || isMissingWrtcBinary;
 }
 
-function nativeRebuildInstructions(): string {
+function webRtcUnavailableInstructions(): string {
   return [
-    'AC2 pairing needs the native node-datachannel module, but it is not built yet.',
+    'AC2 pairing could not load the @roamhq/wrtc WebRTC module for this platform.',
     '',
-    'Rebuild the native dependencies from the installed plugin project root:',
+    '@roamhq/wrtc ships prebuilt binaries, so this usually means the matching',
+    'platform package was not installed. Reinstall the plugin to fetch it:',
     '',
     '```bash',
-    'PLUGIN_ROOT="$(ls -d "${OPENCLAW_HOME:-$HOME/.openclaw}"/npm/projects/algorandfoundation-ac2-open-claw-reference-* | head -n1)"',
-    'npm rebuild --prefix "$PLUGIN_ROOT" node-datachannel @napi-rs/keyring',
+    'openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference --force',
+    'openclaw plugins enable ac2',
     '```',
     '',
-    'Then run `openclaw ac2 pair` again.',
+    'If this persists, this platform may not have a published @roamhq/wrtc prebuilt binary.',
   ].join('\n');
 }
 
@@ -179,8 +195,8 @@ export function buildAc2Command(api: OpenClawApi): unknown {
         try {
           firstCycle = await startPairingCycle();
         } catch (err) {
-          if (isMissingNodeDataChannelError(err)) {
-            return { text: nativeRebuildInstructions() };
+          if (isMissingWebRtcError(err)) {
+            return { text: webRtcUnavailableInstructions() };
           }
           throw err;
         }
