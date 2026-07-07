@@ -14,10 +14,6 @@ import type {
   Ac2StartPairingOptions,
 } from '@algorandfoundation/ac2-sdk/signaling';
 import { rtcDataChannelTransport } from '@algorandfoundation/ac2-sdk/transport';
-import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { dirname, parse, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import qrcode from 'qrcode-terminal';
 import { normalizeDidKey } from '../identity/did.js';
 
@@ -27,74 +23,11 @@ import { io as createSocketIoClient } from 'socket.io-client';
 
 let webRtcPolyfillReady: Promise<void> | undefined;
 
-const require = createRequire(import.meta.url);
-
-function findPackageRoot(entrypoint: string): string {
-  let dir = dirname(entrypoint);
-  const root = parse(dir).root;
-  while (dir !== root) {
-    if (existsSync(resolve(dir, 'package.json'))) return dir;
-    dir = dirname(dir);
-  }
-  throw new Error(`Could not locate package root for ${entrypoint}`);
-}
-
-function findVendorBinary(platformKey: string): string {
-  let dir = dirname(fileURLToPath(import.meta.url));
-  const root = parse(dir).root;
-  while (dir !== root) {
-    const candidate = resolve(
-      dir,
-      'vendor',
-      'node-datachannel',
-      platformKey,
-      'node_datachannel.node',
-    );
-    if (existsSync(candidate)) return candidate;
-    dir = dirname(dir);
-  }
-  return resolve(
-    dirname(fileURLToPath(import.meta.url)),
-    'vendor',
-    'node-datachannel',
-    platformKey,
-    'node_datachannel.node',
-  );
-}
-
-function ensureBundledNodeDataChannelBinary(): void {
-  const platformKey = `${process.platform}-${process.arch}`;
-  const vendorBinary = findVendorBinary(platformKey);
-  const vendorDir = dirname(vendorBinary);
-  const nodeDataChannelRoot = findPackageRoot(require.resolve('node-datachannel'));
-  const targetBinary = resolve(
-    nodeDataChannelRoot,
-    'build',
-    'Release',
-    'node_datachannel.node',
-  );
-
-  if (!existsSync(vendorBinary)) {
-    if (existsSync(targetBinary)) return;
-    throw new Error(
-      `AC2 does not include a libnice node-datachannel binary for ${platformKey}. ` +
-        'Install the latest ac2 OpenClaw plugin canary; if this persists, this platform needs a published AC2 WebRTC artifact.',
-    );
-  }
-
-  mkdirSync(dirname(targetBinary), { recursive: true });
-  for (const entry of readdirSync(vendorDir, { withFileTypes: true })) {
-    if (!entry.isFile()) continue;
-    copyFileSync(resolve(vendorDir, entry.name), resolve(dirname(targetBinary), entry.name));
-  }
-}
-
 async function ensureWebRtcPolyfill(): Promise<void> {
   if (typeof (globalThis as any).RTCPeerConnection !== 'undefined') return;
   webRtcPolyfillReady ??= (async () => {
     // libdatachannel: modern SCTP/DTLS Node WebRTC backend, interops with react-native-webrtc.
     // Import lazily so plugin discovery/CLI startup does not require the native binary.
-    ensureBundledNodeDataChannelBinary();
     const ndc = await import('node-datachannel/polyfill');
 
     // Subclass node-datachannel's RTCPeerConnection to queue remote ICE candidates

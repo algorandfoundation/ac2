@@ -51,16 +51,16 @@ function isMissingNodeDataChannelError(err: unknown): boolean {
 
 function nativeRebuildInstructions(): string {
   return [
-    'AC2 pairing could not load its bundled libnice node-datachannel WebRTC artifact.',
+    'AC2 pairing needs the native node-datachannel module, but it is not built yet.',
     '',
-    'This should not require a local rebuild. Reinstall the latest canary:',
+    'Rebuild the native dependencies from the installed plugin project root:',
     '',
     '```bash',
-    'openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@next --force',
-    'openclaw plugins enable ac2',
+    'PLUGIN_ROOT="$(ls -d "${OPENCLAW_HOME:-$HOME/.openclaw}"/npm/projects/algorandfoundation-ac2-open-claw-reference-* | head -n1)"',
+    'npm rebuild --prefix "$PLUGIN_ROOT" node-datachannel @napi-rs/keyring',
     '```',
     '',
-    'If this still fails, the published package is missing an AC2 WebRTC artifact for your platform.',
+    'Then run `openclaw ac2 pair` again.',
   ].join('\n');
 }
 

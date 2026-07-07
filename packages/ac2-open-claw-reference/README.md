@@ -30,23 +30,33 @@ agent never touches the user's account keys or passkeys.
 - Node.js ≥ 22, pnpm ≥ 10
 - `openclaw` CLI on `PATH`
 - `openclaw` already set up with an agent
+- The plugin uses native addons (`node-datachannel`, `@napi-rs/keyring`)
+  that may need to be rebuilt against your local Node version.
 
 ### Install the plugin into OpenClaw
 
 #### From the npm registry (canary)
 
 ```bash
-openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.11
+openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.10
+
+# openclaw plugins install runs `npm install --ignore-scripts`, so native
+# addons are not built automatically. Rebuild them from the plugin project dir:
+PLUGIN_DIR="$(ls -d "${OPENCLAW_HOME:-$HOME/.openclaw}"/npm/projects/algorandfoundation-ac2-open-claw-reference-* | head -n1)"
+
+npm rebuild --prefix "$PLUGIN_DIR" node-datachannel @napi-rs/keyring
+
 openclaw plugins enable ac2
 openclaw ac2 setup                                    # wire channel + tools into openclaw.json
 openclaw ac2 status
 openclaw gateway restart
 ```
 
-The registry package includes AC2-built libnice-backed `node-datachannel`
-artifacts for supported platforms. `openclaw ac2 pair` installs the matching
-artifact into the dependency tree before loading WebRTC, so users do not need
-`cmake`, `libnice`, or a local native rebuild.
+The npm-registry install lays the plugin out at
+`${OPENCLAW_HOME:-~/.openclaw}/npm/projects/algorandfoundation-ac2-open-claw-reference-<hash>/node_modules/@algorandfoundation/ac2-open-claw-reference`,
+so `npm rebuild --prefix` must point at the **project root** (the
+`npm/projects/<slug>/` directory), not at the inner package — that's
+where the rebuildable `node_modules/` tree lives.
 
 #### From this monorepo (pre-release / development)
 
@@ -56,16 +66,16 @@ cd ac2
 pnpm install                                          # once, at the repo root
 
 cd packages/ac2-open-claw-reference
-pnpm install:plugin                                   # build → pack with local libnice artifact → install → enable
+pnpm install:plugin                                   # build → pack → openclaw plugins install → rebuild natives → enable
 openclaw ac2 setup                                    # wire channel + tools into openclaw.json
 openclaw gateway restart
 ```
 
 `pnpm install:plugin` builds the flat tree-shakeable `dist/`, packs a
 tarball with workspace-only devDependencies stripped, installs it into
-OpenClaw, and enables the plugin. The local pack step builds the current
-platform's libnice-backed `node-datachannel` artifact and includes it in the
-tarball.
+`${OPENCLAW_HOME:-~/.openclaw}/extensions/ac2`, rebuilds the native
+`node-datachannel` and `@napi-rs/keyring` addons via `npm rebuild`, and
+enables the plugin.
 
 To uninstall (either install path):
 
@@ -114,4 +124,4 @@ Algorand payment transaction signing over AC2, retries with
   channel-owned sessions, wallet-issued agent identity, x402 exact Algorand
   paid fetch via wallet-approved signing.
 - ❌ Chain-specific verifiers, wallet introspection, holding user keys,
-  wallet UI — these belong in downstream plugins.
+  a bundled Node WebRTC stack — these belong in downstream plugins.
