@@ -14,129 +14,27 @@ import type {
   Ac2StartPairingOptions,
 } from '@algorandfoundation/ac2-sdk/signaling';
 import { rtcDataChannelTransport } from '@algorandfoundation/ac2-sdk/transport';
-import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { dirname, parse, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import qrcode from 'qrcode-terminal';
 import { normalizeDidKey } from '../identity/did.js';
 
 // @ts-ignore - compiled JS in node_modules
 import { SignalClient } from '@algorandfoundation/liquid-client/signal';
 import { io as createSocketIoClient } from 'socket.io-client';
+// @roamhq/wrtc: native libwebrtc-based Node WebRTC backend, interops with react-native-webrtc.
+// It ships as CommonJS, so under ESM the dynamically-assigned exports
+// (RTCPeerConnection, RTCIceCandidate, RTCSessionDescription) land on the
+// module's default export rather than the namespace — read from there.
+// @ts-ignore - ships its own types
+import * as wrtcNs from '@roamhq/wrtc';
+const wrtc: any = (wrtcNs as any).default ?? wrtcNs;
 
-let webRtcPolyfillReady: Promise<void> | undefined;
-
-const require = createRequire(import.meta.url);
-
-function findPackageRoot(entrypoint: string): string {
-  let dir = dirname(entrypoint);
-  const root = parse(dir).root;
-  while (dir !== root) {
-    if (existsSync(resolve(dir, 'package.json'))) return dir;
-    dir = dirname(dir);
+if (typeof (globalThis as any).RTCPeerConnection === 'undefined') {
+  (globalThis as any).RTCPeerConnection = wrtc.RTCPeerConnection;
+  (globalThis as any).RTCIceCandidate = wrtc.RTCIceCandidate;
+  (globalThis as any).RTCSessionDescription = wrtc.RTCSessionDescription;
+  if (wrtc.RTCDataChannel) {
+    (globalThis as any).RTCDataChannel = wrtc.RTCDataChannel;
   }
-  throw new Error(`Could not locate package root for ${entrypoint}`);
-}
-
-function findVendorBinary(platformKey: string): string {
-  let dir = dirname(fileURLToPath(import.meta.url));
-  const root = parse(dir).root;
-  while (dir !== root) {
-    const candidate = resolve(
-      dir,
-      'vendor',
-      'node-datachannel',
-      platformKey,
-      'node_datachannel.node',
-    );
-    if (existsSync(candidate)) return candidate;
-    dir = dirname(dir);
-  }
-  return resolve(
-    dirname(fileURLToPath(import.meta.url)),
-    'vendor',
-    'node-datachannel',
-    platformKey,
-    'node_datachannel.node',
-  );
-}
-
-function ensureBundledNodeDataChannelBinary(): void {
-  const platformKey = `${process.platform}-${process.arch}`;
-  const vendorBinary = findVendorBinary(platformKey);
-  const vendorDir = dirname(vendorBinary);
-  const nodeDataChannelRoot = findPackageRoot(require.resolve('node-datachannel'));
-  const targetBinary = resolve(
-    nodeDataChannelRoot,
-    'build',
-    'Release',
-    'node_datachannel.node',
-  );
-
-  if (!existsSync(vendorBinary)) {
-    if (existsSync(targetBinary)) return;
-    throw new Error(
-      `AC2 does not include a libnice node-datachannel binary for ${platformKey}. ` +
-        'Install the latest ac2 OpenClaw plugin canary; if this persists, this platform needs a published AC2 WebRTC artifact.',
-    );
-  }
-
-  mkdirSync(dirname(targetBinary), { recursive: true });
-  for (const entry of readdirSync(vendorDir, { withFileTypes: true })) {
-    if (!entry.isFile()) continue;
-    copyFileSync(resolve(vendorDir, entry.name), resolve(dirname(targetBinary), entry.name));
-  }
-}
-
-async function ensureWebRtcPolyfill(): Promise<void> {
-  if (typeof (globalThis as any).RTCPeerConnection !== 'undefined') return;
-  webRtcPolyfillReady ??= (async () => {
-    // libdatachannel: modern SCTP/DTLS Node WebRTC backend, interops with react-native-webrtc.
-    // Import lazily so plugin discovery/CLI startup does not require the native binary.
-    ensureBundledNodeDataChannelBinary();
-    const ndc = await import('node-datachannel/polyfill');
-
-    // Subclass node-datachannel's RTCPeerConnection to queue remote ICE candidates
-    // that arrive via trickle before setRemoteDescription completes. The Liquid Auth
-    // SignalClient can race between trickling candidates and the offer/answer exchange;
-    // node-datachannel is stricter than browser WebRTC and throws immediately
-    // ("Got a remote candidate without ICE transport") instead of buffering silently.
-    class Ac2RTCPeerConnection extends (ndc as any).RTCPeerConnection {
-      private _ac2PendingCandidates: any[] = [];
-      private _ac2RemoteDescReady = false;
-
-      async setRemoteDescription(desc: any): Promise<void> {
-        this._ac2RemoteDescReady = false;
-        await super.setRemoteDescription(desc);
-        this._ac2RemoteDescReady = true;
-        const queued = this._ac2PendingCandidates.splice(0);
-        for (const c of queued) {
-          try {
-            await super.addIceCandidate(c);
-          } catch {
-            // Stale or invalid candidate after drain — safe to ignore.
-          }
-        }
-      }
-
-      async addIceCandidate(candidate: any): Promise<void> {
-        if (!this._ac2RemoteDescReady) {
-          this._ac2PendingCandidates.push(candidate);
-          return;
-        }
-        return super.addIceCandidate(candidate);
-      }
-    }
-
-    (globalThis as any).RTCPeerConnection = Ac2RTCPeerConnection;
-    (globalThis as any).RTCIceCandidate = (ndc as any).RTCIceCandidate;
-    (globalThis as any).RTCSessionDescription = (ndc as any).RTCSessionDescription;
-    if ((ndc as any).RTCDataChannel) {
-      (globalThis as any).RTCDataChannel = (ndc as any).RTCDataChannel;
-    }
-  })();
-  await webRtcPolyfillReady;
 }
 
 /** Render a pairing payload to the terminal (QR + raw string). */
@@ -191,8 +89,6 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
   constructor(private readonly defaults: LiquidAuthChannelProviderOptions = {}) {}
 
   async startPairing(_opts: Ac2StartPairingOptions = {}): Promise<Ac2PairingHandle> {
-    await ensureWebRtcPolyfill();
-
     const origin = this.defaults.origin ?? 'https://debug.liquidauth.com';
     const requestId = this.defaults.requestId ?? SignalClient.generateRequestId();
     const includeStream = this.defaults.includeStreamChannel ?? true;

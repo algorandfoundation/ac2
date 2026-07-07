@@ -30,6 +30,9 @@ agent never touches the user's account keys or passkeys.
 - Node.js ≥ 22, pnpm ≥ 10
 - `openclaw` CLI on `PATH`
 - `openclaw` already set up with an agent
+- A C/C++ toolchain (the plugin pulls in native addons —
+  `@roamhq/wrtc`, `@napi-rs/keyring` — that are rebuilt against your
+  Node version at install time)
 
 ### Install the plugin into OpenClaw
 
@@ -37,6 +40,14 @@ agent never touches the user's account keys or passkeys.
 
 ```bash
 openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.11
+
+# openclaw plugins install runs `npm install --ignore-scripts`, so native
+# addons are not built automatically. Rebuild them from the plugin project dir:
+PLUGIN_DIR="$(ls -d "${OPENCLAW_HOME:-$HOME/.openclaw}"/npm/projects/algorandfoundation-ac2-open-claw-reference-* | head -n1)"
+
+# Rebuild native addons (@napi-rs/keyring, @roamhq/wrtc) via prebuild-install:
+npm rebuild --prefix "$PLUGIN_DIR" @napi-rs/keyring @roamhq/wrtc
+
 openclaw plugins enable ac2
 openclaw ac2 setup                                    # wire channel + tools into openclaw.json
 openclaw ac2 status
@@ -63,9 +74,9 @@ openclaw gateway restart
 
 `pnpm install:plugin` builds the flat tree-shakeable `dist/`, packs a
 tarball with workspace-only devDependencies stripped, installs it into
-OpenClaw, and enables the plugin. The local pack step builds the current
-platform's libnice-backed `node-datachannel` artifact and includes it in the
-tarball.
+`${OPENCLAW_HOME:-~/.openclaw}/extensions/ac2-open-claw-reference`, then
+rebuilds the native addons (`@napi-rs/keyring`, `@roamhq/wrtc`) via
+`npm rebuild`.
 
 To uninstall (either install path):
 
