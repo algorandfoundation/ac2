@@ -105,13 +105,36 @@ const AC2_HEARTBEAT_MS = 20000;
  * Treat the peer as gone if we receive no `ac2-heartbeat` traffic for this
  * long. 2.5× the send interval tolerates one missed round-trip plus jitter.
  */
-const AC2_HEARTBEAT_TIMEOUT_MS = AC2_HEARTBEAT_MS * 2.5;
+const AC2_DEFAULT_HEARTBEAT_TIMEOUT_MS = AC2_HEARTBEAT_MS * 2.5;
 const AC2_CONTROL_LABEL = 'ac2-v1' as const;
 const AC2_STREAM_LABEL = 'ac2-stream' as const;
 /** Dedicated liveness channel — keeps keepalive off the control plane. */
 const AC2_HEARTBEAT_LABEL = 'ac2-heartbeat' as const;
 const AC2_HEARTBEAT_PING = 'ping' as const;
 const AC2_HEARTBEAT_PONG = 'pong' as const;
+
+export function closeRtcDataChannel(channel: unknown): void {
+  if (
+    channel &&
+    typeof (channel as { close?: unknown }).close === 'function' &&
+    (channel as { readyState?: unknown }).readyState !== 'closed'
+  ) {
+    try {
+      (channel as { close: () => void }).close();
+    } catch {
+      // Already closing/closed; ignore.
+    }
+  }
+}
+
+export function resolveHeartbeatTimeoutMs(value?: string): number {
+  if (value === undefined || value.trim().length === 0) return AC2_DEFAULT_HEARTBEAT_TIMEOUT_MS;
+  const parsed = Number(value);
+  const minimum = AC2_HEARTBEAT_MS * 2;
+  return Number.isFinite(parsed) && parsed >= minimum
+    ? parsed
+    : AC2_DEFAULT_HEARTBEAT_TIMEOUT_MS;
+}
 
 export interface LiquidAuthChannelProviderOptions {
   /** Liquid Auth signaling server origin. */
@@ -120,6 +143,8 @@ export interface LiquidAuthChannelProviderOptions {
   requestId?: string;
   /** Request the optional `ac2-stream` channel (default `true`). */
   includeStreamChannel?: boolean;
+  /** Milliseconds without inbound heartbeat traffic before closing. */
+  heartbeatTimeoutMs?: number;
 }
 
 export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
@@ -131,6 +156,9 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
     const origin = this.defaults.origin ?? 'https://debug.liquidauth.com';
     const requestId = this.defaults.requestId ?? SignalClient.generateRequestId();
     const includeStream = this.defaults.includeStreamChannel ?? true;
+    const heartbeatTimeoutMs =
+      this.defaults.heartbeatTimeoutMs ??
+      resolveHeartbeatTimeoutMs(process.env['AC2_HEARTBEAT_TIMEOUT_MS']);
 
     // Build the signaling socket from the Node-native `socket.io-client` and
     // pass it to `SignalClient` via its `{ socket }` option.
@@ -265,8 +293,13 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       // Bidirectional keep-alive: each side pings on its own timer AND replies
       // PONG to the peer's pings. `lastInboundAt` is updated on any inbound
       // frame (PING or PONG); the interval below declares the peer dead if no
-      // inbound traffic arrives within AC2_HEARTBEAT_TIMEOUT_MS and triggers
+      // inbound traffic arrives within `heartbeatTimeoutMs` and triggers
       // `close()` so the control transport's `onClose` propagates upstream.
+      //
+      // The heartbeat channel is optional and mobile controllers can suspend
+      // it while backgrounded. Only enforce the timeout when the heartbeat
+      // channel is present and open; the WebRTC/control close handlers remain
+      // authoritative for peers that really go away.
       let lastInboundAt = Date.now();
 
       if (heartbeatChannel) {
@@ -283,10 +316,12 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       }
 
       heartbeat = setInterval(() => {
-        if (Date.now() - lastInboundAt > AC2_HEARTBEAT_TIMEOUT_MS) {
+        if (!heartbeatChannel || heartbeatChannel.readyState !== 'open') return;
+
+        if (Date.now() - lastInboundAt > heartbeatTimeoutMs) {
           // eslint-disable-next-line no-console
           console.warn(
-            `[ac2] Heartbeat timeout (${AC2_HEARTBEAT_TIMEOUT_MS}ms with no inbound) — closing channel.`,
+            `[ac2] Heartbeat timeout (${heartbeatTimeoutMs}ms with no inbound) — closing channel.`,
           );
           void close();
           return;
@@ -307,6 +342,9 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
           clearInterval(heartbeat);
           heartbeat = undefined;
         }
+        closeRtcDataChannel(heartbeatChannel);
+        closeRtcDataChannel(streamChannel);
+        closeRtcDataChannel(controlChannel);
         try {
           client.close(true);
         } catch {

@@ -39,7 +39,7 @@ agent never touches the user's account keys or passkeys.
 #### From the npm registry (canary)
 
 ```bash
-openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.15
+openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.16
 
 # openclaw plugins install runs `npm install --ignore-scripts`, so the
 # @napi-rs/keyring native addon is not built automatically. Rebuild it from
@@ -109,6 +109,8 @@ Once installed, `openclaw.json` will contain an entry like:
 ```
 
 `AC2_LIQUID_AUTH_SERVER` overrides `liquidAuthServer` at runtime.
+`AC2_HEARTBEAT_TIMEOUT_MS` overrides the WebRTC heartbeat liveness timeout;
+it defaults to `50000`.
 
 ### Using it
 
