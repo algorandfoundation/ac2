@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.17](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.16...ac2-open-claw-reference@1.0.0-canary.17) (2026-07-07)
+
+
+### Bug Fixes
+
+* **openclaw:** notify transport close on forced disconnect ([765fd30](https://github.com/algorandfoundation/ac2/commit/765fd30de2109c75e74ccffdb80844271546467f))
+
 # [ac2-open-claw-reference@1.0.0-canary.16](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.15...ac2-open-claw-reference@1.0.0-canary.16) (2026-07-07)
 
 
