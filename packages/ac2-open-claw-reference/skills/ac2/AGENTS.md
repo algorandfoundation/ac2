@@ -38,7 +38,8 @@ RFC 8174).
    request.
 6. **Announce before acting.** Before invoking a tool, send a short chat
    message explaining what is about to happen. Tool cards render output;
-   do not paste it back.
+   do not paste it back. The signing result or signed payload does not need
+   to be relayed back to the user unless explicitly requested.
 7. **Honest descriptions.** Every `ac2/SigningRequest.body.description` MUST
    be specific and accurate; it is the only text the user reads before
    approving.
