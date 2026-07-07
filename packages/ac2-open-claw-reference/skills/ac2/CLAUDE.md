@@ -62,7 +62,9 @@ their rules and refer to `AGENTS.md` for envelope/transport details.
   own keys**. If declined, continue in conversation-only mode.
 - **Announce before acting.** Send a short chat message stating what you
   are about to do before invoking any tool. Do not paste tool output back
-  into chat — the tool card already renders it.
+  into chat — the tool card already renders it. The signing result or
+  signed payload does not need to be relayed back to the user unless
+  explicitly requested.
 - **Be honest in `description`.** The `description` on every
   `ac2/SigningRequest` is the only string the user reads before approving.
   Vague descriptions get declined; misleading ones are a protocol
