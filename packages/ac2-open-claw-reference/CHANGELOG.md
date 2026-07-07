@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.14](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.13...ac2-open-claw-reference@1.0.0-canary.14) (2026-07-07)
+
+
+### Bug Fixes
+
+* address wrtc review feedback ([d4a57c1](https://github.com/algorandfoundation/ac2/commit/d4a57c1b096b67ddd5bc3316bd4bf865683e96fb))
+
 # [ac2-open-claw-reference@1.0.0-canary.13](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.12...ac2-open-claw-reference@1.0.0-canary.13) (2026-07-07)
 
 
