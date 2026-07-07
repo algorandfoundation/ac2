@@ -39,7 +39,7 @@ agent never touches the user's account keys or passkeys.
 #### From the npm registry (canary)
 
 ```bash
-openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.12
+openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.15
 
 # openclaw plugins install runs `npm install --ignore-scripts`, so the
 # @napi-rs/keyring native addon is not built automatically. Rebuild it from
@@ -119,6 +119,21 @@ resources that advertise x402 exact payments on Algorand. `ac2_x402_fetch`
 does the x402 402-response negotiation, asks the wallet to approve the
 Algorand payment transaction signing over AC2, retries with
 `PAYMENT-SIGNATURE`, and returns the HTTP/payment result.
+
+For the demo weather resource, the agent should use `ac2_x402_fetch` even
+when the user asks a plain weather question such as "what's the weather
+like today?" and does not provide a URL. In that case the default endpoint
+is:
+
+```text
+https://example.x402.goplausible.xyz/avm/weather
+```
+
+The wallet approval prompt intentionally stays human-readable: it names
+the paid resource, amount, network, and a compact recipient/sender summary.
+The underlying signing request still uses raw Ed25519 over Algorand
+transaction signing bytes (`TX`-prefixed bytes), with x402 payment and
+payload metadata available in the technical request details.
 
 ## Scope
 
