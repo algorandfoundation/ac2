@@ -179,6 +179,7 @@ describe('ac2 plugin', () => {
       const caps = capabilitiesFlow({}, { manager });
       expect(caps.status).toBe('no_active_session');
       expect(caps.session.connected).toBe(false);
+      expect(caps.session.walletAddress).toBeNull();
     });
 
     it('an active-but-identity-less session locks signing and reports no DID', async () => {
@@ -438,6 +439,7 @@ describe('ac2 plugin', () => {
       });
 
       expect(signer.address).toBe(sender.toString());
+      expect(capabilitiesFlow({}, { manager }).session.walletAddress).toBe(sender.toString());
       const signed = await signer.signTransactions([unsignedTxn], [0]);
       expect(signed).toHaveLength(1);
       expect(signed[0]).toBeInstanceOf(Uint8Array);
@@ -512,6 +514,7 @@ describe('ac2 plugin', () => {
       });
 
       expect(signer.address).toBe(sender.toString());
+      expect(capabilitiesFlow({}, { manager }).session.walletAddress).toBe(sender.toString());
       const signed = await signer.signTransactions([encodeTransactionRaw(txn)], [0]);
       expect(signed[0]).toBeInstanceOf(Uint8Array);
       expect(observedRequest.body.description).toContain(

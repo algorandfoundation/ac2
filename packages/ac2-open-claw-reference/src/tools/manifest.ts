@@ -103,7 +103,7 @@ const plugin = defineToolPlugin({
       name: 'ac2_capabilities',
       label: 'AC2 Capabilities',
       description:
-        "Return the agent's AC2 descriptor and the protocol catalog of sig_hints. Reports whether an `ac2` channel session is currently active. Downstream wallet-specific plugins extend this with live wallet identities/accounts.",
+        "Return the agent's AC2 descriptor, the protocol catalog of sig_hints, and the connected wallet's public Algorand address. Reports whether an `ac2` channel session is currently active. Downstream wallet-specific plugins may extend this with additional live wallet identities/accounts.",
       parameters: Type.Object({
         refresh: Type.Optional(
           Type.Boolean({

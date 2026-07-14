@@ -32,6 +32,7 @@ The agent presents itself via these fields, populated at runtime by
 | `name`          | `ac2_capabilities.agent.plugin.id`       | Human-readable plugin identifier (`ac2`).                                                           |
 | `version`       | `ac2_capabilities.agent.plugin.version`  | Plugin semver.                                                                                                          |
 | `controllerDid` | `ac2_capabilities.session.controllerDid` | The Controller account currently paired (NOT part of the agent's identity — it identifies the _peer_).                  |
+| `walletAddress` | `ac2_capabilities.session.walletAddress` | The Controller's validated public Algorand account address, suitable for manually constructing transactions.            |
 
 The agent MUST NOT report a hard-coded placeholder DID (e.g. the legacy
 `did:key:zAc2Controller`). If `agent.did` is `null`, the agent MUST report

@@ -2,7 +2,6 @@
 
 import { Buffer } from 'node:buffer';
 
-import { encodeAddress, isValidAddress } from '@algorandfoundation/algokit-utils/common';
 import {
   bytesForSigning,
   decodeTransaction,
@@ -13,15 +12,16 @@ import {
 import type { ClientAvmSigner } from '@x402/avm';
 import type { PaymentRequirements, ResourceInfo } from '@x402/core/types';
 
-import { extractEd25519PublicKey } from '../identity/did.js';
 import type { PluginConfig, ToolContext } from '../session/contracts.js';
 import { signFlow, type SignDeps } from '../session/flows.js';
 import {
   NoActiveSessionError,
   sessionManager,
-  type ActiveSession,
   type SessionManager,
 } from '../session/manager.js';
+import { sessionAlgorandAddress } from '../session/wallet-address.js';
+
+export { controllerDidToAlgorandAddress } from '../session/wallet-address.js';
 
 export const X402_ALGORAND_SIGNING_SCHEMA =
   'x402/exact/algorand/v2/transaction-signing-bytes';
@@ -56,25 +56,6 @@ export class X402ControllerAddressError extends Error {
 
 function managerFromDeps(deps?: SignDeps): SessionManager {
   return deps?.manager ?? sessionManager;
-}
-
-export function controllerDidToAlgorandAddress(controllerDid: string): string | undefined {
-  const raw = controllerDid.startsWith('did:key:')
-    ? controllerDid.slice('did:key:'.length)
-    : controllerDid;
-  if (isValidAddress(raw)) return raw;
-
-  const publicKey = extractEd25519PublicKey(controllerDid);
-  if (!publicKey) return undefined;
-  const address = encodeAddress(publicKey);
-  return isValidAddress(address) ? address : undefined;
-}
-
-function sessionAlgorandAddress(active: ActiveSession): string | undefined {
-  if (active.walletAddress && isValidAddress(active.walletAddress)) {
-    return active.walletAddress;
-  }
-  return controllerDidToAlgorandAddress(active.controllerDid);
 }
 
 function decodeUnsignedTransaction(txnBytes: Uint8Array, index: number): Transaction {

@@ -107,8 +107,14 @@ Before answering any of the following, you MUST call `ac2_capabilities`
 
 - "What is your DID / did:key / identity?" → `agent.did`.
 - "Who am I connected as?" / "Which account is paired?" → `session.controllerDid`.
+- "What is my Algorand/wallet address?" → `session.walletAddress`.
 - "What can you sign?" → entries from `agent.sigHintsCatalog`, with the
   caveat that the connected wallet may not support every catalog entry.
+
+When manually constructing an Algorand transaction, use
+`session.walletAddress` as the connected account. If it is `null`, stop and
+explain that no Algorand address is available for the active session; never
+guess one.
 
 Never report the legacy placeholder `did:key:zAc2Controller`.
 
