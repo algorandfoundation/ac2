@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.18](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.17...ac2-open-claw-reference@1.0.0-canary.18) (2026-07-15)
+
+
+### Features
+
+* **openclaw:** expose Algorand wallet address ([7ac802d](https://github.com/algorandfoundation/ac2/commit/7ac802d3cd771ad66a170c09dfb0a519c2f34e3f))
+
 # [ac2-open-claw-reference@1.0.0-canary.17](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.16...ac2-open-claw-reference@1.0.0-canary.17) (2026-07-07)
 
 
