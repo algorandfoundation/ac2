@@ -43,7 +43,7 @@ Current messaging systems for AI agent interaction (WhatsApp, Telegram, email) w
 
 AC2 addresses these gaps by providing a protocol where:
 - For operations requiring the user's key, agents request and the user approves via familiar interfaces
-- The agent itself holds no keys; key custody for the agent's own identity lives in the agent's tooling
+- The agent itself holds no transaction signing keys; key custody for the agent's own identity lives in the agent's tooling
 - Extensions to this core MAY introduce additional flows such as autonomous operation under pre-authorized bounds
 - All communication is authenticated and end-to-end encrypted
 
@@ -125,7 +125,7 @@ graph TD;
     User -- "returns signature" --> Agent;
 ```
 
-Agents MUST NOT hold keys. Keys for the agent's own identity are held by the agent's tooling (e.g., agent-internal tools, MCP tools, or OWS wallet tooling); the agent invokes tool calls and the tooling performs any signing it is configured to perform.
+Agents MUST NOT hold transaction signing keys. Keys for the agent's own identity are held by the agent's tooling (e.g., agent-internal tools, MCP tools, or OWS wallet tooling); the agent invokes tool calls and the tooling performs any signing it is configured to perform.
 
 **Controller Components**:
 - **Wallet/Identity Manager**: Liquid Auth-compatible wallet with FIDO2/WebAuthn support
@@ -274,7 +274,7 @@ An **agent** answers with its implementation descriptor and supported signing op
   "body": {
     "role": "agent",
     "protocol": "1.0",
-    "impl": { "name": "ac2-plugin-example", "version": "1.0.0", "sdk": "0.0.8" },
+    "impl": { "name": "regent-plugin-example", "version": "1.0.0", "sdk": "0.0.8" },
     "features": ["signing", "verify", "status", "notice", "capabilities"],
     "sig_hints": ["raw-ed25519", "message-algorand", "message-evm", "transaction-algorand"],
     "tools": ["ac2_sign", "ac2_capabilities", "ac2_verify_raw_ed25519"]
