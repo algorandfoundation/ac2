@@ -2,8 +2,9 @@
 
 import type { ChannelPlugin } from 'openclaw/plugin-sdk';
 
-import { CHANNEL_ID } from '../runtime.js';
+import { CHANNEL_ID, getActiveApi, resolveConfig } from '../runtime.js';
 import { sessionManager } from '../session/manager.js';
+import { connectionSupervisor } from '../session/supervisor.js';
 import { AC2_CHANNEL_ENV_VARS } from '../setup/config.js';
 import {
   AC2_DEFAULT_ACK_POLICY,
@@ -66,39 +67,60 @@ export function buildChannelObject(): ChannelPlugin {
     },
     channelEnvVars: AC2_CHANNEL_ENV_VARS,
     config: {
-      listAccountIds: (): string[] => {
-        const active = sessionManager.getActive();
-        return active ? [active.controllerDid] : [];
-      },
+      // The gateway must be able to start the provider before a controller is
+      // online, so account discovery cannot depend on the active DataChannel.
+      listAccountIds: (): string[] => ['default'],
       resolveAccount: (
-        _cfg: unknown,
+        cfg: unknown,
         accountId?: string | null,
-      ): { accountId: string | null; config: Record<string, unknown> } => {
-        const active = sessionManager.getActive();
-        if (
-          active &&
-          (accountId === undefined || accountId === null || accountId === active.controllerDid)
-        ) {
-          return {
-            accountId: active.controllerDid,
-            config: { peerDid: active.controllerDid },
-          };
-        }
-        return { accountId: accountId ?? null, config: {} };
+      ): { accountId: string; config: Record<string, unknown> } => {
+        const channelConfig =
+          (cfg as { channels?: { ac2?: Record<string, unknown> } } | undefined)?.channels?.ac2 ??
+          {};
+        return { accountId: accountId ?? 'default', config: channelConfig };
       },
       inspectAccount: (_cfg: unknown, accountId?: string | null): unknown => {
         const active = sessionManager.getActive();
-        if (
-          !active ||
-          (accountId !== undefined && accountId !== null && accountId !== active.controllerDid)
-        ) {
-          return null;
-        }
+        const supervisor = connectionSupervisor.getStatus();
         return {
-          peerDid: active.controllerDid,
-          paired: true,
-          online: true,
+          accountId: accountId ?? 'default',
+          ...(active ? { peerDid: active.controllerDid } : {}),
+          paired: supervisor.pairingId !== undefined,
+          online: active !== null,
+          state: supervisor.state,
         };
+      },
+      isConfigured: (): boolean => true,
+    },
+    gateway: {
+      startAccount: async (ctx: any): Promise<void> => {
+        const api = getActiveApi();
+        if (!api) throw new Error('[ac2] OpenClaw API is unavailable during gateway startup');
+        const accountConfig = (ctx.account?.config ?? {}) as {
+          liquidAuthServer?: string;
+          defaultTimeoutMs?: number;
+        };
+        const baseConfig = resolveConfig(api);
+        await connectionSupervisor.start({
+          api,
+          config: { ...baseConfig, ...accountConfig },
+          signal: ctx.abortSignal,
+          setStatus: (status) => {
+            ctx.setStatus({
+              ...ctx.getStatus(),
+              accountId: ctx.accountId,
+              running: status.state !== 'stopped',
+              connected: status.state === 'online',
+              linked: status.pairingId !== undefined,
+              statusState: status.state,
+              reconnectAttempts: status.reconnectAttempts,
+              lastError: status.lastError ?? null,
+            });
+          },
+        });
+      },
+      stopAccount: async (): Promise<void> => {
+        await connectionSupervisor.stop();
       },
     },
     outbound: {

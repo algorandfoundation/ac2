@@ -101,11 +101,6 @@ const AC2_ICE_CONFIG: any = {
 };
 
 const AC2_HEARTBEAT_MS = 20000;
-/**
- * Treat the peer as gone if we receive no `ac2-heartbeat` traffic for this
- * long. 2.5× the send interval tolerates one missed round-trip plus jitter.
- */
-const AC2_DEFAULT_HEARTBEAT_TIMEOUT_MS = AC2_HEARTBEAT_MS * 2.5;
 const AC2_CONTROL_LABEL = 'ac2-v1' as const;
 const AC2_STREAM_LABEL = 'ac2-stream' as const;
 /** Dedicated liveness channel — keeps keepalive off the control plane. */
@@ -178,13 +173,249 @@ export function closeAwareTransport(base: Ac2Transport): {
   return { transport, emitClose };
 }
 
-export function resolveHeartbeatTimeoutMs(value?: string): number {
-  if (value === undefined || value.trim().length === 0) return AC2_DEFAULT_HEARTBEAT_TIMEOUT_MS;
+export function resolveHeartbeatTimeoutMs(value?: string | number): number | undefined {
+  // Mobile runtimes suspend JavaScript in the background, so lack of an
+  // application-level pong is not proof that the native WebRTC peer is dead.
+  // Keep the timeout opt-in and rely on DataChannel/ICE close events by default.
+  if (value === undefined || (typeof value === 'string' && value.trim().length === 0)) {
+    return undefined;
+  }
   const parsed = Number(value);
   const minimum = AC2_HEARTBEAT_MS * 2;
-  return Number.isFinite(parsed) && parsed >= minimum
-    ? parsed
-    : AC2_DEFAULT_HEARTBEAT_TIMEOUT_MS;
+  return Number.isFinite(parsed) && parsed >= minimum ? parsed : undefined;
+}
+
+interface HeartbeatDataChannelLike {
+  readyState?: string;
+  onmessage: ((event: { data: unknown }) => void) | null;
+  send(payload: string): void;
+}
+
+/** Install heartbeat liveness and ping-response handling as soon as a channel is discovered. */
+export function attachHeartbeatResponder(
+  channel: HeartbeatDataChannelLike,
+  onInbound: () => void,
+): void {
+  channel.onmessage = (event: { data: unknown }) => {
+    onInbound();
+    if (event?.data !== AC2_HEARTBEAT_PING || channel.readyState !== 'open') return;
+    try {
+      channel.send(AC2_HEARTBEAT_PONG);
+    } catch {
+      // Channel closing between check and send; ignore.
+    }
+  };
+}
+
+/** Durable provider credential issued by the Liquid Auth pairing service. */
+export interface LiquidAuthPairingCredential {
+  version: 2;
+  pairingId: string;
+  role: 'provider';
+  credential: string;
+}
+
+export type LiquidAuthPairingErrorCode = 'PAIRING_UNAUTHORIZED' | 'PAIRING_REVOKED';
+
+/** Stable pairing-auth failure surfaced by the Socket.IO handshake. */
+export class LiquidAuthPairingError extends Error {
+  readonly code: LiquidAuthPairingErrorCode;
+
+  constructor(code: LiquidAuthPairingErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'LiquidAuthPairingError';
+    this.code = code;
+  }
+}
+
+/** Read an explicit server pairing error without classifying transient network failures. */
+export function getLiquidAuthPairingErrorCode(
+  error: unknown,
+): LiquidAuthPairingErrorCode | undefined {
+  let current = error;
+  const seen = new Set<unknown>();
+  while (current !== null && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    const record = current as {
+      code?: unknown;
+      data?: { code?: unknown };
+      cause?: unknown;
+    };
+    const code = record.code ?? record.data?.code;
+    if (code === 'PAIRING_UNAUTHORIZED' || code === 'PAIRING_REVOKED') return code;
+    current = record.cause;
+  }
+  return undefined;
+}
+
+interface SignalingSocketLike {
+  connected?: boolean;
+  on(event: 'connect', listener: () => void): unknown;
+  on(event: 'connect_error', listener: (error: unknown) => void): unknown;
+  off(event: 'connect', listener: () => void): unknown;
+  off(event: 'connect_error', listener: (error: unknown) => void): unknown;
+}
+
+/** Wait for signaling while failing fast only for explicit credential rejection. */
+export function waitForSignalingConnect(socket: SignalingSocketLike): Promise<void> {
+  if (socket.connected) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => {
+      socket.off('connect', onConnect);
+      socket.off('connect_error', onConnectError);
+    };
+    const finish = (operation: () => void): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      operation();
+    };
+    const onConnect = (): void => finish(resolve);
+    const onConnectError = (error: unknown): void => {
+      const code = getLiquidAuthPairingErrorCode(error);
+      if (!code) return;
+      const fallback =
+        code === 'PAIRING_REVOKED'
+          ? 'Pairing has been revoked'
+          : 'Pairing credential was not accepted';
+      const message =
+        error instanceof Error && error.message.length > 0 ? error.message : fallback;
+      finish(() => reject(new LiquidAuthPairingError(code, message, { cause: error })));
+    };
+
+    socket.on('connect', onConnect);
+    socket.on('connect_error', onConnectError);
+    // Close the race where the socket connected between the first check and
+    // listener registration.
+    if (socket.connected) onConnect();
+  });
+}
+
+export function isLiquidAuthPairingCredential(
+  value: unknown,
+): value is LiquidAuthPairingCredential {
+  if (value === null || typeof value !== 'object') return false;
+  const pairing = value as Partial<LiquidAuthPairingCredential>;
+  return (
+    pairing.version === 2 &&
+    pairing.role === 'provider' &&
+    typeof pairing.pairingId === 'string' &&
+    pairing.pairingId.length > 0 &&
+    typeof pairing.credential === 'string' &&
+    pairing.credential.length > 0
+  );
+}
+
+/** Create a durable invitation when no provider credential has been persisted. */
+export async function createPairingInvitation(
+  origin: string,
+  requestId?: string,
+  signal?: AbortSignal,
+): Promise<LiquidAuthPairingCredential> {
+  const response = await fetch(`${origin.replace(/\/$/, '')}/pairings/invitations`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(requestId ? { requestId } : {}),
+    ...(signal !== undefined ? { signal } : {}),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `[ac2] Liquid Auth invitation failed (${response.status} ${response.statusText})`,
+    );
+  }
+  const pairing: unknown = await response.json();
+  if (!isLiquidAuthPairingCredential(pairing)) {
+    throw new Error('[ac2] Liquid Auth invitation returned an invalid provider credential');
+  }
+  return pairing;
+}
+
+/** Revoke a durable pairing. A missing record is already effectively revoked. */
+export async function revokePairing(
+  origin: string,
+  pairing: LiquidAuthPairingCredential,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(
+    `${origin.replace(/\/$/, '')}/pairings/${encodeURIComponent(pairing.pairingId)}`,
+    {
+      method: 'DELETE',
+      headers: {
+        authorization: `Bearer ${pairing.credential}`,
+        'x-pairing-role': pairing.role,
+      },
+      ...(signal !== undefined ? { signal } : {}),
+    },
+  );
+  if (!response.ok && response.status !== 404 && response.status !== 410) {
+    throw new Error(
+      `[ac2] Liquid Auth pairing revocation failed (${response.status} ${response.statusText})`,
+    );
+  }
+}
+
+export function buildSignalingSocketOptions(pairing: LiquidAuthPairingCredential): {
+  autoConnect: true;
+  withCredentials: true;
+  transports: ['websocket', 'polling'];
+  tryAllTransports: true;
+  auth: LiquidAuthPairingCredential;
+} {
+  return {
+    autoConnect: true,
+    withCredentials: true,
+    // Prefer a real WebSocket so deployments that reject Engine.IO's XHR
+    // polling transport do not get stuck in a connect_error loop. Retain
+    // polling as a compatibility fallback for networks that block WebSockets.
+    transports: ['websocket', 'polling'],
+    tryAllTransports: true,
+    auth: pairing,
+  };
+}
+
+function pairingAbortError(): Error {
+  const error = new Error('[ac2] Pairing aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function waitForPairingPhase<T>(
+  promise: Promise<T>,
+  options: Ac2StartPairingOptions,
+  phase: string,
+): Promise<T> {
+  const { signal, timeoutMs } = options;
+  if (signal?.aborted) return Promise.reject(pairingAbortError());
+  if (signal === undefined && timeoutMs === undefined) return promise;
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = (): void => {
+      if (timeout) clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+    const onAbort = (): void => settle(() => reject(pairingAbortError()));
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (timeoutMs !== undefined) {
+      timeout = setTimeout(
+        () => settle(() => reject(new Error(`[ac2] Timeout waiting for ${phase}`))),
+        timeoutMs,
+      );
+    }
+    promise.then(
+      (value) => settle(() => resolve(value)),
+      (error) => settle(() => reject(error)),
+    );
+  });
 }
 
 export interface LiquidAuthChannelProviderOptions {
@@ -192,32 +423,78 @@ export interface LiquidAuthChannelProviderOptions {
   origin?: string;
   /** Pre-supplied requestId (otherwise `SignalClient.generateRequestId()`). */
   requestId?: string;
+  /** Durable provider credential returned by `/pairings/invitations`. */
+  pairing?: LiquidAuthPairingCredential;
   /** Request the optional `ac2-stream` channel (default `true`). */
   includeStreamChannel?: boolean;
-  /** Milliseconds without inbound heartbeat traffic before closing. */
+  /**
+   * Optional milliseconds without inbound heartbeat traffic before closing.
+   * Disabled by default because mobile controllers can suspend JavaScript in
+   * the background while their native WebRTC connection remains valid. Values
+   * below two heartbeat intervals (40 seconds) are ignored.
+   */
   heartbeatTimeoutMs?: number;
 }
 
 export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
   constructor(private readonly defaults: LiquidAuthChannelProviderOptions = {}) {}
 
-  async startPairing(_opts: Ac2StartPairingOptions = {}): Promise<Ac2PairingHandle> {
+  async startPairing(opts: Ac2StartPairingOptions = {}): Promise<Ac2PairingHandle> {
+    opts.signal?.throwIfAborted();
     await ensureWebRtcPolyfill();
 
     const origin = this.defaults.origin ?? 'https://debug.liquidauth.com';
-    const requestId = this.defaults.requestId ?? SignalClient.generateRequestId();
+    const invitationPromise = this.defaults.pairing
+      ? Promise.resolve(this.defaults.pairing)
+      : createPairingInvitation(origin, this.defaults.requestId, opts.signal);
+    const durablePairing = await waitForPairingPhase(invitationPromise, opts, 'pairing invitation');
+    const requestId = durablePairing.pairingId;
     const includeStream = this.defaults.includeStreamChannel ?? true;
-    const heartbeatTimeoutMs =
-      this.defaults.heartbeatTimeoutMs ??
-      resolveHeartbeatTimeoutMs(process.env['AC2_HEARTBEAT_TIMEOUT_MS']);
+    const heartbeatTimeoutMs = resolveHeartbeatTimeoutMs(
+      this.defaults.heartbeatTimeoutMs ?? process.env['AC2_HEARTBEAT_TIMEOUT_MS'],
+    );
 
     // Build the signaling socket from the Node-native `socket.io-client` and
     // pass it to `SignalClient` via its `{ socket }` option.
-    const socket = createSocketIoClient(origin, {
-      autoConnect: true,
-    });
+    const socket = createSocketIoClient(origin, buildSignalingSocketOptions(durablePairing));
 
     const client = new SignalClient(origin, { socket: socket as any });
+
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let controlChannel: any;
+    let streamChannel: any;
+    let heartbeatChannel: any;
+    let lastHeartbeatInboundAt = Date.now();
+    let emitTransportClose: () => void = () => {};
+    let closed = false;
+
+    const close = async (): Promise<void> => {
+      if (closed) return;
+      closed = true;
+      if (heartbeat) {
+        clearInterval(heartbeat);
+        heartbeat = undefined;
+      }
+      closeRtcDataChannel(heartbeatChannel);
+      closeRtcDataChannel(streamChannel);
+      closeRtcDataChannel(controlChannel);
+      emitTransportClose();
+      try {
+        (client as unknown as { peerClient?: { close?: () => void } }).peerClient?.close?.();
+      } catch {
+        // Already closed; ignore.
+      }
+      try {
+        client.close(true);
+      } catch {
+        // Already closed; ignore.
+      }
+    };
+
+    const onAbort = (): void => {
+      void close();
+    };
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
 
     // Capture the wallet account from the Liquid Auth `link` response.
     let linkedWallet: string | undefined;
@@ -229,9 +506,7 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
 
     // Block resolving until the signaling socket is up (the caller renders
     // the QR only after `startPairing` resolves).
-    const waitForConnect = new Promise<void>((resolve) => {
-      client.on('connect', () => resolve());
-    });
+    const waitForConnect = waitForSignalingConnect(socket as unknown as SignalingSocketLike);
     // Bind low-level error/disconnect diagnostics once the socket is built.
     void (async () => {
       try {
@@ -278,27 +553,24 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
 
     const pairing: Ac2PairingInfo = {
       qrPayload,
-      metadata: { origin, requestId },
-    };
-
-    let heartbeat: ReturnType<typeof setInterval> | undefined;
-    let closed = false;
-
-    // Forward-declare so the heartbeat interval (defined inside `connect`)
-    // can call it on liveness timeout.
-    let close: () => Promise<void> = async () => {
-      /* assigned in connect() */
+      metadata: { origin, requestId, pairing: durablePairing },
     };
 
     const connect = async (): Promise<Ac2PairedChannel> => {
       // `peer(...)` resolves with the primary channel; the rest arrive via `'data-channel'`.
-      let controlChannel: any;
-      let streamChannel: any;
-      let heartbeatChannel: any;
       client.on('data-channel', (channel: any) => {
         if (channel.label === AC2_CONTROL_LABEL) controlChannel = channel;
         else if (channel.label === AC2_STREAM_LABEL) streamChannel = channel;
-        else if (channel.label === AC2_HEARTBEAT_LABEL) heartbeatChannel = channel;
+        else if (channel.label === AC2_HEARTBEAT_LABEL) {
+          heartbeatChannel = channel;
+          lastHeartbeatInboundAt = Date.now();
+          // Side channels may arrive after `peer()` resolves its first channel.
+          // Wire the responder here rather than after the connection grace
+          // period so a late heartbeat channel can never miss its handler.
+          attachHeartbeatResponder(channel, () => {
+            lastHeartbeatInboundAt = Date.now();
+          });
+        }
       });
 
       type DataChannelInit = { ordered?: boolean };
@@ -307,9 +579,19 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         ...(includeStream ? { [AC2_STREAM_LABEL]: { ordered: true } } : {}),
         [AC2_HEARTBEAT_LABEL]: { ordered: true },
       };
-      const primary: any = await client.peer(requestId, 'offer', AC2_ICE_CONFIG, {
+      const peerPromise: Promise<any> = (
+        client.peer as unknown as (
+          requestId: string,
+          type: 'offer',
+          config: any,
+          options: Record<string, unknown>,
+        ) => Promise<any>
+      )(requestId, 'offer', AC2_ICE_CONFIG, {
         dataChannels,
+        ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+        ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       });
+      const primary: any = await waitForPairingPhase(peerPromise, opts, 'peer connection');
       controlChannel = controlChannel ?? primary;
 
       if (controlChannel.label !== AC2_CONTROL_LABEL) {
@@ -323,6 +605,7 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       const { transport, emitClose } = closeAwareTransport(rtcDataChannelTransport(controlChannel));
+      emitTransportClose = emitClose;
 
       if (!transport.isOpen) {
         await new Promise<void>((resolve, reject) => {
@@ -343,33 +626,21 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
 
       // Bidirectional keep-alive: each side pings on its own timer AND replies
       // PONG to the peer's pings. `lastInboundAt` is updated on any inbound
-      // frame (PING or PONG); the interval below declares the peer dead if no
-      // inbound traffic arrives within `heartbeatTimeoutMs` and triggers
-      // `close()` so the control transport's `onClose` propagates upstream.
+      // frame (PING or PONG). If an operator explicitly configures
+      // `heartbeatTimeoutMs`, the interval below closes on expiry.
       //
-      // The heartbeat channel is optional and mobile controllers can suspend
-      // it while backgrounded. Only enforce the timeout when the heartbeat
-      // channel is present and open; the WebRTC/control close handlers remain
-      // authoritative for peers that really go away.
-      let lastInboundAt = Date.now();
-
-      if (heartbeatChannel) {
-        heartbeatChannel.onmessage = (ev: { data: unknown }) => {
-          lastInboundAt = Date.now();
-          if (ev?.data === AC2_HEARTBEAT_PING && heartbeatChannel.readyState === 'open') {
-            try {
-              heartbeatChannel.send(AC2_HEARTBEAT_PONG);
-            } catch {
-              // Channel closing between check and send; ignore.
-            }
-          }
-        };
-      }
-
+      // The timeout is disabled by default because mobile controllers can
+      // suspend JavaScript in the background while native WebRTC remains valid.
+      // WebRTC/control close handlers remain authoritative for peers that
+      // really go away.
+      lastHeartbeatInboundAt = Date.now();
       heartbeat = setInterval(() => {
         if (!heartbeatChannel || heartbeatChannel.readyState !== 'open') return;
 
-        if (Date.now() - lastInboundAt > heartbeatTimeoutMs) {
+        if (
+          heartbeatTimeoutMs !== undefined &&
+          Date.now() - lastHeartbeatInboundAt > heartbeatTimeoutMs
+        ) {
           // eslint-disable-next-line no-console
           console.warn(
             `[ac2] Heartbeat timeout (${heartbeatTimeoutMs}ms with no inbound) — closing channel.`,
@@ -385,24 +656,6 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
           // Channel closed between checks; ignore.
         }
       }, AC2_HEARTBEAT_MS);
-
-      close = async (): Promise<void> => {
-        if (closed) return;
-        closed = true;
-        if (heartbeat) {
-          clearInterval(heartbeat);
-          heartbeat = undefined;
-        }
-        closeRtcDataChannel(heartbeatChannel);
-        closeRtcDataChannel(streamChannel);
-        closeRtcDataChannel(controlChannel);
-        emitClose();
-        try {
-          client.close(true);
-        } catch {
-          // Already closed; ignore.
-        }
-      };
 
       const channel: Ac2PairedChannel = {
         transport,
@@ -429,8 +682,23 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       return channel;
     };
 
-    await waitForConnect;
+    try {
+      await waitForPairingPhase(waitForConnect, opts, 'signaling connection');
+    } catch (error) {
+      await close();
+      throw error;
+    }
 
-    return { pairing, connect };
+    return {
+      pairing,
+      connect: async () => {
+        try {
+          return await connect();
+        } catch (error) {
+          await close();
+          throw error;
+        }
+      },
+    };
   }
 }

@@ -67,16 +67,24 @@ client.updateHandlers({
 ```ts
 interface Ac2Transport {
   send(text: string): void;
-  onMessage(handler: (msg: AC2BaseMessage) => void): () => void;
-  onRawMessage?(handler: (raw: string) => void): () => void;
-  onBinaryMessage?(handler: (data: ArrayBuffer) => void): () => void; // attachments (SPEC §3)
-  onOpen(handler: () => void): void;
-  onClose(handler: () => void): void;
-  onError(handler: (err: Error) => void): void;
+  onMessage(handler: (msg: AC2BaseMessage) => void): void | (() => void);
+  onRawMessage?(handler: (raw: string) => void): void | (() => void);
+  onBinaryMessage?(handler: (data: ArrayBuffer) => void): void | (() => void); // attachments (SPEC §3)
+  onOpen(handler: () => void): void | (() => void);
+  onClose(handler: () => void): void | (() => void);
+  onError(handler: (err: Error) => void): void | (() => void);
   readonly isOpen: boolean;
   close(): void;
 }
 ```
+
+Listener methods should return an idempotent unsubscribe function. The `void`
+alternative preserves compatibility with transports built against older SDK
+versions, but it prevents consumers from releasing individual listeners. Both
+built-in transports return unsubscribe functions, and `Ac2Client.close()` uses
+them automatically. Their return type is the stronger
+`Ac2DisposableTransport` interface, so callers do not need to narrow the
+registration result before invoking it.
 
 Two concrete adapters ship with the SDK:
 

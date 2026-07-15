@@ -17,11 +17,18 @@ export {
   BootstrapError,
   bootstrapAgentIdentity,
   sessionManager,
+  Ac2ConnectionSupervisor,
+  connectionSupervisor,
+  isPairingAuthorizationError,
+  reconnectDelayMs,
   type SignParams,
   type SignResult,
   type SignDeps,
   type ChannelDeps,
   type ActiveSession,
+  type Ac2SupervisorOptions,
+  type Ac2SupervisorState,
+  type Ac2SupervisorStatus,
   type CapabilitiesResult,
   type ToolContext,
   type ChannelContext,
@@ -61,7 +68,17 @@ export {
   type X402PaymentContext,
   type X402PaymentSelection,
 } from './x402/index.js';
-export type { LiquidAuthChannelProviderOptions } from './providers/liquid-auth.js';
+export {
+  createPairingInvitation,
+  getLiquidAuthPairingErrorCode,
+  revokePairing,
+  isLiquidAuthPairingCredential,
+  LiquidAuthPairingError,
+  waitForSignalingConnect,
+  type LiquidAuthChannelProviderOptions,
+  type LiquidAuthPairingErrorCode,
+  type LiquidAuthPairingCredential,
+} from './providers/liquid-auth.js';
 export async function loadLiquidAuthChannelProvider(): Promise<
   typeof import('./providers/liquid-auth.js')
 > {

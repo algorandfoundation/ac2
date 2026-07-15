@@ -1,8 +1,18 @@
 /** On-disk persistence for connections, identities, and per-thread history. */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import type { LiquidAuthPairingCredential } from '../providers/liquid-auth.js';
 
 /** Persisted agent identity, as issued by the wallet during bootstrap. */
 export interface PersistedIdentity {
@@ -62,11 +72,51 @@ export interface PersistedConnection {
 
 /** Everything the plugin persists across restarts. */
 export interface Ac2PersistedState {
+  /** Durable Liquid Auth provider credential; retained until explicit forget. */
+  pairing?: LiquidAuthPairingCredential;
+  /** Revocation that could not be delivered yet. Never used to reconnect. */
+  pendingRevocation?: {
+    pairing: LiquidAuthPairingCredential;
+    requestedAt: number;
+  };
   /** Active `requestId` mirror (legacy single-connection field). */
   requestId?: string;
   identity?: PersistedIdentity;
   activeRequestId?: string;
   connections?: Record<string, PersistedConnection>;
+}
+
+export type Ac2StateErrorCode = 'AC2_STATE_INVALID' | 'AC2_STATE_UNREADABLE';
+
+/** Existing state must never be mistaken for a missing state file. */
+export class Ac2StateError extends Error {
+  readonly code: Ac2StateErrorCode;
+
+  constructor(code: Ac2StateErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'Ac2StateError';
+    this.code = code;
+  }
+}
+
+function writeAc2State(state: Ac2PersistedState): void {
+  const path = statePath();
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  mkdirSync(dirname(path), { recursive: true });
+  try {
+    writeFileSync(temporary, JSON.stringify(state, null, 2), {
+      encoding: 'utf-8',
+      mode: 0o600,
+    });
+    renameSync(temporary, path);
+  } catch (error) {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // The temporary file may not have been created.
+    }
+    throw error;
+  }
 }
 
 function statePath(): string {
@@ -75,38 +125,214 @@ function statePath(): string {
   return join(base, 'ac2-state.json');
 }
 
-/** Load persisted state (returns `{}` if missing/corrupt). */
-export function loadAc2State(): Ac2PersistedState {
+interface StateLockOwner {
+  pid: number;
+  createdAt: number;
+}
+
+function writeStateLockOwner(descriptor: number): void {
+  const owner: StateLockOwner = { pid: process.pid, createdAt: Date.now() };
+  writeFileSync(descriptor, JSON.stringify(owner), { encoding: 'utf-8' });
+}
+
+function stateLockIsStale(lockPath: string): boolean {
   try {
-    const raw = readFileSync(statePath(), 'utf-8');
-    const parsed = JSON.parse(raw) as Ac2PersistedState;
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    const ageMs = Date.now() - statSync(lockPath).mtimeMs;
+    if (ageMs > 5 * 60_000) return true;
+    const owner = JSON.parse(readFileSync(lockPath, 'utf-8')) as Partial<StateLockOwner>;
+    if (!Number.isSafeInteger(owner.pid) || (owner.pid ?? 0) <= 0) return false;
+    try {
+      process.kill(owner.pid!, 0);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ESRCH';
+    }
   } catch {
-    return {};
+    return false;
+  }
+}
+
+function tryReplaceStaleStateLock(lockPath: string): number | undefined {
+  if (!stateLockIsStale(lockPath)) return undefined;
+  const breakerPath = `${lockPath}.breaker`;
+  let breaker: number | undefined;
+  try {
+    breaker = openSync(breakerPath, 'wx', 0o600);
+    writeStateLockOwner(breaker);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      if (stateLockIsStale(breakerPath)) {
+        try {
+          unlinkSync(breakerPath);
+        } catch {
+          // Another process may have reclaimed the breaker first.
+        }
+      }
+      return undefined;
+    }
+    if (breaker !== undefined) {
+      closeSync(breaker);
+      try {
+        unlinkSync(breakerPath);
+      } catch {
+        // Best-effort cleanup after a metadata write failure.
+      }
+    }
+    throw error;
+  }
+  try {
+    if (!stateLockIsStale(lockPath)) return undefined;
+    try {
+      unlinkSync(lockPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    try {
+      const descriptor = openSync(lockPath, 'wx', 0o600);
+      try {
+        writeStateLockOwner(descriptor);
+      } catch (error) {
+        closeSync(descriptor);
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          // Best-effort cleanup after a metadata write failure.
+        }
+        throw error;
+      }
+      return descriptor;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined;
+      throw error;
+    }
+  } finally {
+    closeSync(breaker);
+    try {
+      unlinkSync(breakerPath);
+    } catch {
+      // Another interrupted process may already have cleaned it up.
+    }
+  }
+}
+
+function waitForStateLock(signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, 50));
+  signal.throwIfAborted();
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(done, 50);
+    function done(): void {
+      clearTimeout(timeout);
+      signal!.removeEventListener('abort', onAbort);
+      resolve();
+    }
+    function onAbort(): void {
+      clearTimeout(timeout);
+      signal!.removeEventListener('abort', onAbort);
+      reject(signal!.reason);
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** Serialize cross-process invitation creation and state migrations. */
+export async function withAc2StateLock<T>(
+  operation: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  const lockPath = `${statePath()}.lock`;
+  mkdirSync(dirname(lockPath), { recursive: true });
+  let descriptor: number | undefined;
+  while (descriptor === undefined) {
+    signal?.throwIfAborted();
+    try {
+      descriptor = openSync(lockPath, 'wx', 0o600);
+      try {
+        writeStateLockOwner(descriptor);
+      } catch (error) {
+        closeSync(descriptor);
+        descriptor = undefined;
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          // Best-effort cleanup after a metadata write failure.
+        }
+        throw error;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      descriptor = tryReplaceStaleStateLock(lockPath);
+      if (descriptor === undefined) await waitForStateLock(signal);
+    }
+  }
+  try {
+    return await operation();
+  } finally {
+    closeSync(descriptor);
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // The lock may have been cleaned up after a process interruption.
+    }
+  }
+}
+
+/** Load persisted state. Only a genuinely missing file means fresh state. */
+export function loadAc2State(): Ac2PersistedState {
+  let raw: string;
+  try {
+    raw = readFileSync(statePath(), 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw new Ac2StateError(
+      'AC2_STATE_UNREADABLE',
+      `[ac2] Unable to read persisted state at ${statePath()}`,
+      { cause: error },
+    );
+  }
+  try {
+    const parsed = JSON.parse(raw) as Ac2PersistedState;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('The state root must be a JSON object');
+    }
+    return parsed;
+  } catch (error) {
+    throw new Ac2StateError(
+      'AC2_STATE_INVALID',
+      `[ac2] Persisted state at ${statePath()} is invalid JSON; refusing to replace it`,
+      { cause: error },
+    );
   }
 }
 
 /** Clear all persisted state (`ac2 forget`). */
 export function clearAc2State(): void {
-  const path = statePath();
-  try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify({}, null, 2), 'utf-8');
-  } catch {
-    // best-effort
-  }
+  writeAc2State({});
+}
+
+/** Clear usable pairing state while retaining a revocation retry tombstone. */
+export function clearAc2StatePendingRevocation(
+  pairing: LiquidAuthPairingCredential,
+): void {
+  writeAc2State({ pendingRevocation: { pairing, requestedAt: Date.now() } });
+}
+
+/** Remove only an unapproved/expired invitation, preserving unrelated history. */
+export function discardPendingPairing(pairingId: string): void {
+  const state = loadAc2State();
+  if (state.pairing?.pairingId !== pairingId) return;
+  const {
+    pairing: _pairing,
+    requestId: _requestId,
+    activeRequestId: _activeRequestId,
+    ...remaining
+  } = state;
+  writeAc2State(remaining);
 }
 
 /** Merge `patch` into the state and write it back. */
 export function saveAc2State(patch: Partial<Ac2PersistedState>): void {
-  const path = statePath();
   const next: Ac2PersistedState = { ...loadAc2State(), ...patch };
-  try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(next, null, 2), 'utf-8');
-  } catch {
-    // best-effort
-  }
+  writeAc2State(next);
 }
 
 /** Known connections, most-recent first. */

@@ -43,7 +43,7 @@ import {
   generateMessageId,
 } from './protocol/messages.js';
 import { defaultMessageHandlers, type MessageHandlerMap } from './protocol/handlers.js';
-import type { Ac2Transport } from './transport/index.js';
+import type { Ac2Subscription, Ac2Transport, Ac2Unsubscribe } from './transport/index.js';
 
 /**
  * Options accepted by `Ac2Client`. Handlers are a type-keyed map indexed
@@ -88,6 +88,7 @@ export class Ac2Client {
   private onUnknown?: (msg: AC2BaseMessage) => void;
   private onError?: (err: Error) => void;
   private readonly pending = new Map<string, Pending>();
+  private readonly transportUnsubscribes: Ac2Unsubscribe[] = [];
   private closed = false;
 
   constructor(transport: Ac2Transport, options: Ac2ClientOptions = {}) {
@@ -96,16 +97,9 @@ export class Ac2Client {
     if (options.onUnknown !== undefined) this.onUnknown = options.onUnknown;
     if (options.onError !== undefined) this.onError = options.onError;
 
-    transport.onMessage((msg) => this.dispatch(msg));
-    transport.onError((err) => this.onError?.(err));
-    transport.onClose(() => {
-      this.closed = true;
-      for (const [, p] of this.pending) {
-        if (p.timer) clearTimeout(p.timer);
-        p.reject(new Error('[ac2-sdk] Transport closed'));
-      }
-      this.pending.clear();
-    });
+    this.trackTransportSubscription(transport.onMessage((msg) => this.dispatch(msg)));
+    this.trackTransportSubscription(transport.onError((err) => this.onError?.(err)));
+    this.trackTransportSubscription(transport.onClose(() => this.finishClose()));
   }
 
   /**
@@ -277,7 +271,13 @@ export class Ac2Client {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.transport.close();
+    try {
+      this.transport.close();
+    } finally {
+      // A custom transport is not required to emit onClose synchronously (or
+      // at all), so make local cleanup independent of that notification.
+      this.finishClose();
+    }
   }
 
   /**
@@ -341,6 +341,36 @@ export class Ac2Client {
 
   private reportError(err: unknown): void {
     this.onError?.(err instanceof Error ? err : new Error(String(err)));
+  }
+
+  private trackTransportSubscription(subscription: Ac2Subscription): void {
+    if (typeof subscription !== 'function') return;
+    // A transport that was already closed may notify onClose synchronously
+    // during registration. Do not retain the disposer in that case.
+    if (this.closed) {
+      subscription();
+      return;
+    }
+    this.transportUnsubscribes.push(subscription);
+  }
+
+  private finishClose(): void {
+    this.closed = true;
+    for (const [, pending] of this.pending) {
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.reject(new Error('[ac2-sdk] Transport closed'));
+    }
+    this.pending.clear();
+
+    const unsubscribes = this.transportUnsubscribes.splice(0);
+    for (const unsubscribe of unsubscribes) {
+      try {
+        unsubscribe();
+      } catch {
+        // Cleanup is best-effort. One third-party disposer must not prevent
+        // the remaining transport listeners from being released.
+      }
+    }
   }
 
   private dispatch(msg: AC2BaseMessage): void {

@@ -110,7 +110,9 @@ Once installed, `openclaw.json` will contain an entry like:
 
 `AC2_LIQUID_AUTH_SERVER` overrides `liquidAuthServer` at runtime.
 `AC2_HEARTBEAT_TIMEOUT_MS` overrides the WebRTC heartbeat liveness timeout;
-it defaults to `50000`.
+the timeout is disabled by default so a mobile controller suspended in the
+background is not mistaken for a dead peer. Native WebRTC/DataChannel closure
+remains authoritative. If enabled, the value must be at least `40000`.
 
 ### Using it
 

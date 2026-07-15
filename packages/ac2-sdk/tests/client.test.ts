@@ -1,10 +1,53 @@
 /// <reference types="vitest/globals" />
 
 import { Ac2Client } from '../src/client';
-import { createInMemoryTransportPair } from '../src/transport';
+import { createInMemoryTransportPair, type Ac2Transport } from '../src/transport';
 import { createSigningResponse, createSigningRejected, createKeyResponse } from '../src/protocol';
 
 const NOW = Math.floor(Date.now() / 1000);
+
+describe('Ac2Client transport listener lifecycle', () => {
+  it('unsubscribes its listeners on close even when a custom transport does not emit close', () => {
+    const unsubscribeMessage = vi.fn(() => {
+      throw new Error('broken custom disposer');
+    });
+    const unsubscribeError = vi.fn();
+    const unsubscribeClose = vi.fn();
+    const close = vi.fn();
+    const transport: Ac2Transport = {
+      send: vi.fn(),
+      onMessage: () => unsubscribeMessage,
+      onError: () => unsubscribeError,
+      onOpen: () => undefined,
+      onClose: () => unsubscribeClose,
+      close,
+      isOpen: true,
+    };
+    const client = new Ac2Client(transport);
+
+    expect(() => client.close()).not.toThrow();
+    client.close();
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(unsubscribeMessage).toHaveBeenCalledTimes(1);
+    expect(unsubscribeError).toHaveBeenCalledTimes(1);
+    expect(unsubscribeClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts legacy transports whose listener registrations return void', () => {
+    const transport: Ac2Transport = {
+      send: vi.fn(),
+      onMessage(): void {},
+      onError(): void {},
+      onOpen(): void {},
+      onClose(): void {},
+      close: vi.fn(),
+      isOpen: true,
+    };
+
+    expect(() => new Ac2Client(transport).close()).not.toThrow();
+  });
+});
 
 describe('Ac2Client request/response primitive', () => {
   it('requestSignature resolves with a SigningResponse paired by thid', async () => {

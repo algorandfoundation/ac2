@@ -58,10 +58,10 @@
   },
   "release": null,
   "dependencies": {
-    "@algorandfoundation/ac2-sdk": "1.0.0-canary.1",
+    "@algorandfoundation/ac2-sdk": "workspace:^",
     "@algorandfoundation/algokit-utils": "10.0.0-beta.4",
     "@algorandfoundation/keystore": "1.0.0-canary.16",
-    "@algorandfoundation/liquid-client": "1.0.0-canary.8",
+    "@algorandfoundation/liquid-client": "^1.0.0-canary.9",
     "@napi-rs/keyring": "^1.3.0",
     "@roamhq/wrtc": "^0.10.0",
     "@sinclair/typebox": "^0.32.0",
@@ -96,7 +96,7 @@
       },
       {
         "name": "AC2_HEARTBEAT_TIMEOUT_MS",
-        "description": "Milliseconds without inbound ac2-heartbeat traffic before the plugin closes the channel. Defaults to 50000.",
+        "description": "Optional milliseconds without inbound ac2-heartbeat traffic before the plugin closes the channel. Disabled by default; values must be at least 40000.",
         "required": false
       }
     ],
