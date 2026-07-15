@@ -10,7 +10,7 @@ Liquid Auth + WebRTC via [`@algorandfoundation/ac2-sdk`](../ac2-sdk).
 | OpenClaw surface        | AC2 contribution                                                           |
 | ----------------------- | -------------------------------------------------------------------------- |
 | Channel `ac2`           | Owns Liquid Auth + WebRTC pairing and the active session.                  |
-| Tool `ac2_capabilities` | Agent DID + `sig_hint` catalog.                                            |
+| Tool `ac2_capabilities` | Agent DID, connected wallet address, and `sig_hint` catalog.              |
 | Tool `ac2_sign`         | Routes a `SigningRequest` and returns signature details to the agent.      |
 | Tool `ac2_x402_fetch`   | Pays x402 exact Algorand resources using wallet-approved AC2 signing.      |
 | Setup entry             | `openclaw ac2 setup` writes the channel/tools wiring into `openclaw.json`. |
@@ -39,7 +39,7 @@ agent never touches the user's account keys or passkeys.
 #### From the npm registry (canary)
 
 ```bash
-openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.17
+openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.18
 
 # openclaw plugins install runs `npm install --ignore-scripts`, so the
 # @napi-rs/keyring native addon is not built automatically. Rebuild it from

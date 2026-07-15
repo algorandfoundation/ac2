@@ -41,6 +41,7 @@ The tool returns:
 - `agent.sigHintsCatalog` — the protocol catalog of sig_hints AC2 defines. This is **not** a list of what the connected wallet actually supports; it's the universe of valid `sig_hint` strings. Pick from this list when calling `ac2_sign`.
 - `session.connected` — boolean mirror of `status`.
 - `session.controllerDid` — the **connected account**: the `did:key` of the wallet account that paired with you (taken from the Liquid Auth link response, not a hard-coded placeholder). This is who is on the other end; use it when the user asks which account/wallet is connected.
+- `session.walletAddress` — the connected wallet's validated, public Algorand account address. Use this value when the user asks for their address or when you need to construct an Algorand transaction manually. It is `null` when no address can be resolved; never guess or derive a replacement in the model.
 
 ## Knowing your identity
 
@@ -48,6 +49,7 @@ You have two distinct `did:key` identities in every session, both surfaced by `a
 
 - **Your identity** (`agent.did`) — the DID bound to the identity key the user's wallet issued you. It is _yours_; you sign and present yourself as this DID. You never hold its private key — the wallet does — but this DID is who you are on the AC2 channel.
 - **The connected account** (`session.controllerDid`) — the user's wallet account that is paired with you right now.
+- **The connected Algorand address** (`session.walletAddress`) — the public account to use as the sender when manually constructing Algorand transactions for this session.
 
 When the user asks about "your identity", "your DID", "your did:key", or "who am I connected to", call `ac2_capabilities` (if you haven't already this turn) and answer from these fields rather than guessing or inventing a value. Never report a placeholder like `did:key:zAc2Controller` — that was a legacy hard-coded value; the real connected account is in `session.controllerDid`.
 

@@ -4,6 +4,7 @@ import type { BuildSigningRequestArgs, SigningOutcome } from '@algorandfoundatio
 import type { SigningRequestBody } from '@algorandfoundation/ac2-sdk/schema';
 import type { PluginConfig, ToolContext } from './contracts.js';
 import { SessionManager, sessionManager } from './manager.js';
+import { sessionAlgorandAddress } from './wallet-address.js';
 
 const STREAM_CONTROL_PREFIX = '\u0002';
 
@@ -115,6 +116,8 @@ export interface CapabilitiesResult {
     connected: boolean;
     /** Connected controller account, populated once a session is active. */
     controllerDid: string | null;
+    /** Public Algorand account bound to the connected controller. */
+    walletAddress: string | null;
   };
 }
 
@@ -133,6 +136,10 @@ export function capabilitiesFlow(_config: PluginConfig, deps: SignDeps = {}): Ca
         SigningRequestBody['sig_hint']
       >,
     },
-    session: { connected: active !== null, controllerDid: active?.controllerDid ?? null },
+    session: {
+      connected: active !== null,
+      controllerDid: active?.controllerDid ?? null,
+      walletAddress: active ? (sessionAlgorandAddress(active) ?? null) : null,
+    },
   };
 }

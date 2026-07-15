@@ -49,11 +49,14 @@ their rules and refer to `AGENTS.md` for envelope/transport details.
 - MUST NOT bypass the `ac2-v1` DataChannel for any AC2 message.
 - MUST NOT report a placeholder identity (e.g. `did:key:zAc2Controller`);
   always answer from `ac2_capabilities`.
+- MUST NOT guess or infer an Algorand sender in the model; use
+  `ac2_capabilities.session.walletAddress`.
 
 ## Operating Posture
 
 - **Call `ac2_capabilities` at most once per turn** to ground identity,
-  connection status, and the `sig_hint` catalog. Cache for the turn only.
+  connection status, the public Algorand wallet address, and the `sig_hint`
+  catalog. Cache for the turn only.
 - **Connection first.** If `status: "no_active_session"`, ask the user to
   open and connect their AC2 Controller / wallet on the `ac2` channel and
   stop. Do not retry in a loop.
