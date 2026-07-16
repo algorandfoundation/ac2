@@ -290,7 +290,19 @@ export function awaitSignalConnect(
  * healthy, however long the human takes. On failure, invokes `onFailure`
  * (torn down once) and rejects; a later resolution/rejection of `promise`
  * itself is ignored once the guard has already tripped.
+ *
+ * Disconnect reasons that socket.io will NOT auto-reconnect from (a
+ * server-/client-initiated close) fail the current attempt immediately
+ * rather than waiting out `deadSocketTimeoutMs` for a reconnect that can
+ * never happen — handing off to the caller's re-pair loop (which opens a
+ * fresh socket) sooner.
  */
+export const SIGNALING_TERMINAL_DISCONNECT_REASONS: ReadonlySet<string> = new Set([
+  // socket.io reasons where the client does not attempt reconnection.
+  'io server disconnect',
+  'io client disconnect',
+]);
+
 export function withSignalingHealthGuard<T>(
   promise: Promise<T>,
   sock: {
@@ -339,7 +351,20 @@ export function withSignalingHealthGuard<T>(
       );
     }
 
-    function onDisconnect(): void {
+    // socket.io passes the disconnect reason as the first listener arg.
+    function onDisconnect(reason?: string): void {
+      // A server-/client-initiated close will never auto-reconnect this
+      // socket, so there is nothing to wait for — fail now and let the
+      // caller's re-pair loop open a fresh socket.
+      if (typeof reason === 'string' && SIGNALING_TERMINAL_DISCONNECT_REASONS.has(reason)) {
+        fail(
+          new SignalingConnectError(
+            'timeout',
+            `[ac2-open-claw] signaling connection closed during pairing and will not auto-reconnect (${reason})`,
+          ),
+        );
+        return;
+      }
       clearDeadTimer();
       deadTimer = setTimeout(() => {
         fail(

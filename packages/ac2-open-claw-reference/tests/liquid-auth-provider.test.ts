@@ -141,7 +141,7 @@ describe('withSignalingHealthGuard', () => {
     on: (event: string, listener: (...args: any[]) => void) => void;
     off: (event: string, listener: (...args: any[]) => void) => void;
     connected: boolean;
-    emit: (event: string) => void;
+    emit: (event: string, ...args: any[]) => void;
   } {
     const listeners: Record<string, Set<(...args: any[]) => void>> = {};
     return {
@@ -152,8 +152,8 @@ describe('withSignalingHealthGuard', () => {
       off(event, listener) {
         listeners[event]?.delete(listener);
       },
-      emit(event) {
-        for (const listener of listeners[event] ?? []) listener();
+      emit(event, ...args) {
+        for (const listener of listeners[event] ?? []) listener(...args);
       },
     };
   }
@@ -275,6 +275,28 @@ describe('withSignalingHealthGuard', () => {
       });
       const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
       await vi.advanceTimersByTimeAsync(1_000);
+      await assertion;
+      expect(failures).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects immediately on a server-initiated disconnect (no auto-reconnect)', async () => {
+    vi.useFakeTimers();
+    try {
+      const sock = makeFakeSocket();
+      let failures = 0;
+      const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+        deadSocketTimeoutMs: 45_000,
+        onFailure: () => {
+          failures += 1;
+        },
+      });
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+      // 'io server disconnect' will never auto-reconnect — must fail now,
+      // without waiting out the dead-socket grace period.
+      sock.emit('disconnect', 'io server disconnect');
       await assertion;
       expect(failures).toBe(1);
     } finally {
