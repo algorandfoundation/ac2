@@ -108,6 +108,13 @@ const AC2_HEARTBEAT_MS = 20000;
 const AC2_DEFAULT_HEARTBEAT_TIMEOUT_MS = AC2_HEARTBEAT_MS * 2.5;
 /** Default ceiling for awaiting the signaling socket's initial `connect`. */
 const AC2_DEFAULT_PAIRING_TIMEOUT_MS = 120_000;
+/**
+ * Once the signaling socket goes down mid-handshake, give socket.io's own
+ * reconnection this long to recover before treating it as a genuine
+ * ping-timeout/network failure. Deliberately independent of how long the
+ * human takes to scan/approve — that phase has no ceiling of its own.
+ */
+const AC2_DEFAULT_SIGNAL_DEAD_TIMEOUT_MS = 45_000;
 const AC2_CONTROL_LABEL = 'ac2-v1' as const;
 const AC2_STREAM_LABEL = 'ac2-stream' as const;
 /** Dedicated liveness channel — keeps keepalive off the control plane. */
@@ -269,25 +276,45 @@ export function awaitSignalConnect(
 }
 
 /**
- * Race an arbitrary pairing-handshake promise against `timeoutMs` and an
- * optional abort `signal`. Used to bound the ICE offer/answer/candidate
- * exchange (`SignalClient#peer`), which depends on the signaling socket
- * staying alive for its whole duration — if that socket dies mid-handshake
- * (e.g. a `ping timeout`) and never reconnects, the underlying promise would
- * otherwise never settle. On timeout/abort, invokes `onFailure` (torn down
- * once) and rejects; a later resolution/rejection of `promise` itself is
- * ignored once the bound has already tripped.
+ * Race an arbitrary pairing-handshake promise against *sustained* signaling
+ * socket disconnection (plus an optional abort `signal`) — never against a
+ * flat wall-clock deadline. Used to bound the ICE offer/answer/candidate
+ * exchange (`SignalClient#peer`), which waits on the human completing
+ * pairing (scanning the QR, approving in their wallet) and can legitimately
+ * take minutes. A flat timeout there would tear down a perfectly healthy
+ * socket just because the human was slow. Instead, this only rejects once
+ * `sock` has been continuously disconnected for `deadSocketTimeoutMs` — a
+ * real ping-timeout/network failure that socket.io's own reconnection could
+ * not recover from in time. Every reconnect (even after several blips)
+ * clears the dead-socket timer, so the guard never fires while the socket is
+ * healthy, however long the human takes. On failure, invokes `onFailure`
+ * (torn down once) and rejects; a later resolution/rejection of `promise`
+ * itself is ignored once the guard has already tripped.
  */
-export function withPairingTimeout<T>(
+export function withSignalingHealthGuard<T>(
   promise: Promise<T>,
-  opts: { timeoutMs: number; signal?: AbortSignal; onFailure?: () => void },
+  sock: {
+    on: (event: string, listener: (...args: any[]) => void) => void;
+    off?: (event: string, listener: (...args: any[]) => void) => void;
+    connected?: boolean;
+  },
+  opts: { deadSocketTimeoutMs: number; signal?: AbortSignal; onFailure?: () => void },
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let deadTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const clearDeadTimer = (): void => {
+      if (deadTimer !== undefined) {
+        clearTimeout(deadTimer);
+        deadTimer = undefined;
+      }
+    };
 
     const cleanup = (): void => {
-      if (timer !== undefined) clearTimeout(timer);
+      clearDeadTimer();
+      sock.off?.('disconnect', onDisconnect);
+      sock.off?.('connect', onReconnect);
       opts.signal?.removeEventListener('abort', onAbort);
     };
 
@@ -312,10 +339,33 @@ export function withPairingTimeout<T>(
       );
     }
 
+    function onDisconnect(): void {
+      clearDeadTimer();
+      deadTimer = setTimeout(() => {
+        fail(
+          new SignalingConnectError(
+            'timeout',
+            `[ac2-open-claw] signaling socket stayed disconnected for ${opts.deadSocketTimeoutMs}ms during pairing`,
+          ),
+        );
+      }, opts.deadSocketTimeoutMs);
+    }
+
+    function onReconnect(): void {
+      clearDeadTimer();
+    }
+
     if (opts.signal?.aborted) {
       onAbort();
       return;
     }
+
+    // Already down when the guard was installed — start counting right away.
+    if (sock.connected === false) onDisconnect();
+
+    sock.on('disconnect', onDisconnect);
+    sock.on('connect', onReconnect);
+    opts.signal?.addEventListener('abort', onAbort);
 
     promise.then(
       (value) => {
@@ -331,19 +381,6 @@ export function withPairingTimeout<T>(
         reject(err);
       },
     );
-
-    opts.signal?.addEventListener('abort', onAbort);
-
-    if (Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0) {
-      timer = setTimeout(() => {
-        fail(
-          new SignalingConnectError(
-            'timeout',
-            `[ac2-open-claw] pairing handshake did not complete within ${opts.timeoutMs}ms`,
-          ),
-        );
-      }, opts.timeoutMs);
-    }
   });
 }
 
@@ -359,7 +396,7 @@ export interface LiquidAuthChannelProviderOptions {
 }
 
 export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
-  constructor(private readonly defaults: LiquidAuthChannelProviderOptions = {}) {}
+  constructor(private readonly defaults: LiquidAuthChannelProviderOptions = {}) { }
 
   async startPairing(opts: Ac2StartPairingOptions = {}): Promise<Ac2PairingHandle> {
     await ensureWebRtcPolyfill();
@@ -387,9 +424,8 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       }
     });
 
-    // Shared ceiling for both the initial socket connect and the subsequent
-    // ICE offer/answer/candidate exchange in `connect()` — both phases depend
-    // on the same signaling socket staying alive.
+    // Ceiling for the initial socket connect only (see below) — that phase
+    // has no human action to wait on, so a flat deadline is appropriate.
     const pairingTimeoutMs = opts.timeoutMs ?? AC2_DEFAULT_PAIRING_TIMEOUT_MS;
 
     // Block resolving until the signaling socket is up (the caller renders
@@ -488,15 +524,17 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         ...(includeStream ? { [AC2_STREAM_LABEL]: { ordered: true } } : {}),
         [AC2_HEARTBEAT_LABEL]: { ordered: true },
       };
-      // Bounded the same way as the initial socket connect: `peer(...)`'s
-      // offer/answer/candidate exchange depends on the signaling socket for
-      // its whole duration, and has no timeout of its own — if the socket
-      // dies mid-handshake (e.g. a `ping timeout`) and never reconnects, this
-      // would otherwise hang forever waiting for data that will never arrive.
-      const primary: any = await withPairingTimeout(
+      // Bounded by sustained signaling-socket disconnection, not a flat
+      // deadline: `peer(...)`'s offer/answer/candidate exchange waits on the
+      // human scanning the QR and approving in their wallet, which can take
+      // minutes. Only a real, sustained network/ping-timeout failure (the
+      // socket staying down longer than the reconnect grace period) should
+      // tear this down — not the human simply taking their time.
+      const primary: any = await withSignalingHealthGuard(
         client.peer(requestId, 'offer', AC2_ICE_CONFIG, { dataChannels }),
+        socket,
         {
-          timeoutMs: pairingTimeoutMs,
+          deadSocketTimeoutMs: AC2_DEFAULT_SIGNAL_DEAD_TIMEOUT_MS,
           ...(opts.signal ? { signal: opts.signal } : {}),
           onFailure: () => {
             try {

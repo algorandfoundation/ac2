@@ -6,17 +6,17 @@ import {
   closeAwareTransport,
   closeRtcDataChannel,
   resolveHeartbeatTimeoutMs,
-  withPairingTimeout,
+  withSignalingHealthGuard,
 } from '../src/providers/liquid-auth.js';
 
 function makeBaseTransport(): Ac2Transport & { emitBaseClose: () => void; closes: () => number } {
   let closeHandler: (() => void) | undefined;
   let closes = 0;
   return {
-    send: () => {},
-    onMessage: () => {},
-    onError: () => {},
-    onOpen: () => {},
+    send: () => { },
+    onMessage: () => { },
+    onError: () => { },
+    onOpen: () => { },
     onClose: (handler) => {
       closeHandler = handler;
     },
@@ -136,11 +136,33 @@ describe('awaitSignalConnect', () => {
   });
 });
 
-describe('withPairingTimeout', () => {
+describe('withSignalingHealthGuard', () => {
+  function makeFakeSocket(initialConnected = true): {
+    on: (event: string, listener: (...args: any[]) => void) => void;
+    off: (event: string, listener: (...args: any[]) => void) => void;
+    connected: boolean;
+    emit: (event: string) => void;
+  } {
+    const listeners: Record<string, Set<(...args: any[]) => void>> = {};
+    return {
+      connected: initialConnected,
+      on(event, listener) {
+        (listeners[event] ??= new Set()).add(listener);
+      },
+      off(event, listener) {
+        listeners[event]?.delete(listener);
+      },
+      emit(event) {
+        for (const listener of listeners[event] ?? []) listener();
+      },
+    };
+  }
+
   it('resolves with the wrapped promise value when it settles first', async () => {
+    const sock = makeFakeSocket();
     let failures = 0;
-    const pending = withPairingTimeout(Promise.resolve('peer-channel'), {
-      timeoutMs: 1_000,
+    const pending = withSignalingHealthGuard(Promise.resolve('peer-channel'), sock, {
+      deadSocketTimeoutMs: 1_000,
       onFailure: () => {
         failures += 1;
       },
@@ -150,10 +172,11 @@ describe('withPairingTimeout', () => {
   });
 
   it('passes through a rejection from the wrapped promise unchanged', async () => {
+    const sock = makeFakeSocket();
     let failures = 0;
     const boom = new Error('peer negotiation failed');
-    const pending = withPairingTimeout(Promise.reject(boom), {
-      timeoutMs: 1_000,
+    const pending = withSignalingHealthGuard(Promise.reject(boom), sock, {
+      deadSocketTimeoutMs: 1_000,
       onFailure: () => {
         failures += 1;
       },
@@ -162,15 +185,90 @@ describe('withPairingTimeout', () => {
     expect(failures).toBe(0);
   });
 
-  it('rejects and tears down when the wrapped promise never settles in time', async () => {
+  it('never fires on elapsed time alone while the socket stays connected (slow human)', async () => {
     vi.useFakeTimers();
     try {
+      const sock = makeFakeSocket();
       let failures = 0;
-      // Simulates `client.peer(...)` hanging forever because the signaling
-      // socket died mid-handshake (e.g. a `ping timeout`) and never recovered.
-      const neverSettles = new Promise<never>(() => {});
-      const pending = withPairingTimeout(neverSettles, {
-        timeoutMs: 1_000,
+      let resolveLate: (value: string) => void = () => { };
+      const humanIsSlow = new Promise<string>((resolve) => {
+        resolveLate = resolve;
+      });
+      const pending = withSignalingHealthGuard(humanIsSlow, sock, {
+        deadSocketTimeoutMs: 1_000,
+        onFailure: () => {
+          failures += 1;
+        },
+      });
+      // Far longer than deadSocketTimeoutMs — simulates a human taking minutes
+      // to scan the QR and approve, with the socket healthy throughout.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      resolveLate('approved');
+      await expect(pending).resolves.toBe('approved');
+      expect(failures).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('tolerates a disconnect that recovers before the dead-socket grace period', async () => {
+    vi.useFakeTimers();
+    try {
+      const sock = makeFakeSocket();
+      let failures = 0;
+      let resolveLate: (value: string) => void = () => { };
+      const pending = withSignalingHealthGuard(
+        new Promise<string>((resolve) => {
+          resolveLate = resolve;
+        }),
+        sock,
+        {
+          deadSocketTimeoutMs: 1_000,
+          onFailure: () => {
+            failures += 1;
+          },
+        },
+      );
+      sock.emit('disconnect');
+      await vi.advanceTimersByTimeAsync(500);
+      sock.emit('connect'); // recovers before the 1_000ms grace period elapses
+      await vi.advanceTimersByTimeAsync(5_000);
+      resolveLate('approved');
+      await expect(pending).resolves.toBe('approved');
+      expect(failures).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects and tears down once the socket stays disconnected past the grace period', async () => {
+    vi.useFakeTimers();
+    try {
+      const sock = makeFakeSocket();
+      let failures = 0;
+      const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+        deadSocketTimeoutMs: 1_000,
+        onFailure: () => {
+          failures += 1;
+        },
+      });
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+      sock.emit('disconnect');
+      await vi.advanceTimersByTimeAsync(1_000);
+      await assertion;
+      expect(failures).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts counting immediately if the socket is already disconnected', async () => {
+    vi.useFakeTimers();
+    try {
+      const sock = makeFakeSocket(false);
+      let failures = 0;
+      const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+        deadSocketTimeoutMs: 1_000,
         onFailure: () => {
           failures += 1;
         },
@@ -185,11 +283,12 @@ describe('withPairingTimeout', () => {
   });
 
   it('rejects immediately when the abort signal is already aborted', async () => {
+    const sock = makeFakeSocket();
     const controller = new AbortController();
     controller.abort();
     let failures = 0;
-    const pending = withPairingTimeout(new Promise<never>(() => {}), {
-      timeoutMs: 5_000,
+    const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+      deadSocketTimeoutMs: 5_000,
       signal: controller.signal,
       onFailure: () => {
         failures += 1;
@@ -200,10 +299,11 @@ describe('withPairingTimeout', () => {
   });
 
   it('rejects and tears down when the abort signal fires mid-handshake', async () => {
+    const sock = makeFakeSocket();
     const controller = new AbortController();
     let failures = 0;
-    const pending = withPairingTimeout(new Promise<never>(() => {}), {
-      timeoutMs: 5_000,
+    const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+      deadSocketTimeoutMs: 5_000,
       signal: controller.signal,
       onFailure: () => {
         failures += 1;
@@ -214,24 +314,25 @@ describe('withPairingTimeout', () => {
     expect(failures).toBe(1);
   });
 
-  it('ignores a late resolution once the timeout has already tripped', async () => {
+  it('ignores a late settle once the dead-socket bound has already tripped', async () => {
     vi.useFakeTimers();
     try {
+      const sock = makeFakeSocket();
       let failures = 0;
-      let resolveLate: (value: string) => void = () => {};
+      let resolveLate: (value: string) => void = () => { };
       const late = new Promise<string>((resolve) => {
         resolveLate = resolve;
       });
-      const pending = withPairingTimeout(late, {
-        timeoutMs: 1_000,
+      const pending = withSignalingHealthGuard(late, sock, {
+        deadSocketTimeoutMs: 1_000,
         onFailure: () => {
           failures += 1;
         },
       });
       const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+      sock.emit('disconnect');
       await vi.advanceTimersByTimeAsync(1_000);
       await assertion;
-      // Resolving after the bound already tripped must not throw or re-settle.
       resolveLate('too-late');
       expect(failures).toBe(1);
     } finally {
