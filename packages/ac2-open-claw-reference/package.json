@@ -1,6 +1,6 @@
 {
   "name": "@algorandfoundation/ac2-open-claw-reference",
-  "version": "1.0.0-canary.18",
+  "version": "1.0.0-canary.19",
   "description": "Reference OpenClaw plugin for the AC2 protocol. Implements signing, chat, and x402 Algorand paid fetch over Liquid Auth.",
   "keywords": [
     "ac2",

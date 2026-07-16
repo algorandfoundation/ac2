@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.19](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.18...ac2-open-claw-reference@1.0.0-canary.19) (2026-07-16)
+
+
+### Bug Fixes
+
+* **ac2:** bound signaling connect wait so pair re-link cannot hang ([250ab82](https://github.com/algorandfoundation/ac2/commit/250ab827a070e5650600ba7af8d9f3c9adbb4b0c))
+
 # [ac2-open-claw-reference@1.0.0-canary.18](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.17...ac2-open-claw-reference@1.0.0-canary.18) (2026-07-15)
 
 
