@@ -6,6 +6,7 @@ import {
   closeAwareTransport,
   closeRtcDataChannel,
   resolveHeartbeatTimeoutMs,
+  withPairingTimeout,
 } from '../src/providers/liquid-auth.js';
 
 function makeBaseTransport(): Ac2Transport & { emitBaseClose: () => void; closes: () => number } {
@@ -129,6 +130,110 @@ describe('awaitSignalConnect', () => {
       await vi.advanceTimersByTimeAsync(5_000);
       client.emit('connect');
       expect(failures).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('withPairingTimeout', () => {
+  it('resolves with the wrapped promise value when it settles first', async () => {
+    let failures = 0;
+    const pending = withPairingTimeout(Promise.resolve('peer-channel'), {
+      timeoutMs: 1_000,
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    await expect(pending).resolves.toBe('peer-channel');
+    expect(failures).toBe(0);
+  });
+
+  it('passes through a rejection from the wrapped promise unchanged', async () => {
+    let failures = 0;
+    const boom = new Error('peer negotiation failed');
+    const pending = withPairingTimeout(Promise.reject(boom), {
+      timeoutMs: 1_000,
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    await expect(pending).rejects.toBe(boom);
+    expect(failures).toBe(0);
+  });
+
+  it('rejects and tears down when the wrapped promise never settles in time', async () => {
+    vi.useFakeTimers();
+    try {
+      let failures = 0;
+      // Simulates `client.peer(...)` hanging forever because the signaling
+      // socket died mid-handshake (e.g. a `ping timeout`) and never recovered.
+      const neverSettles = new Promise<never>(() => {});
+      const pending = withPairingTimeout(neverSettles, {
+        timeoutMs: 1_000,
+        onFailure: () => {
+          failures += 1;
+        },
+      });
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await assertion;
+      expect(failures).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects immediately when the abort signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let failures = 0;
+    const pending = withPairingTimeout(new Promise<never>(() => {}), {
+      timeoutMs: 5_000,
+      signal: controller.signal,
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' });
+    expect(failures).toBe(1);
+  });
+
+  it('rejects and tears down when the abort signal fires mid-handshake', async () => {
+    const controller = new AbortController();
+    let failures = 0;
+    const pending = withPairingTimeout(new Promise<never>(() => {}), {
+      timeoutMs: 5_000,
+      signal: controller.signal,
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' });
+    expect(failures).toBe(1);
+  });
+
+  it('ignores a late resolution once the timeout has already tripped', async () => {
+    vi.useFakeTimers();
+    try {
+      let failures = 0;
+      let resolveLate: (value: string) => void = () => {};
+      const late = new Promise<string>((resolve) => {
+        resolveLate = resolve;
+      });
+      const pending = withPairingTimeout(late, {
+        timeoutMs: 1_000,
+        onFailure: () => {
+          failures += 1;
+        },
+      });
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await assertion;
+      // Resolving after the bound already tripped must not throw or re-settle.
+      resolveLate('too-late');
+      expect(failures).toBe(1);
     } finally {
       vi.useRealTimers();
     }

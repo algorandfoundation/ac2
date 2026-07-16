@@ -268,6 +268,85 @@ export function awaitSignalConnect(
   });
 }
 
+/**
+ * Race an arbitrary pairing-handshake promise against `timeoutMs` and an
+ * optional abort `signal`. Used to bound the ICE offer/answer/candidate
+ * exchange (`SignalClient#peer`), which depends on the signaling socket
+ * staying alive for its whole duration — if that socket dies mid-handshake
+ * (e.g. a `ping timeout`) and never reconnects, the underlying promise would
+ * otherwise never settle. On timeout/abort, invokes `onFailure` (torn down
+ * once) and rejects; a later resolution/rejection of `promise` itself is
+ * ignored once the bound has already tripped.
+ */
+export function withPairingTimeout<T>(
+  promise: Promise<T>,
+  opts: { timeoutMs: number; signal?: AbortSignal; onFailure?: () => void },
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onAbort);
+    };
+
+    const fail = (error: SignalingConnectError): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try {
+        opts.onFailure?.();
+      } catch {
+        // Teardown is best-effort; still reject the caller.
+      }
+      reject(error);
+    };
+
+    function onAbort(): void {
+      fail(
+        new SignalingConnectError(
+          'aborted',
+          '[ac2-open-claw] pairing aborted before the handshake completed',
+        ),
+      );
+    }
+
+    if (opts.signal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(err);
+      },
+    );
+
+    opts.signal?.addEventListener('abort', onAbort);
+
+    if (Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0) {
+      timer = setTimeout(() => {
+        fail(
+          new SignalingConnectError(
+            'timeout',
+            `[ac2-open-claw] pairing handshake did not complete within ${opts.timeoutMs}ms`,
+          ),
+        );
+      }, opts.timeoutMs);
+    }
+  });
+}
+
 export interface LiquidAuthChannelProviderOptions {
   /** Liquid Auth signaling server origin. */
   origin?: string;
@@ -308,13 +387,18 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       }
     });
 
+    // Shared ceiling for both the initial socket connect and the subsequent
+    // ICE offer/answer/candidate exchange in `connect()` — both phases depend
+    // on the same signaling socket staying alive.
+    const pairingTimeoutMs = opts.timeoutMs ?? AC2_DEFAULT_PAIRING_TIMEOUT_MS;
+
     // Block resolving until the signaling socket is up (the caller renders
     // the QR only after `startPairing` resolves). Bounded by `timeoutMs` and
     // the caller's abort signal so an unreachable signaling server rejects
     // instead of hanging the re-pairing loop forever — and the failing socket
     // is torn down so it stops emitting reconnect/ping-timeout noise.
     const waitForConnect = awaitSignalConnect(client, {
-      timeoutMs: opts.timeoutMs ?? AC2_DEFAULT_PAIRING_TIMEOUT_MS,
+      timeoutMs: pairingTimeoutMs,
       ...(opts.signal ? { signal: opts.signal } : {}),
       onFailure: () => {
         try {
@@ -404,9 +488,35 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         ...(includeStream ? { [AC2_STREAM_LABEL]: { ordered: true } } : {}),
         [AC2_HEARTBEAT_LABEL]: { ordered: true },
       };
-      const primary: any = await client.peer(requestId, 'offer', AC2_ICE_CONFIG, {
-        dataChannels,
-      });
+      // Bounded the same way as the initial socket connect: `peer(...)`'s
+      // offer/answer/candidate exchange depends on the signaling socket for
+      // its whole duration, and has no timeout of its own — if the socket
+      // dies mid-handshake (e.g. a `ping timeout`) and never reconnects, this
+      // would otherwise hang forever waiting for data that will never arrive.
+      const primary: any = await withPairingTimeout(
+        client.peer(requestId, 'offer', AC2_ICE_CONFIG, { dataChannels }),
+        {
+          timeoutMs: pairingTimeoutMs,
+          ...(opts.signal ? { signal: opts.signal } : {}),
+          onFailure: () => {
+            try {
+              (client as any).peerClient?.close?.();
+            } catch {
+              // Best-effort cleanup.
+            }
+            try {
+              client.close(true);
+            } catch {
+              // Already closed; ignore.
+            }
+            try {
+              (socket as { close?: () => void }).close?.();
+            } catch {
+              // Already closed; ignore.
+            }
+          },
+        },
+      );
       controlChannel = controlChannel ?? primary;
 
       if (controlChannel.label !== AC2_CONTROL_LABEL) {
