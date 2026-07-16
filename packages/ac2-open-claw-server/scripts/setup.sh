@@ -35,7 +35,11 @@ fi
 set -a; source .env; set +a
 
 # --- 2. build ---------------------------------------------------------------
-echo "==> Building image (installs the AC2 plugin + rebuilds @napi-rs/keyring)"
+echo "==> Building AC2 plugin from monorepo source"
+chmod +x scripts/build-plugin.sh
+./scripts/build-plugin.sh
+
+echo "==> Building image (installs the local AC2 plugin + rebuilds @napi-rs/keyring)"
 docker compose build openclaw-gateway
 
 # --- 3. onboarding / provider config (first run only) ----------------------

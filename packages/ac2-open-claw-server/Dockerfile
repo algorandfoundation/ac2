@@ -7,6 +7,11 @@
 #     The WebRTC transport (@roamhq/wrtc) ships prebuilt binaries — no build
 #     toolchain is required.
 #   - the pair-manager HTTP service (QR page in front of `openclaw ac2 pair`)
+#
+# The plugin is installed from a LOCAL tarball built from the monorepo source
+# (packages/ac2-open-claw-server/ac2-plugin.tgz), NOT from npm — so unreleased
+# fixes ship in the image. `scripts/setup.sh` builds+packs it before the image
+# build; to build the image directly, run `scripts/build-plugin.sh` first.
 
 ARG OPENCLAW_IMAGE=ghcr.io/openclaw/openclaw:latest
 FROM ${OPENCLAW_IMAGE}
@@ -19,23 +24,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsecret-1-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the plugin manifest so the install step can read the current version
-# straight from the monorepo — no hardcoded version needed.
-COPY --chown=root:root packages/ac2-open-claw-reference/package.json /tmp/plugin-pkg.json
+# Copy the locally-built plugin tarball (produced from the monorepo source by
+# scripts/build-plugin.sh). Build-time /tmp is a normal dir (the runtime tmpfs
+# mount does not apply during `docker build`).
+COPY --chown=node:node packages/ac2-open-claw-server/ac2-plugin.tgz /tmp/ac2-plugin.tgz
 
 USER node
 ENV HOME=/home/node
 
-# 1) Install the plugin at the version declared in the monorepo package.json
-#    (npm install --ignore-scripts under the hood).
-RUN VERSION="$(node -p "require('/tmp/plugin-pkg.json').version")" && \
-    node /app/dist/index.js plugins install "npm:@algorandfoundation/ac2-open-claw-reference@${VERSION}"
+# 1) Install the plugin from the local tarball (built from monorepo source).
+RUN node /app/dist/index.js plugins install "file:/tmp/ac2-plugin.tgz" --force
 
 # 2) Rebuild the @napi-rs/keyring native addon (see plugin README). It ships as
 #    a prebuilt N-API binary, so `npm rebuild` just wires up the right platform
 #    package — no compiler needed. @roamhq/wrtc is prebuilt and needs no rebuild.
+#    Installing from a manifest-id tarball places the plugin at
+#    ~/.openclaw/extensions/ac2 (older npm installs used ~/.openclaw/npm/projects).
 RUN set -eux; \
-    PLUGIN_DIR="$(find "${HOME}/.openclaw/npm/projects" -maxdepth 1 -mindepth 1 -type d \( -name 'algorandfoundation-ac2-open-claw-reference-*' -o -name '@algorandfoundation+ac2-open-claw-reference*' -o -name 'ac2-open-claw-reference*' \) | head -n1)"; \
+    PLUGIN_DIR="$( [ -d "${HOME}/.openclaw/extensions/ac2" ] && echo "${HOME}/.openclaw/extensions/ac2" \
+    || find "${HOME}/.openclaw/npm/projects" -maxdepth 1 -mindepth 1 -type d \( -name 'algorandfoundation-ac2-open-claw-reference-*' -o -name '@algorandfoundation+ac2-open-claw-reference*' -o -name 'ac2-open-claw-reference*' \) | head -n1 )"; \
     test -n "$PLUGIN_DIR"; \
     npm rebuild --prefix "$PLUGIN_DIR" @napi-rs/keyring
 
