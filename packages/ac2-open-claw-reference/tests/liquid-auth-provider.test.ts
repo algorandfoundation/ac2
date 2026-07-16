@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Ac2Transport } from '@algorandfoundation/ac2-sdk/transport';
 
 import {
+  awaitSignalConnect,
   closeAwareTransport,
   closeRtcDataChannel,
   resolveHeartbeatTimeoutMs,
@@ -28,6 +29,111 @@ function makeBaseTransport(): Ac2Transport & { emitBaseClose: () => void; closes
     closes: () => closes,
   };
 }
+
+describe('awaitSignalConnect', () => {
+  function makeFakeSignalClient(): {
+    on: (event: string, listener: (...args: any[]) => void) => void;
+    emit: (event: string, ...args: any[]) => void;
+  } {
+    const listeners: Record<string, Array<(...args: any[]) => void>> = {};
+    return {
+      on(event, listener) {
+        (listeners[event] ??= []).push(listener);
+      },
+      emit(event, ...args) {
+        for (const listener of listeners[event] ?? []) listener(...args);
+      },
+    };
+  }
+
+  it('resolves when the signaling socket connects', async () => {
+    const client = makeFakeSignalClient();
+    let failures = 0;
+    const pending = awaitSignalConnect(client, {
+      timeoutMs: 1_000,
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    client.emit('connect');
+    await expect(pending).resolves.toBeUndefined();
+    expect(failures).toBe(0);
+  });
+
+  it('rejects and tears down the socket when connect never arrives in time', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeFakeSignalClient();
+      let failures = 0;
+      const pending = awaitSignalConnect(client, {
+        timeoutMs: 1_000,
+        onFailure: () => {
+          failures += 1;
+        },
+      });
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await assertion;
+      expect(failures).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects immediately when the abort signal is already aborted', async () => {
+    const client = makeFakeSignalClient();
+    const controller = new AbortController();
+    controller.abort();
+    let failures = 0;
+    const pending = awaitSignalConnect(client, {
+      timeoutMs: 1_000,
+      signal: controller.signal,
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' });
+    expect(failures).toBe(1);
+  });
+
+  it('rejects and tears down when the abort signal fires before connect', async () => {
+    const client = makeFakeSignalClient();
+    const controller = new AbortController();
+    let failures = 0;
+    const pending = awaitSignalConnect(client, {
+      timeoutMs: 5_000,
+      signal: controller.signal,
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' });
+    expect(failures).toBe(1);
+  });
+
+  it('does not tear down or reject after a successful connect', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeFakeSignalClient();
+      let failures = 0;
+      const pending = awaitSignalConnect(client, {
+        timeoutMs: 1_000,
+        onFailure: () => {
+          failures += 1;
+        },
+      });
+      client.emit('connect');
+      await expect(pending).resolves.toBeUndefined();
+      // The timer must have been cleared and duplicate connects are no-ops.
+      await vi.advanceTimersByTimeAsync(5_000);
+      client.emit('connect');
+      expect(failures).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe('LiquidAuthChannelProvider heartbeat timeout', () => {
   it('defaults to the standard heartbeat timeout', () => {

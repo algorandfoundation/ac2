@@ -106,6 +106,8 @@ const AC2_HEARTBEAT_MS = 20000;
  * long. 2.5× the send interval tolerates one missed round-trip plus jitter.
  */
 const AC2_DEFAULT_HEARTBEAT_TIMEOUT_MS = AC2_HEARTBEAT_MS * 2.5;
+/** Default ceiling for awaiting the signaling socket's initial `connect`. */
+const AC2_DEFAULT_PAIRING_TIMEOUT_MS = 120_000;
 const AC2_CONTROL_LABEL = 'ac2-v1' as const;
 const AC2_STREAM_LABEL = 'ac2-stream' as const;
 /** Dedicated liveness channel — keeps keepalive off the control plane. */
@@ -187,6 +189,85 @@ export function resolveHeartbeatTimeoutMs(value?: string): number {
     : AC2_DEFAULT_HEARTBEAT_TIMEOUT_MS;
 }
 
+/** Raised when the signaling socket never reaches `connect` in time. */
+export class SignalingConnectError extends Error {
+  readonly code: 'timeout' | 'aborted';
+  constructor(code: 'timeout' | 'aborted', message: string) {
+    super(message);
+    this.name = 'SignalingConnectError';
+    this.code = code;
+  }
+}
+
+/**
+ * Await the signaling socket's first `connect`, bounded by `timeoutMs` and an
+ * optional abort `signal`. On timeout or abort, invokes `onFailure` (used to
+ * tear down the socket so it stops retrying) and rejects — so callers never
+ * block forever on an unreachable signaling server. A successful `connect`
+ * clears the timer and detaches the abort listener; later duplicate `connect`
+ * events (or an elapsed timer) are no-ops.
+ */
+export function awaitSignalConnect(
+  client: { on: (event: string, listener: (...args: any[]) => void) => void },
+  opts: { timeoutMs: number; signal?: AbortSignal; onFailure?: () => void },
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onAbort);
+    };
+
+    const fail = (error: SignalingConnectError): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try {
+        opts.onFailure?.();
+      } catch {
+        // Teardown is best-effort; still reject the caller.
+      }
+      reject(error);
+    };
+
+    function onAbort(): void {
+      fail(
+        new SignalingConnectError(
+          'aborted',
+          '[ac2-open-claw] pairing aborted before the signaling socket connected',
+        ),
+      );
+    }
+
+    if (opts.signal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    client.on('connect', () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    });
+
+    opts.signal?.addEventListener('abort', onAbort);
+
+    if (Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0) {
+      timer = setTimeout(() => {
+        fail(
+          new SignalingConnectError(
+            'timeout',
+            `[ac2-open-claw] signaling socket did not connect within ${opts.timeoutMs}ms`,
+          ),
+        );
+      }, opts.timeoutMs);
+    }
+  });
+}
+
 export interface LiquidAuthChannelProviderOptions {
   /** Liquid Auth signaling server origin. */
   origin?: string;
@@ -201,7 +282,7 @@ export interface LiquidAuthChannelProviderOptions {
 export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
   constructor(private readonly defaults: LiquidAuthChannelProviderOptions = {}) {}
 
-  async startPairing(_opts: Ac2StartPairingOptions = {}): Promise<Ac2PairingHandle> {
+  async startPairing(opts: Ac2StartPairingOptions = {}): Promise<Ac2PairingHandle> {
     await ensureWebRtcPolyfill();
 
     const origin = this.defaults.origin ?? 'https://debug.liquidauth.com';
@@ -228,9 +309,25 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
     });
 
     // Block resolving until the signaling socket is up (the caller renders
-    // the QR only after `startPairing` resolves).
-    const waitForConnect = new Promise<void>((resolve) => {
-      client.on('connect', () => resolve());
+    // the QR only after `startPairing` resolves). Bounded by `timeoutMs` and
+    // the caller's abort signal so an unreachable signaling server rejects
+    // instead of hanging the re-pairing loop forever — and the failing socket
+    // is torn down so it stops emitting reconnect/ping-timeout noise.
+    const waitForConnect = awaitSignalConnect(client, {
+      timeoutMs: opts.timeoutMs ?? AC2_DEFAULT_PAIRING_TIMEOUT_MS,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      onFailure: () => {
+        try {
+          client.close(true);
+        } catch {
+          // Already closed; ignore.
+        }
+        try {
+          (socket as { close?: () => void }).close?.();
+        } catch {
+          // Already closed; ignore.
+        }
+      },
     });
     // Bind low-level error/disconnect diagnostics once the socket is built.
     void (async () => {
