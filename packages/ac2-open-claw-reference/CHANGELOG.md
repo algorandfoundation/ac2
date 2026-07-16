@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.20](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.19...ac2-open-claw-reference@1.0.0-canary.20) (2026-07-16)
+
+
+### Bug Fixes
+
+* ac2 plugin pairing timeout ([#32](https://github.com/algorandfoundation/ac2/issues/32)) ([acaa89b](https://github.com/algorandfoundation/ac2/commit/acaa89b8056902a11653b61573d55061502f1acd)), closes [SignalClient#peer](https://github.com/SignalClient/issues/peer)
+
 # [ac2-open-claw-reference@1.0.0-canary.19](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.18...ac2-open-claw-reference@1.0.0-canary.19) (2026-07-16)
 
 
