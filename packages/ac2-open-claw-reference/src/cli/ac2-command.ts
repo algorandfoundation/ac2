@@ -298,7 +298,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
                 ) {
                   throw new BootstrapError(
                     `[ac2-open-claw] KeyResponse.from (${bootstrapped.controllerDid}) does not match ` +
-                      `the linked account (${connectedAccountDid}); refusing to grant identity.`,
+                    `the linked account (${connectedAccountDid}); refusing to grant identity.`,
                   );
                 }
                 controllerDid = connectedAccountDid ?? bootstrapped.controllerDid;
@@ -340,11 +340,11 @@ export function buildAc2Command(api: OpenClawApi): unknown {
             // Adapter to give `streamChannel` a `send` + `isOpen` surface.
             const streamSendable = streamTransport
               ? {
-                  send: (payload: string) => streamTransport.send(payload),
-                  get isOpen() {
-                    return streamTransport.readyState === 'open';
-                  },
-                }
+                send: (payload: string) => streamTransport.send(payload),
+                get isOpen() {
+                  return streamTransport.readyState === 'open';
+                },
+              }
               : undefined;
             const controlSendable = streamSendable ?? transport;
 
@@ -442,12 +442,25 @@ export function buildAc2Command(api: OpenClawApi): unknown {
               'info',
               '[ac2] DataChannel closed — waiting for the controller to re-link. Scan the QR code again.',
             );
-            try {
-              cycle = await startPairingCycle();
-              console.log('\n' + buildInvitationText(cycle.pairing, cycle.qrString));
-            } catch (err) {
-              safeLog(api, 'error', `[ac2] Failed to restart pairing: ${err}`);
-              break;
+            // Retry with capped exponential backoff instead of giving up: a
+            // transient signaling-server/network outage should self-heal so
+            // pairing resumes automatically once conditions improve.
+            let backoffMs = 2_000;
+            // eslint-disable-next-line no-constant-condition
+            while (true) {
+              try {
+                cycle = await startPairingCycle();
+                console.log('\n' + buildInvitationText(cycle.pairing, cycle.qrString));
+                break;
+              } catch (err) {
+                safeLog(
+                  api,
+                  'warn',
+                  `[ac2] Failed to restart pairing; retrying in ${backoffMs}ms: ${err}`,
+                );
+                await new Promise((resolve) => setTimeout(resolve, backoffMs));
+                backoffMs = Math.min(backoffMs * 2, 30_000);
+              }
             }
           }
         })();
