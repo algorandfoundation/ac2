@@ -378,15 +378,21 @@ export function withSignalingHealthGuard<T>(
     // (Re-)arms the dead-socket timer for the remaining budget.  Called
     // whenever a disconnect event is received.  A duplicate disconnect event
     // (socket.io may emit more than one) refreshes the timer for the still-
-    // remaining budget without adding to `cumulativeDeadMs` again.
+    // remaining budget without adding to `cumulativeDeadMs` again.  The
+    // remaining budget must also subtract time already spent in the *current*
+    // (still-open) disconnect window — `cumulativeDeadMs` only accounts for
+    // completed windows, so ignoring the open one would let repeated
+    // duplicate disconnects keep pushing the deadline out and defeat the
+    // cumulative-dead-time protection.
     const armDeadTimer = (): void => {
       clearDeadTimer();
-      const remainingBudget = opts.deadSocketTimeoutMs - cumulativeDeadMs;
+      const currentWindowMs = disconnectedSince !== undefined ? now() - disconnectedSince : 0;
+      const remainingBudget = opts.deadSocketTimeoutMs - cumulativeDeadMs - currentWindowMs;
       if (remainingBudget <= 0) {
         fail(
           new SignalingConnectError(
             'timeout',
-            `[ac2-open-claw] signaling socket accumulated ${cumulativeDeadMs}ms offline during pairing (budget: ${opts.deadSocketTimeoutMs}ms)`,
+            `[ac2-open-claw] signaling socket accumulated ${cumulativeDeadMs + currentWindowMs}ms offline during pairing (budget: ${opts.deadSocketTimeoutMs}ms)`,
           ),
         );
         return;

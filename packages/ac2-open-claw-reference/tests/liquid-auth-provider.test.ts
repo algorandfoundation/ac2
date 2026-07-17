@@ -271,6 +271,37 @@ describe('withSignalingHealthGuard', () => {
     }
   });
 
+  it('does not extend the dead-socket budget when duplicate disconnects fire within one window', async () => {
+    vi.useFakeTimers();
+    try {
+      const sock = makeFakeSocket();
+      // Injected clock so the in-window elapsed time is deterministic.
+      let clock = 0;
+      let failures = 0;
+      const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+        deadSocketTimeoutMs: 1_000,
+        now: () => clock,
+        onFailure: () => {
+          failures += 1;
+        },
+      });
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+      // One continuous outage, but socket.io emits duplicate `disconnect`s.
+      sock.emit('disconnect'); // window opens at t=0, timer armed for 1_000ms
+      clock = 600;
+      await vi.advanceTimersByTimeAsync(600);
+      // Duplicate disconnect 600ms into the same window: must re-arm for the
+      // remaining 400ms, NOT reset to a fresh 1_000ms.
+      sock.emit('disconnect');
+      clock = 1_000;
+      await vi.advanceTimersByTimeAsync(400); // 1_000ms total offline → budget exhausted
+      await assertion;
+      expect(failures).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('recycles the socket when a wall-clock gap reveals a process freeze (laptop suspend)', async () => {
     vi.useFakeTimers();
     try {
