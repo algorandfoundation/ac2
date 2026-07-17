@@ -98,6 +98,21 @@
         "name": "AC2_HEARTBEAT_TIMEOUT_MS",
         "description": "Milliseconds without inbound ac2-heartbeat traffic before the plugin closes the channel. Defaults to 50000.",
         "required": false
+      },
+      {
+        "name": "AC2_SIGNAL_DEAD_TIMEOUT_MS",
+        "description": "Cumulative milliseconds the signaling socket may be offline (across all disconnect/reconnect cycles) during pairing before the current attempt is recycled. Defaults to 45000.",
+        "required": false
+      },
+      {
+        "name": "AC2_SIGNAL_HEALTH_POLL_MS",
+        "description": "How often the pairing health watchdog re-samples wall-clock time and socket state, in milliseconds. Defaults to 10000.",
+        "required": false
+      },
+      {
+        "name": "AC2_SIGNAL_SUSPEND_GAP_MS",
+        "description": "Wall-clock gap between watchdog ticks, in milliseconds, treated as a process freeze (laptop suspend/resume, container pause) that triggers a socket recycle. Defaults to 60000.",
+        "required": false
       }
     ],
     "contracts": {

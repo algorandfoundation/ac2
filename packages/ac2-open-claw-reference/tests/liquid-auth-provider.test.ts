@@ -6,6 +6,7 @@ import {
   closeAwareTransport,
   closeRtcDataChannel,
   resolveHeartbeatTimeoutMs,
+  resolveSignalTimingMs,
   withSignalingHealthGuard,
 } from '../src/providers/liquid-auth.js';
 
@@ -241,6 +242,105 @@ describe('withSignalingHealthGuard', () => {
     }
   });
 
+  it('rejects once cumulative offline time across multiple short disconnects exceeds the budget (flapping socket)', async () => {
+    vi.useFakeTimers();
+    try {
+      const sock = makeFakeSocket();
+      let failures = 0;
+      const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+        deadSocketTimeoutMs: 1_000,
+        onFailure: () => {
+          failures += 1;
+        },
+      });
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+      // Three cycles of 300ms offline — total 900ms cumulative.
+      for (let i = 0; i < 3; i++) {
+        sock.emit('disconnect');
+        await vi.advanceTimersByTimeAsync(300);
+        sock.emit('connect');
+      }
+      // Fourth disconnect: only 100ms of budget remains.  The dead-socket
+      // timer fires after 100ms instead of the full 1_000ms.
+      sock.emit('disconnect');
+      await vi.advanceTimersByTimeAsync(100);
+      await assertion;
+      expect(failures).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('recycles the socket when a wall-clock gap reveals a process freeze (laptop suspend)', async () => {
+    vi.useFakeTimers();
+    try {
+      const sock = makeFakeSocket();
+      // Injected clock decoupled from the fake timer: this lets us fire the
+      // poll interval exactly once while wall-clock time jumps far ahead —
+      // exactly what a suspend/resume looks like (timers frozen, Date jumps).
+      let clock = 0;
+      let failures = 0;
+      const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+        deadSocketTimeoutMs: 45_000,
+        pollIntervalMs: 1_000,
+        suspendGapMs: 10_000,
+        now: () => clock,
+        onFailure: () => {
+          failures += 1;
+        },
+      });
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+      // Normal tick: clock advances in lockstep with the poll interval.
+      clock = 1_000;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(failures).toBe(0);
+      // Suspend: the process was frozen for ~1 hour. The poll fires once on
+      // resume and sees a wall-clock gap far larger than the poll interval,
+      // even though the socket still reports `connected`.
+      clock = 1_000 + 60 * 60_000;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await assertion;
+      expect(failures).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not recycle on ordinary ticks while the socket stays healthy', async () => {
+    vi.useFakeTimers();
+    try {
+      const sock = makeFakeSocket();
+      let clock = 0;
+      let failures = 0;
+      let resolveLate: (value: string) => void = () => { };
+      const pending = withSignalingHealthGuard(
+        new Promise<string>((resolve) => {
+          resolveLate = resolve;
+        }),
+        sock,
+        {
+          deadSocketTimeoutMs: 45_000,
+          pollIntervalMs: 1_000,
+          suspendGapMs: 10_000,
+          now: () => clock,
+          onFailure: () => {
+            failures += 1;
+          },
+        },
+      );
+      // Ten ordinary ticks in lockstep — no freeze, socket stays connected.
+      for (let i = 0; i < 10; i++) {
+        clock += 1_000;
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      resolveLate('approved');
+      await expect(pending).resolves.toBe('approved');
+      expect(failures).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects and tears down once the socket stays disconnected past the grace period', async () => {
     vi.useFakeTimers();
     try {
@@ -377,6 +477,26 @@ describe('LiquidAuthChannelProvider heartbeat timeout', () => {
   it('falls back for invalid or too-small overrides', () => {
     expect(resolveHeartbeatTimeoutMs('not-a-number')).toBe(50_000);
     expect(resolveHeartbeatTimeoutMs('39999')).toBe(50_000);
+  });
+});
+
+describe('resolveSignalTimingMs', () => {
+  it('returns the fallback when unset or blank', () => {
+    expect(resolveSignalTimingMs(undefined, 45_000)).toBe(45_000);
+    expect(resolveSignalTimingMs('', 45_000)).toBe(45_000);
+    expect(resolveSignalTimingMs('   ', 45_000)).toBe(45_000);
+  });
+
+  it('accepts a positive numeric override', () => {
+    expect(resolveSignalTimingMs('5000', 45_000)).toBe(5_000);
+    expect(resolveSignalTimingMs('1', 45_000)).toBe(1);
+  });
+
+  it('falls back for non-numeric or below-minimum values', () => {
+    expect(resolveSignalTimingMs('not-a-number', 45_000)).toBe(45_000);
+    expect(resolveSignalTimingMs('0', 45_000)).toBe(45_000);
+    expect(resolveSignalTimingMs('-100', 45_000)).toBe(45_000);
+    expect(resolveSignalTimingMs('50', 45_000, 100)).toBe(45_000);
   });
 });
 

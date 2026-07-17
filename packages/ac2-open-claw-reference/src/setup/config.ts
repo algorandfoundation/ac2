@@ -27,6 +27,29 @@ export const AC2_CHANNEL_ENV_VARS: ReadonlyArray<Ac2ChannelEnvVar> = [
       `Defaults to ${DEFAULT_LIQUID_AUTH_SERVER} when neither is set.`,
     required: false,
   },
+  {
+    name: 'AC2_SIGNAL_DEAD_TIMEOUT_MS',
+    description:
+      'Cumulative milliseconds the signaling socket may be offline (across all disconnect/reconnect cycles) ' +
+      'during pairing before the current attempt is recycled. Defaults to 45000. Lower it to reproduce ' +
+      'dead-socket/flapping recovery quickly in testing.',
+    required: false,
+  },
+  {
+    name: 'AC2_SIGNAL_HEALTH_POLL_MS',
+    description:
+      'How often the pairing health watchdog re-samples wall-clock time and socket state, in milliseconds. ' +
+      'Defaults to 10000.',
+    required: false,
+  },
+  {
+    name: 'AC2_SIGNAL_SUSPEND_GAP_MS',
+    description:
+      'Wall-clock gap between watchdog ticks, in milliseconds, that is treated as a process freeze ' +
+      '(laptop suspend/resume, container pause) and triggers a socket recycle. Defaults to 60000. ' +
+      'Lower it to reproduce suspend/resume recovery quickly in testing.',
+    required: false,
+  },
 ];
 
 /** Resolve the active `openclaw.json` path. */

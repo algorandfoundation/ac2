@@ -115,6 +115,22 @@ const AC2_DEFAULT_PAIRING_TIMEOUT_MS = 120_000;
  * human takes to scan/approve — that phase has no ceiling of its own.
  */
 const AC2_DEFAULT_SIGNAL_DEAD_TIMEOUT_MS = 45_000;
+/**
+ * How often the signaling health guard re-samples wall-clock time and socket
+ * state. Cheap (a single timer) and only active during the unpaired `peer()`
+ * wait. Independent of socket.io's own ping/pong timers.
+ */
+const AC2_SIGNAL_HEALTH_POLL_MS = 10_000;
+/**
+ * A wall-clock gap between two health-poll ticks larger than this means the
+ * process was frozen (laptop suspend/resume, container pause, severe event-
+ * loop starvation). Any socket that survived such a freeze is presumed stale —
+ * socket.io may report it `connected` while the underlying transport is a
+ * half-open zombie that never emits `disconnect`. The guard recycles it so the
+ * re-pair loop opens a fresh socket and re-renders the QR. Chosen larger than
+ * the dead-socket budget so ordinary lag can never be mistaken for a freeze.
+ */
+const AC2_SIGNAL_SUSPEND_GAP_MS = 60_000;
 const AC2_CONTROL_LABEL = 'ac2-v1' as const;
 const AC2_STREAM_LABEL = 'ac2-stream' as const;
 /** Dedicated liveness channel — keeps keepalive off the control plane. */
@@ -194,6 +210,18 @@ export function resolveHeartbeatTimeoutMs(value?: string): number {
   return Number.isFinite(parsed) && parsed >= minimum
     ? parsed
     : AC2_DEFAULT_HEARTBEAT_TIMEOUT_MS;
+}
+
+/**
+ * Resolve a positive-integer millisecond override from an env value, falling
+ * back to `fallback` when unset/blank/invalid or below `minimum`. Shared by
+ * the signaling-guard timing knobs so they can be compressed for testing
+ * (e.g. reproduce a "many hours" outage in seconds) or tuned in production.
+ */
+export function resolveSignalTimingMs(value: string | undefined, fallback: number, minimum = 1): number {
+  if (value === undefined || value.trim().length === 0) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= minimum ? parsed : fallback;
 }
 
 /** Raised when the signaling socket never reaches `connect` in time. */
@@ -310,11 +338,35 @@ export function withSignalingHealthGuard<T>(
     off?: (event: string, listener: (...args: any[]) => void) => void;
     connected?: boolean;
   },
-  opts: { deadSocketTimeoutMs: number; signal?: AbortSignal; onFailure?: () => void },
+  opts: {
+    deadSocketTimeoutMs: number;
+    signal?: AbortSignal;
+    onFailure?: () => void;
+    /** Health-poll cadence (test seam). Defaults to `AC2_SIGNAL_HEALTH_POLL_MS`. */
+    pollIntervalMs?: number;
+    /** Wall-clock gap that counts as a process freeze. Defaults to `AC2_SIGNAL_SUSPEND_GAP_MS`. */
+    suspendGapMs?: number;
+    /** Clock source (test seam). Defaults to `Date.now`. */
+    now?: () => number;
+  },
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    const now = opts.now ?? Date.now;
+    const pollIntervalMs = opts.pollIntervalMs ?? AC2_SIGNAL_HEALTH_POLL_MS;
+    const suspendGapMs = opts.suspendGapMs ?? AC2_SIGNAL_SUSPEND_GAP_MS;
+
     let settled = false;
     let deadTimer: ReturnType<typeof setTimeout> | undefined;
+    let suspendPoll: ReturnType<typeof setInterval> | undefined;
+    let lastTickAt = now();
+    // Tracks cumulative time the socket has been offline across all
+    // disconnect/reconnect cycles.  A socket that flaps (disconnect →
+    // reconnect → disconnect → …) consumes the budget on every cycle; the
+    // old single-window design reset the timer on each reconnect, allowing
+    // the guard to be defeated by repeated short outages that each fell just
+    // under the dead-socket ceiling.
+    let cumulativeDeadMs = 0;
+    let disconnectedSince: number | undefined;
 
     const clearDeadTimer = (): void => {
       if (deadTimer !== undefined) {
@@ -323,8 +375,38 @@ export function withSignalingHealthGuard<T>(
       }
     };
 
+    // (Re-)arms the dead-socket timer for the remaining budget.  Called
+    // whenever a disconnect event is received.  A duplicate disconnect event
+    // (socket.io may emit more than one) refreshes the timer for the still-
+    // remaining budget without adding to `cumulativeDeadMs` again.
+    const armDeadTimer = (): void => {
+      clearDeadTimer();
+      const remainingBudget = opts.deadSocketTimeoutMs - cumulativeDeadMs;
+      if (remainingBudget <= 0) {
+        fail(
+          new SignalingConnectError(
+            'timeout',
+            `[ac2-open-claw] signaling socket accumulated ${cumulativeDeadMs}ms offline during pairing (budget: ${opts.deadSocketTimeoutMs}ms)`,
+          ),
+        );
+        return;
+      }
+      deadTimer = setTimeout(() => {
+        fail(
+          new SignalingConnectError(
+            'timeout',
+            `[ac2-open-claw] signaling socket accumulated ${opts.deadSocketTimeoutMs}ms offline during pairing`,
+          ),
+        );
+      }, remainingBudget);
+    };
+
     const cleanup = (): void => {
       clearDeadTimer();
+      if (suspendPoll !== undefined) {
+        clearInterval(suspendPoll);
+        suspendPoll = undefined;
+      }
       sock.off?.('disconnect', onDisconnect);
       sock.off?.('connect', onReconnect);
       opts.signal?.removeEventListener('abort', onAbort);
@@ -365,19 +447,30 @@ export function withSignalingHealthGuard<T>(
         );
         return;
       }
-      clearDeadTimer();
-      deadTimer = setTimeout(() => {
-        fail(
-          new SignalingConnectError(
-            'timeout',
-            `[ac2-open-claw] signaling socket stayed disconnected for ${opts.deadSocketTimeoutMs}ms during pairing`,
-          ),
-        );
-      }, opts.deadSocketTimeoutMs);
+      // Record the start of this disconnection window only once per cycle —
+      // duplicate disconnect events must not advance `disconnectedSince`.
+      if (disconnectedSince === undefined) {
+        disconnectedSince = now();
+      }
+      armDeadTimer();
     }
 
     function onReconnect(): void {
+      if (disconnectedSince !== undefined) {
+        cumulativeDeadMs += now() - disconnectedSince;
+        disconnectedSince = undefined;
+      }
       clearDeadTimer();
+      // Budget may be exhausted at the moment of reconnect — fail immediately
+      // rather than waiting for the next disconnect to trigger the timer.
+      if (cumulativeDeadMs >= opts.deadSocketTimeoutMs) {
+        fail(
+          new SignalingConnectError(
+            'timeout',
+            `[ac2-open-claw] signaling socket accumulated ${cumulativeDeadMs}ms offline during pairing (budget: ${opts.deadSocketTimeoutMs}ms)`,
+          ),
+        );
+      }
     }
 
     if (opts.signal?.aborted) {
@@ -391,6 +484,31 @@ export function withSignalingHealthGuard<T>(
     sock.on('disconnect', onDisconnect);
     sock.on('connect', onReconnect);
     opts.signal?.addEventListener('abort', onAbort);
+
+    // Wall-clock suspend watchdog. Event-driven detection (the disconnect/
+    // connect handlers above) and the dead-socket `setTimeout` cannot fire
+    // while the process is frozen (laptop suspend, container pause) — the
+    // exact condition that leaves the unpaired `peer()` wait hanging for
+    // hours. This poll measures the wall-clock gap between its own ticks: a
+    // gap far larger than the interval means the process was frozen, so the
+    // (now-stale, possibly half-open) socket is recycled instead of trusting
+    // its `connected` flag.
+    suspendPoll = setInterval(() => {
+      const tickAt = now();
+      const gap = tickAt - lastTickAt;
+      lastTickAt = tickAt;
+      if (gap - pollIntervalMs >= suspendGapMs) {
+        fail(
+          new SignalingConnectError(
+            'timeout',
+            `[ac2-open-claw] signaling guard detected a ${Math.round(gap / 1000)}s wall-clock gap during pairing (process freeze/suspend); recycling the socket`,
+          ),
+        );
+      }
+    }, pollIntervalMs);
+    // Do not let the watchdog alone keep the process alive; the pairing
+    // keep-alive owns process lifetime.
+    (suspendPoll as { unref?: () => void }).unref?.();
 
     promise.then(
       (value) => {
@@ -432,6 +550,21 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
     const heartbeatTimeoutMs =
       this.defaults.heartbeatTimeoutMs ??
       resolveHeartbeatTimeoutMs(process.env['AC2_HEARTBEAT_TIMEOUT_MS']);
+
+    // Signaling-guard timings, env-overridable so the "many hours" / suspend
+    // cases can be reproduced in seconds during testing (and tuned in prod).
+    const deadSocketTimeoutMs = resolveSignalTimingMs(
+      process.env['AC2_SIGNAL_DEAD_TIMEOUT_MS'],
+      AC2_DEFAULT_SIGNAL_DEAD_TIMEOUT_MS,
+    );
+    const healthPollMs = resolveSignalTimingMs(
+      process.env['AC2_SIGNAL_HEALTH_POLL_MS'],
+      AC2_SIGNAL_HEALTH_POLL_MS,
+    );
+    const suspendGapMs = resolveSignalTimingMs(
+      process.env['AC2_SIGNAL_SUSPEND_GAP_MS'],
+      AC2_SIGNAL_SUSPEND_GAP_MS,
+    );
 
     // Build the signaling socket from the Node-native `socket.io-client` and
     // pass it to `SignalClient` via its `{ socket }` option.
@@ -559,7 +692,9 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         client.peer(requestId, 'offer', AC2_ICE_CONFIG, { dataChannels }),
         socket,
         {
-          deadSocketTimeoutMs: AC2_DEFAULT_SIGNAL_DEAD_TIMEOUT_MS,
+          deadSocketTimeoutMs,
+          pollIntervalMs: healthPollMs,
+          suspendGapMs,
           ...(opts.signal ? { signal: opts.signal } : {}),
           onFailure: () => {
             try {

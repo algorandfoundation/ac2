@@ -39,7 +39,7 @@ agent never touches the user's account keys or passkeys.
 #### From the npm registry (canary)
 
 ```bash
-openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.20
+openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.21
 
 # openclaw plugins install runs `npm install --ignore-scripts`, so the
 # @napi-rs/keyring native addon is not built automatically. Rebuild it from
