@@ -433,14 +433,20 @@ export function buildAc2Command(api: OpenClawApi): unknown {
 
         void (async () => {
           let cycle = firstCycle;
-          // Re-pairing loop: re-render the QR after a dropped DataChannel.
+          // Re-pairing loop after a dropped DataChannel. The persisted
+          // `requestId` is reused across cycles, so `deepLink()` yields a
+          // byte-identical QR — re-printing it (and telling the user to
+          // "scan again") is misleading noise when the controller can just
+          // re-link on the same requestId. Only re-render the QR when the
+          // requestId actually changed (i.e. a genuinely new pairing).
           // eslint-disable-next-line no-constant-condition
           while (true) {
+            const prevRequestId = cycle.pairing.metadata?.['requestId'];
             await runConnectedSession(cycle.connect);
             safeLog(
               api,
               'info',
-              '[ac2] DataChannel closed — waiting for the controller to re-link. Scan the QR code again.',
+              '[ac2] Channel idle-closed — re-linking. The controller can reconnect automatically.',
             );
             // Retry with capped exponential backoff instead of giving up: a
             // transient signaling-server/network outage should self-heal so
@@ -450,7 +456,16 @@ export function buildAc2Command(api: OpenClawApi): unknown {
             while (true) {
               try {
                 cycle = await startPairingCycle();
-                console.log('\n' + buildInvitationText(cycle.pairing, cycle.qrString));
+                const newRequestId = cycle.pairing.metadata?.['requestId'];
+                if (newRequestId !== undefined && newRequestId === prevRequestId) {
+                  safeLog(
+                    api,
+                    'info',
+                    `[ac2] Re-linking on existing pairing (requestId=${newRequestId}); no re-scan needed.`,
+                  );
+                } else {
+                  console.log('\n' + buildInvitationText(cycle.pairing, cycle.qrString));
+                }
                 break;
               } catch (err) {
                 safeLog(
