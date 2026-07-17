@@ -797,6 +797,42 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         }
       }, AC2_HEARTBEAT_MS);
 
+      // Fast, authoritative peer-liveness: the WebRTC peer connection flips to
+      // `failed`/`disconnected` when the controller goes away, usually well
+      // before the heartbeat inbound-timeout backstop above. Recycle promptly
+      // instead of waiting the full heartbeat window. `disconnected` can be a
+      // transient ICE blip, so it gets a short grace; `failed`/`closed` close
+      // immediately. Unlike the signaling socket's `ping timeout`, this is the
+      // real P2P link, so it does not false-positive on signaling hiccups.
+      const pc = (client as unknown as { peerClient?: any }).peerClient;
+      if (pc) {
+        let iceGrace: ReturnType<typeof setTimeout> | undefined;
+        pc.oniceconnectionstatechange = (): void => {
+          const state = pc.iceConnectionState;
+          if (state === 'failed' || state === 'closed') {
+            if (iceGrace) clearTimeout(iceGrace);
+            // eslint-disable-next-line no-console
+            console.warn(`[ac2] Peer connection ${state} — closing channel.`);
+            void close();
+          } else if (state === 'disconnected') {
+            if (!iceGrace) {
+              iceGrace = setTimeout(() => {
+                if (pc.iceConnectionState === 'disconnected') {
+                  // eslint-disable-next-line no-console
+                  console.warn('[ac2] Peer connection stayed disconnected — closing channel.');
+                  void close();
+                }
+              }, AC2_HEARTBEAT_MS);
+              (iceGrace as { unref?: () => void }).unref?.();
+            }
+          } else if (iceGrace) {
+            // Recovered (connected/completed) before the grace elapsed.
+            clearTimeout(iceGrace);
+            iceGrace = undefined;
+          }
+        };
+      }
+
       close = async (): Promise<void> => {
         if (closed) return;
         closed = true;
