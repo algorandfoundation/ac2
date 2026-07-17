@@ -20,6 +20,10 @@ export {
   type ActiveSession,
 } from './manager.js';
 export {
+  controllerDidToAlgorandAddress,
+  sessionAlgorandAddress,
+} from './wallet-address.js';
+export {
   BootstrapError,
   bootstrapAgentIdentity,
   deriveAgentDidFromKeyResponse,

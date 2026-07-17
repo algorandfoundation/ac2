@@ -12,7 +12,7 @@ import {
   withAc2StateLock,
 } from '../identity/state.js';
 import { clearAgentIdentities, hasAgentIdentity } from '../identity/keystore.js';
-import { ensurePersistedPairing } from '../identity/pairing.js';
+import { ensurePersistedPairing, PAIRING_INVITATION_TIMEOUT_MS } from '../identity/pairing.js';
 import { revokePairing } from '../providers/liquid-auth.js';
 
 const NODE_MODULE_LOAD_ERROR_CODES = new Set(['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND']);
@@ -127,12 +127,12 @@ export function buildAc2Command(api: OpenClawApi): unknown {
         // durable invitation and renders it; it never starts a second,
         // process-local connection loop.
         const durableCfg = resolveConfig(api);
-        const durableOrigin =
-          durableCfg.liquidAuthServer ?? 'https://debug.liquidauth.com';
+        const durableOrigin = durableCfg.liquidAuthServer ?? 'https://debug.liquidauth.com';
         const durableState = loadAc2State();
         const { pairing: durablePairing } = await ensurePersistedPairing(
           durableOrigin,
           durableState.requestId,
+          AbortSignal.timeout(PAIRING_INVITATION_TIMEOUT_MS),
         );
         const durableUrl = `liquid://${durableOrigin.replace(/^https:\/\//, '').replace(/\/$/, '')}/?requestId=${durablePairing.pairingId}`;
         const durableQr = await new Promise<string>((resolve) => {

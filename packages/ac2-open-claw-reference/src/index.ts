@@ -69,12 +69,14 @@ export {
   type X402PaymentSelection,
 } from './x402/index.js';
 export {
+  awaitSignalConnect,
   createPairingInvitation,
   getLiquidAuthPairingErrorCode,
   revokePairing,
   isLiquidAuthPairingCredential,
   LiquidAuthPairingError,
-  waitForSignalingConnect,
+  SignalingConnectError,
+  withSignalingHealthGuard,
   type LiquidAuthChannelProviderOptions,
   type LiquidAuthPairingErrorCode,
   type LiquidAuthPairingCredential,

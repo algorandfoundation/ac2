@@ -7,6 +7,9 @@ import {
 } from '../providers/liquid-auth.js';
 import { loadAc2State, saveAc2State, withAc2StateLock } from './state.js';
 
+/** Bound invitation HTTP work while the cross-process pairing lock is held. */
+export const PAIRING_INVITATION_TIMEOUT_MS = 15_000;
+
 export interface EnsuredPairing {
   pairing: LiquidAuthPairingCredential;
   created: boolean;

@@ -1,3 +1,24 @@
+# [ac2-open-claw-reference@1.0.0-canary.20](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.19...ac2-open-claw-reference@1.0.0-canary.20) (2026-07-16)
+
+
+### Bug Fixes
+
+* ac2 plugin pairing timeout ([#32](https://github.com/algorandfoundation/ac2/issues/32)) ([acaa89b](https://github.com/algorandfoundation/ac2/commit/acaa89b8056902a11653b61573d55061502f1acd)), closes [SignalClient#peer](https://github.com/SignalClient/issues/peer)
+
+# [ac2-open-claw-reference@1.0.0-canary.19](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.18...ac2-open-claw-reference@1.0.0-canary.19) (2026-07-16)
+
+
+### Bug Fixes
+
+* **ac2:** bound signaling connect wait so pair re-link cannot hang ([250ab82](https://github.com/algorandfoundation/ac2/commit/250ab827a070e5650600ba7af8d9f3c9adbb4b0c))
+
+# [ac2-open-claw-reference@1.0.0-canary.18](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.17...ac2-open-claw-reference@1.0.0-canary.18) (2026-07-15)
+
+
+### Features
+
+* **openclaw:** expose Algorand wallet address ([7ac802d](https://github.com/algorandfoundation/ac2/commit/7ac802d3cd771ad66a170c09dfb0a519c2f34e3f))
+
 # [ac2-open-claw-reference@1.0.0-canary.17](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.16...ac2-open-claw-reference@1.0.0-canary.17) (2026-07-07)
 
 

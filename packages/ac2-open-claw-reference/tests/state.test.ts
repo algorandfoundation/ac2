@@ -13,7 +13,9 @@ import {
   recordToolActivity,
   saveAc2State,
   clearAc2StatePendingRevocation,
+  clearMatchingPendingRevocation,
   discardPendingPairing,
+  discardPendingPairingIfUnestablished,
   setConnectionIdentity,
   touchConnection,
 } from '../src/identity/state.js';
@@ -88,6 +90,44 @@ describe('multi-connection persistence', () => {
     expect(state.pendingRevocation?.pairing).toEqual(pairing);
   });
 
+  it('clears only the matching delivered revocation and preserves a replacement pairing', async () => {
+    const revoked = {
+      version: 2 as const,
+      pairingId: 'pairing-old',
+      role: 'provider' as const,
+      credential: 'secret-old',
+    };
+    const replacement = {
+      version: 2 as const,
+      pairingId: 'pairing-new',
+      role: 'provider' as const,
+      credential: 'secret-new',
+    };
+    clearAc2StatePendingRevocation(revoked);
+    saveAc2State({ pairing: replacement, requestId: replacement.pairingId });
+
+    const state = await clearMatchingPendingRevocation(revoked);
+
+    expect(state.pendingRevocation).toBeUndefined();
+    expect(state.pairing).toEqual(replacement);
+    expect(state.requestId).toBe(replacement.pairingId);
+  });
+
+  it('does not clear a newer revocation tombstone for a stale success response', async () => {
+    const stale = {
+      version: 2 as const,
+      pairingId: 'pairing-same',
+      role: 'provider' as const,
+      credential: 'secret-old',
+    };
+    const current = { ...stale, credential: 'secret-new' };
+    clearAc2StatePendingRevocation(current);
+
+    const state = await clearMatchingPendingRevocation(stale);
+
+    expect(state.pendingRevocation?.pairing).toEqual(current);
+  });
+
   it('deduplicates concurrent invitation creation and persists before returning', async () => {
     const pairing = {
       version: 2 as const,
@@ -126,9 +166,9 @@ describe('multi-connection persistence', () => {
     expect(() => loadAc2State()).toThrowError(
       expect.objectContaining({ code: 'AC2_STATE_INVALID' }),
     );
-    await expect(
-      ensurePersistedPairing('https://liquid.example'),
-    ).rejects.toMatchObject({ code: 'AC2_STATE_INVALID' });
+    await expect(ensurePersistedPairing('https://liquid.example')).rejects.toMatchObject({
+      code: 'AC2_STATE_INVALID',
+    });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -147,6 +187,37 @@ describe('multi-connection persistence', () => {
     const state = loadAc2State();
     expect(state.pairing).toBeUndefined();
     expect(state.connections?.['older-established-pairing']).toBeDefined();
+  });
+
+  it('discards only the exact unauthorized invitation that remains unestablished', async () => {
+    const stale = {
+      version: 2 as const,
+      pairingId: 'pairing-pending',
+      role: 'provider' as const,
+      credential: 'secret-old',
+    };
+    const replacement = { ...stale, credential: 'secret-new' };
+    saveAc2State({ pairing: replacement, requestId: replacement.pairingId });
+
+    await expect(discardPendingPairingIfUnestablished(stale)).resolves.toBe(false);
+    expect(loadAc2State().pairing).toEqual(replacement);
+
+    await expect(discardPendingPairingIfUnestablished(replacement)).resolves.toBe(true);
+    expect(loadAc2State().pairing).toBeUndefined();
+  });
+
+  it('retains an unauthorized pairing after it has established connection history', async () => {
+    const pairing = {
+      version: 2 as const,
+      pairingId: 'pairing-established',
+      role: 'provider' as const,
+      credential: 'secret',
+    };
+    saveAc2State({ pairing, requestId: pairing.pairingId });
+    touchConnection(pairing.pairingId);
+
+    await expect(discardPendingPairingIfUnestablished(pairing)).resolves.toBe(false);
+    expect(loadAc2State().pairing).toEqual(pairing);
   });
 
   it('touchConnection creates a connection and marks it active', () => {

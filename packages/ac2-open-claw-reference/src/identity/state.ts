@@ -310,9 +310,7 @@ export function clearAc2State(): void {
 }
 
 /** Clear usable pairing state while retaining a revocation retry tombstone. */
-export function clearAc2StatePendingRevocation(
-  pairing: LiquidAuthPairingCredential,
-): void {
+export function clearAc2StatePendingRevocation(pairing: LiquidAuthPairingCredential): void {
   writeAc2State({ pendingRevocation: { pairing, requestedAt: Date.now() } });
 }
 
@@ -327,6 +325,49 @@ export function discardPendingPairing(pairingId: string): void {
     ...remaining
   } = state;
   writeAc2State(remaining);
+}
+
+/**
+ * Complete only the revocation that was actually delivered. A concurrent
+ * `ac2 pair` may already have written a replacement pairing, so revocation
+ * success must never clear the whole state file.
+ */
+export async function clearMatchingPendingRevocation(
+  pairing: LiquidAuthPairingCredential,
+  signal?: AbortSignal,
+): Promise<Ac2PersistedState> {
+  return withAc2StateLock(async () => {
+    const state = loadAc2State();
+    const pending = state.pendingRevocation?.pairing;
+    if (pending?.pairingId === pairing.pairingId && pending.credential === pairing.credential) {
+      const { pendingRevocation: _pendingRevocation, ...remaining } = state;
+      writeAc2State(remaining);
+    }
+    return loadAc2State();
+  }, signal);
+}
+
+/**
+ * Remove an explicitly unauthorized invitation only if it is still the exact
+ * unapproved pairing this process attempted. This compare-and-mutate prevents
+ * a stale network response from deleting a replacement pairing.
+ */
+export async function discardPendingPairingIfUnestablished(
+  pairing: LiquidAuthPairingCredential,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  return withAc2StateLock(async () => {
+    const state = loadAc2State();
+    if (
+      state.pairing?.pairingId !== pairing.pairingId ||
+      state.pairing.credential !== pairing.credential ||
+      state.connections?.[pairing.pairingId] !== undefined
+    ) {
+      return false;
+    }
+    discardPendingPairing(pairing.pairingId);
+    return true;
+  }, signal);
 }
 
 /** Merge `patch` into the state and write it back. */

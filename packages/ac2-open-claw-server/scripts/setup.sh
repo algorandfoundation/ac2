@@ -35,8 +35,19 @@ fi
 set -a; source .env; set +a
 
 # --- 2. build ---------------------------------------------------------------
-echo "==> Building image (installs the AC2 plugin + rebuilds @napi-rs/keyring)"
+echo "==> Building AC2 plugin from monorepo source"
+chmod +x scripts/build-plugin.sh
+./scripts/build-plugin.sh
+
+echo "==> Building image (installs the local AC2 plugin + rebuilds @napi-rs/keyring)"
 docker compose build openclaw-gateway
+
+# Existing deployments keep ~/.openclaw on the named volume, which shadows
+# image-baked plugin files. Reinstall the just-built local tarball into that
+# volume on every setup run so upgrades take effect without wiping state.
+echo "==> Refreshing AC2 plugin in persistent OpenClaw state volume"
+docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
+  dist/index.js plugins install "file:/app/ac2-plugin.tgz" --force
 
 # --- 3. onboarding / provider config (first run only) ----------------------
 # The named volume is seeded from the image on first use; onboarding writes

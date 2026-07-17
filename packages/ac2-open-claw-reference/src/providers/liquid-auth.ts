@@ -101,6 +101,18 @@ const AC2_ICE_CONFIG: any = {
 };
 
 const AC2_HEARTBEAT_MS = 20000;
+/** Default ceiling for awaiting the signaling socket's initial `connect`. */
+const AC2_DEFAULT_PAIRING_TIMEOUT_MS = 120_000;
+/**
+ * Once the signaling socket goes down mid-handshake, give socket.io's own
+ * reconnection this long to recover before treating it as a genuine
+ * ping-timeout/network failure. Deliberately independent of how long the
+ * human takes to scan/approve — that phase has no ceiling of its own.
+ */
+const AC2_DEFAULT_SIGNAL_DEAD_TIMEOUT_MS = 45_000;
+/** Detect an event-loop suspension that can leave socket.io reporting a stale connection. */
+const AC2_SIGNAL_HEALTH_POLL_MS = 10_000;
+const AC2_SIGNAL_SUSPEND_GAP_MS = 60_000;
 const AC2_CONTROL_LABEL = 'ac2-v1' as const;
 const AC2_STREAM_LABEL = 'ac2-stream' as const;
 /** Dedicated liveness channel — keeps keepalive off the control plane. */
@@ -154,9 +166,15 @@ export function closeAwareTransport(base: Ac2Transport): {
     onClose: (handler) => {
       if (closeEmitted) {
         handler();
-        return;
+        return () => {};
       }
       closeHandlers.add(handler);
+      let subscribed = true;
+      return () => {
+        if (!subscribed) return;
+        subscribed = false;
+        closeHandlers.delete(handler);
+      };
     },
     close: () => {
       try {
@@ -171,6 +189,49 @@ export function closeAwareTransport(base: Ac2Transport): {
   };
 
   return { transport, emitClose };
+}
+
+interface PeerConnectionStateSource {
+  iceConnectionState?: string;
+  connectionState?: string;
+  addEventListener?: (event: string, listener: () => void) => void;
+  removeEventListener?: (event: string, listener: () => void) => void;
+}
+
+/**
+ * Close established peers only on authoritative terminal WebRTC states.
+ * `disconnected` is deliberately ignored because it is transient during
+ * mobile backgrounding and network handoffs.
+ */
+export function monitorTerminalPeerState(
+  peer: PeerConnectionStateSource,
+  onTerminal: (reason: string) => void,
+): () => void {
+  let active = true;
+  let terminalEmitted = false;
+
+  const evaluate = (): void => {
+    if (!active || terminalEmitted) return;
+    const states = [
+      ['iceConnectionState', peer.iceConnectionState],
+      ['connectionState', peer.connectionState],
+    ] as const;
+    const terminal = states.find(([, state]) => state === 'failed' || state === 'closed');
+    if (!terminal) return;
+    terminalEmitted = true;
+    onTerminal(`${terminal[0]}:${terminal[1]}`);
+  };
+
+  peer.addEventListener?.('iceconnectionstatechange', evaluate);
+  peer.addEventListener?.('connectionstatechange', evaluate);
+  evaluate();
+
+  return () => {
+    if (!active) return;
+    active = false;
+    peer.removeEventListener?.('iceconnectionstatechange', evaluate);
+    peer.removeEventListener?.('connectionstatechange', evaluate);
+  };
 }
 
 export function resolveHeartbeatTimeoutMs(value?: string | number): number | undefined {
@@ -241,55 +302,12 @@ export function getLiquidAuthPairingErrorCode(
       data?: { code?: unknown };
       cause?: unknown;
     };
-    const code = record.code ?? record.data?.code;
-    if (code === 'PAIRING_UNAUTHORIZED' || code === 'PAIRING_REVOKED') return code;
+    for (const code of [record.code, record.data?.code]) {
+      if (code === 'PAIRING_UNAUTHORIZED' || code === 'PAIRING_REVOKED') return code;
+    }
     current = record.cause;
   }
   return undefined;
-}
-
-interface SignalingSocketLike {
-  connected?: boolean;
-  on(event: 'connect', listener: () => void): unknown;
-  on(event: 'connect_error', listener: (error: unknown) => void): unknown;
-  off(event: 'connect', listener: () => void): unknown;
-  off(event: 'connect_error', listener: (error: unknown) => void): unknown;
-}
-
-/** Wait for signaling while failing fast only for explicit credential rejection. */
-export function waitForSignalingConnect(socket: SignalingSocketLike): Promise<void> {
-  if (socket.connected) return Promise.resolve();
-  return new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const cleanup = (): void => {
-      socket.off('connect', onConnect);
-      socket.off('connect_error', onConnectError);
-    };
-    const finish = (operation: () => void): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      operation();
-    };
-    const onConnect = (): void => finish(resolve);
-    const onConnectError = (error: unknown): void => {
-      const code = getLiquidAuthPairingErrorCode(error);
-      if (!code) return;
-      const fallback =
-        code === 'PAIRING_REVOKED'
-          ? 'Pairing has been revoked'
-          : 'Pairing credential was not accepted';
-      const message =
-        error instanceof Error && error.message.length > 0 ? error.message : fallback;
-      finish(() => reject(new LiquidAuthPairingError(code, message, { cause: error })));
-    };
-
-    socket.on('connect', onConnect);
-    socket.on('connect_error', onConnectError);
-    // Close the race where the socket connected between the first check and
-    // listener registration.
-    if (socket.connected) onConnect();
-  });
 }
 
 export function isLiquidAuthPairingCredential(
@@ -418,6 +436,309 @@ function waitForPairingPhase<T>(
   });
 }
 
+/** Raised when the signaling socket never reaches `connect` in time. */
+export class SignalingConnectError extends Error {
+  readonly code: 'timeout' | 'aborted';
+  constructor(code: 'timeout' | 'aborted', message: string) {
+    super(message);
+    this.name = 'SignalingConnectError';
+    this.code = code;
+  }
+}
+
+/**
+ * Await the signaling socket's first `connect`, bounded by `timeoutMs` and an
+ * optional abort `signal`. On timeout or abort, invokes `onFailure` (used to
+ * tear down the socket so it stops retrying) and rejects — so callers never
+ * block forever on an unreachable signaling server. A successful `connect`
+ * clears the timer and detaches the abort listener; later duplicate `connect`
+ * events (or an elapsed timer) are no-ops.
+ */
+export function awaitSignalConnect(
+  client: {
+    connected?: boolean;
+    on: (event: string, listener: (...args: any[]) => void) => void;
+    off?: (event: string, listener: (...args: any[]) => void) => void;
+  },
+  opts: { timeoutMs: number; signal?: AbortSignal; onFailure?: () => void },
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      client.off?.('connect', onConnect);
+      client.off?.('connect_error', onConnectError);
+      opts.signal?.removeEventListener('abort', onAbort);
+    };
+
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try {
+        opts.onFailure?.();
+      } catch {
+        // Teardown is best-effort; still reject the caller.
+      }
+      reject(error);
+    };
+
+    function onAbort(): void {
+      fail(
+        new SignalingConnectError(
+          'aborted',
+          '[ac2-open-claw] pairing aborted before the signaling socket connected',
+        ),
+      );
+    }
+
+    function onConnect(): void {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    }
+
+    function onConnectError(error: unknown): void {
+      const code = getLiquidAuthPairingErrorCode(error);
+      if (!code) return;
+      const fallback =
+        code === 'PAIRING_REVOKED'
+          ? 'Pairing has been revoked'
+          : 'Pairing credential was not accepted';
+      const message = error instanceof Error && error.message.length > 0 ? error.message : fallback;
+      fail(new LiquidAuthPairingError(code, message, { cause: error }));
+    }
+
+    if (opts.signal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    client.on('connect', onConnect);
+    client.on('connect_error', onConnectError);
+
+    opts.signal?.addEventListener('abort', onAbort);
+
+    // Close the race where the socket connected between construction and
+    // listener registration.
+    if (client.connected) {
+      onConnect();
+      return;
+    }
+
+    if (Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0) {
+      timer = setTimeout(() => {
+        fail(
+          new SignalingConnectError(
+            'timeout',
+            `[ac2-open-claw] signaling socket did not connect within ${opts.timeoutMs}ms`,
+          ),
+        );
+      }, opts.timeoutMs);
+    }
+  });
+}
+
+/**
+ * Race a pairing-handshake promise against a cumulative signaling outage
+ * budget (plus an optional abort signal) — never against the time a human
+ * takes to approve. Brief reconnects consume only their actual offline time,
+ * but cannot reset the budget forever. A wall-clock poll also recycles a
+ * handshake after a long event-loop suspension that may leave socket.io's
+ * `connected` flag stale.
+ *
+ * Disconnect reasons that socket.io will NOT auto-reconnect from (a
+ * server-/client-initiated close) fail the current attempt immediately
+ * rather than waiting out `deadSocketTimeoutMs` for a reconnect that can
+ * never happen — handing off to the caller's re-pair loop (which opens a
+ * fresh socket) sooner.
+ */
+export const SIGNALING_TERMINAL_DISCONNECT_REASONS: ReadonlySet<string> = new Set([
+  // socket.io reasons where the client does not attempt reconnection.
+  'io server disconnect',
+  'io client disconnect',
+]);
+
+export function withSignalingHealthGuard<T>(
+  promise: Promise<T>,
+  sock: {
+    on: (event: string, listener: (...args: any[]) => void) => void;
+    off?: (event: string, listener: (...args: any[]) => void) => void;
+    connected?: boolean;
+  },
+  opts: {
+    deadSocketTimeoutMs: number;
+    signal?: AbortSignal;
+    onFailure?: () => void;
+    now?: () => number;
+    pollIntervalMs?: number;
+    suspendGapMs?: number;
+  },
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const now = opts.now ?? (() => Date.now());
+    const pollIntervalMs = Math.max(1, opts.pollIntervalMs ?? AC2_SIGNAL_HEALTH_POLL_MS);
+    const suspendGapMs = Math.max(1, opts.suspendGapMs ?? AC2_SIGNAL_SUSPEND_GAP_MS);
+    let settled = false;
+    let deadTimer: ReturnType<typeof setTimeout> | undefined;
+    let healthPoll: ReturnType<typeof setInterval> | undefined;
+    let disconnectedAt: number | undefined;
+    let accumulatedOfflineMs = 0;
+    let lastHealthPollAt = now();
+
+    const clearDeadTimer = (): void => {
+      if (deadTimer !== undefined) {
+        clearTimeout(deadTimer);
+        deadTimer = undefined;
+      }
+    };
+
+    const cleanup = (): void => {
+      clearDeadTimer();
+      if (healthPoll !== undefined) {
+        clearInterval(healthPoll);
+        healthPoll = undefined;
+      }
+      sock.off?.('disconnect', onDisconnect);
+      sock.off?.('connect', onReconnect);
+      opts.signal?.removeEventListener('abort', onAbort);
+    };
+
+    const fail = (error: SignalingConnectError): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try {
+        opts.onFailure?.();
+      } catch {
+        // Teardown is best-effort; still reject the caller.
+      }
+      reject(error);
+    };
+
+    const currentOfflineMs = (): number =>
+      accumulatedOfflineMs +
+      (disconnectedAt === undefined ? 0 : Math.max(0, now() - disconnectedAt));
+
+    const armDeadTimer = (): void => {
+      clearDeadTimer();
+      if (disconnectedAt === undefined) return;
+      const remainingMs = Math.max(0, opts.deadSocketTimeoutMs - currentOfflineMs());
+      if (remainingMs === 0) {
+        fail(
+          new SignalingConnectError(
+            'timeout',
+            `[ac2-open-claw] signaling socket exhausted its ${opts.deadSocketTimeoutMs}ms offline budget during pairing`,
+          ),
+        );
+        return;
+      }
+      deadTimer = setTimeout(() => {
+        if (disconnectedAt === undefined || settled) return;
+        if (currentOfflineMs() < opts.deadSocketTimeoutMs) {
+          armDeadTimer();
+          return;
+        }
+        fail(
+          new SignalingConnectError(
+            'timeout',
+            `[ac2-open-claw] signaling socket exhausted its ${opts.deadSocketTimeoutMs}ms offline budget during pairing`,
+          ),
+        );
+      }, remainingMs);
+    };
+
+    function onAbort(): void {
+      fail(
+        new SignalingConnectError(
+          'aborted',
+          '[ac2-open-claw] pairing aborted before the handshake completed',
+        ),
+      );
+    }
+
+    // socket.io passes the disconnect reason as the first listener arg.
+    function onDisconnect(reason?: string): void {
+      // A server-/client-initiated close will never auto-reconnect this
+      // socket, so there is nothing to wait for — fail now and let the
+      // caller's re-pair loop open a fresh socket.
+      if (typeof reason === 'string' && SIGNALING_TERMINAL_DISCONNECT_REASONS.has(reason)) {
+        fail(
+          new SignalingConnectError(
+            'timeout',
+            `[ac2-open-claw] signaling connection closed during pairing and will not auto-reconnect (${reason})`,
+          ),
+        );
+        return;
+      }
+      // Duplicate disconnect notifications must not reset the current outage.
+      if (disconnectedAt !== undefined) return;
+      disconnectedAt = now();
+      armDeadTimer();
+    }
+
+    function onReconnect(): void {
+      clearDeadTimer();
+      if (disconnectedAt === undefined) return;
+      accumulatedOfflineMs += Math.max(0, now() - disconnectedAt);
+      disconnectedAt = undefined;
+      if (accumulatedOfflineMs >= opts.deadSocketTimeoutMs) {
+        fail(
+          new SignalingConnectError(
+            'timeout',
+            `[ac2-open-claw] signaling socket exhausted its ${opts.deadSocketTimeoutMs}ms offline budget during pairing`,
+          ),
+        );
+      }
+    }
+
+    if (opts.signal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    sock.on('disconnect', onDisconnect);
+    sock.on('connect', onReconnect);
+    opts.signal?.addEventListener('abort', onAbort);
+
+    // Check only after listeners are installed so a reconnect racing guard
+    // setup cannot be missed and leave a stale dead-socket timer behind.
+    if (sock.connected === false) onDisconnect();
+
+    healthPoll = setInterval(() => {
+      const current = now();
+      const gap = Math.max(0, current - lastHealthPollAt);
+      lastHealthPollAt = current;
+      if (gap < suspendGapMs) return;
+      fail(
+        new SignalingConnectError(
+          'timeout',
+          `[ac2-open-claw] pairing health checks were suspended for ${gap}ms; recycling the signaling session`,
+        ),
+      );
+    }, pollIntervalMs);
+    (healthPoll as unknown as { unref?: () => void }).unref?.();
+
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(err);
+      },
+    );
+  });
+}
+
 export interface LiquidAuthChannelProviderOptions {
   /** Liquid Auth signaling server origin. */
   origin?: string;
@@ -464,31 +785,60 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
     let controlChannel: any;
     let streamChannel: any;
     let heartbeatChannel: any;
+    let disposePeerStateMonitor: (() => void) | undefined;
+    let peerNegotiationSettled = false;
     let lastHeartbeatInboundAt = Date.now();
     let emitTransportClose: () => void = () => {};
-    let closed = false;
+    let closePromise: Promise<void> | undefined;
 
-    const close = async (): Promise<void> => {
-      if (closed) return;
-      closed = true;
-      if (heartbeat) {
-        clearInterval(heartbeat);
-        heartbeat = undefined;
-      }
-      closeRtcDataChannel(heartbeatChannel);
-      closeRtcDataChannel(streamChannel);
-      closeRtcDataChannel(controlChannel);
-      emitTransportClose();
-      try {
-        (client as unknown as { peerClient?: { close?: () => void } }).peerClient?.close?.();
-      } catch {
-        // Already closed; ignore.
-      }
-      try {
-        client.close(true);
-      } catch {
-        // Already closed; ignore.
-      }
+    const close = (): Promise<void> => {
+      if (closePromise) return closePromise;
+      closePromise = (async () => {
+        disposePeerStateMonitor?.();
+        disposePeerStateMonitor = undefined;
+        if (heartbeat) {
+          clearInterval(heartbeat);
+          heartbeat = undefined;
+        }
+        closeRtcDataChannel(heartbeatChannel);
+        closeRtcDataChannel(streamChannel);
+        closeRtcDataChannel(controlChannel);
+        emitTransportClose();
+        try {
+          // Newer Liquid Client versions can cancel signaling without racing a
+          // native peer close that is still applying SDP. Older canaries ignore
+          // the second argument, so retain a guarded compatibility fallback.
+          (
+            client as unknown as {
+              close(disconnect?: boolean, closePeer?: boolean): void;
+            }
+          ).close(true, false);
+        } catch {
+          // Already closed; ignore.
+        }
+        try {
+          const liquid = client as unknown as {
+            closePeerWhenSafe?: (timeoutMs?: number) => Promise<void>;
+            peerClient?: { close?: () => void };
+          };
+          if (liquid.closePeerWhenSafe) {
+            await liquid.closePeerWhenSafe(10_000);
+          } else if (liquid.peerClient) {
+            // Published Liquid Client canaries do not expose the peer-close
+            // helper yet. Preserve the same bounded grace period so closing a
+            // failed setup cannot race native SDP work on those versions.
+            const peer = liquid.peerClient;
+            if (!peerNegotiationSettled) {
+              await new Promise<void>((resolve) => setTimeout(resolve, 10_000));
+            }
+            peer.close?.();
+          }
+        } catch {
+          // Already closed; ignore.
+        }
+        opts.signal?.removeEventListener('abort', onAbort);
+      })();
+      return closePromise;
     };
 
     const onAbort = (): void => {
@@ -504,9 +854,22 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       }
     });
 
+    // Ceiling for the initial socket connect only (see below) — that phase
+    // has no human action to wait on, so a flat deadline is appropriate.
+    const pairingTimeoutMs = opts.timeoutMs ?? AC2_DEFAULT_PAIRING_TIMEOUT_MS;
+
     // Block resolving until the signaling socket is up (the caller renders
-    // the QR only after `startPairing` resolves).
-    const waitForConnect = waitForSignalingConnect(socket as unknown as SignalingSocketLike);
+    // the QR only after `startPairing` resolves). Bounded by `timeoutMs` and
+    // the caller's abort signal so an unreachable signaling server rejects
+    // instead of hanging the re-pairing loop forever — and the failing socket
+    // is torn down so it stops emitting reconnect/ping-timeout noise.
+    const waitForConnect = awaitSignalConnect(socket, {
+      timeoutMs: pairingTimeoutMs,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      onFailure: () => {
+        void close();
+      },
+    });
     // Bind low-level error/disconnect diagnostics once the socket is built.
     void (async () => {
       try {
@@ -589,15 +952,30 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       )(requestId, 'offer', AC2_ICE_CONFIG, {
         dataChannels,
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-        ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+        // The initial socket connect is bounded above; peer negotiation waits
+        // on a human and must not inherit Liquid Client's default flat timeout.
+        timeoutMs: 0,
       });
-      const primary: any = await waitForPairingPhase(peerPromise, opts, 'peer connection');
+      // Bounded by sustained signaling-socket disconnection, not a flat
+      // deadline: `peer(...)`'s offer/answer/candidate exchange waits on the
+      // human scanning the QR and approving in their wallet, which can take
+      // minutes. Only a real, sustained network/ping-timeout failure (the
+      // socket staying down longer than the reconnect grace period) should
+      // tear this down — not the human simply taking their time.
+      const primary: any = await withSignalingHealthGuard(peerPromise, socket, {
+        deadSocketTimeoutMs: AC2_DEFAULT_SIGNAL_DEAD_TIMEOUT_MS,
+        ...(opts.signal ? { signal: opts.signal } : {}),
+        onFailure: () => {
+          void close();
+        },
+      });
+      peerNegotiationSettled = true;
       controlChannel = controlChannel ?? primary;
 
       if (controlChannel.label !== AC2_CONTROL_LABEL) {
         throw new Error(
           `[ac2-open-claw] Expected control channel labeled "${AC2_CONTROL_LABEL}", got "${controlChannel.label}". ` +
-          `The Controller app must use the latest liquid-auth-js with ac2-v1 support.`,
+            `The Controller app must use the latest liquid-auth-js with ac2-v1 support.`,
         );
       }
 
@@ -622,6 +1000,24 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
             reject(err);
           });
         });
+      }
+
+      let terminalPeerState: string | undefined;
+      const peer = (client as unknown as { peerClient?: PeerConnectionStateSource }).peerClient;
+      if (peer) {
+        const dispose = monitorTerminalPeerState(peer, (reason) => {
+          terminalPeerState = reason;
+          // eslint-disable-next-line no-console
+          console.warn(`[ac2] WebRTC entered terminal state (${reason}); closing channel.`);
+          void close();
+        });
+        disposePeerStateMonitor = dispose;
+        if (terminalPeerState) {
+          dispose();
+          disposePeerStateMonitor = undefined;
+          await close();
+          throw new Error(`[ac2-open-claw] WebRTC peer is already ${terminalPeerState}`);
+        }
       }
 
       // Bidirectional keep-alive: each side pings on its own timer AND replies
@@ -671,11 +1067,11 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         // Bind the real connected wallet (normalized to canonical `did:key:z…`).
         ...(linkedWallet !== undefined
           ? {
-            peer: {
-              did: normalizeDidKey(`did:key:${linkedWallet}`),
-              wallet: linkedWallet,
-            },
-          }
+              peer: {
+                did: normalizeDidKey(`did:key:${linkedWallet}`),
+                wallet: linkedWallet,
+              },
+            }
           : {}),
         close,
       };
@@ -683,7 +1079,7 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
     };
 
     try {
-      await waitForPairingPhase(waitForConnect, opts, 'signaling connection');
+      await waitForConnect;
     } catch (error) {
       await close();
       throw error;

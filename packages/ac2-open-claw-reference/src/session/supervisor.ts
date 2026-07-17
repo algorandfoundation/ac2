@@ -11,12 +11,12 @@ import {
   type LiquidAuthPairingCredential,
 } from '../providers/liquid-auth.js';
 import {
-  clearAc2State,
-  discardPendingPairing,
+  clearMatchingPendingRevocation,
+  discardPendingPairingIfUnestablished,
   getConnection,
   loadAc2State,
 } from '../identity/state.js';
-import { ensurePersistedPairing } from '../identity/pairing.js';
+import { ensurePersistedPairing, PAIRING_INVITATION_TIMEOUT_MS } from '../identity/pairing.js';
 import { sessionManager } from './manager.js';
 import { runConnectedSession } from './connected-session.js';
 
@@ -151,8 +151,7 @@ export class Ac2ConnectionSupervisor {
             pendingRevocation.pairing,
             AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
           );
-          clearAc2State();
-          persisted = {};
+          persisted = await clearMatchingPendingRevocation(pendingRevocation.pairing, signal);
         } catch (error) {
           if (signal.aborted) break;
           reconnectAttempts += 1;
@@ -184,7 +183,10 @@ export class Ac2ConnectionSupervisor {
         const ensured = await ensurePersistedPairing(
           origin,
           state.requestId,
-          attemptController.signal,
+          AbortSignal.any([
+            attemptController.signal,
+            AbortSignal.timeout(PAIRING_INVITATION_TIMEOUT_MS),
+          ]),
         );
         attemptPairing = ensured.pairing;
         stateWatcher = setInterval(() => {
@@ -212,9 +214,16 @@ export class Ac2ConnectionSupervisor {
           throw new Error('[ac2] Pairing provider did not return a durable credential');
         }
         const pairing: LiquidAuthPairingCredential = issued;
-        if (ensured.created && renderedPairingId !== pairing.pairingId) {
-          renderedPairingId = pairing.pairingId;
+        // An invitation can be persisted before the signaling socket becomes
+        // reachable. Render it on the first successful provider start even if
+        // this retry did not create it, but never re-render an already paired
+        // connection or spam the same QR during this process.
+        if (
+          getConnection(pairing.pairingId) === undefined &&
+          renderedPairingId !== pairing.pairingId
+        ) {
           renderQr(handle.pairing);
+          renderedPairingId = pairing.pairingId;
         }
 
         this.update(options, {
@@ -246,10 +255,10 @@ export class Ac2ConnectionSupervisor {
         let rotatePendingInvitation = false;
         if (attemptPairing !== undefined && isPairingAuthorizationError(error)) {
           try {
-            if (getConnection(attemptPairing.pairingId) === undefined) {
-              discardPendingPairing(attemptPairing.pairingId);
-              rotatePendingInvitation = true;
-            }
+            rotatePendingInvitation = await discardPendingPairingIfUnestablished(
+              attemptPairing,
+              signal,
+            );
           } catch (stateError) {
             safeLog(
               options.api,
