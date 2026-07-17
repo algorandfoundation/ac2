@@ -72,7 +72,10 @@ function parseOutput(chunk) {
   for (const line of text.split('\n')) pushLog(line);
 
   // The invitation block contains: "Pairing URL: <qrPayload>"
-  // Re-pair cycles print a fresh invitation, so always keep the LAST match.
+  // A re-pair cycle only re-prints the invitation when the requestId (and
+  // thus the payload) actually changes; a same-requestId re-link prints no
+  // new "Pairing URL:" line. Keep the LAST match so a genuinely new payload
+  // wins, and rely on the payload-equality check below to ignore duplicates.
   const matches = [...text.matchAll(/Pairing URL:\s*(\S+)/g)];
   if (matches.length > 0) {
     const payload = matches[matches.length - 1][1];
