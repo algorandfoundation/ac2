@@ -25,15 +25,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the locally-built plugin tarball (produced from the monorepo source by
-# scripts/build-plugin.sh). Build-time /tmp is a normal dir (the runtime tmpfs
-# mount does not apply during `docker build`).
-COPY --chown=node:node packages/ac2-open-claw-server/ac2-plugin.tgz /tmp/ac2-plugin.tgz
+# scripts/build-plugin.sh). Keep it under /app so it is available both at
+# build-time and runtime (the compose services mount /tmp as tmpfs).
+COPY --chown=node:node packages/ac2-open-claw-server/ac2-plugin.tgz /app/ac2-plugin.tgz
 
 USER node
 ENV HOME=/home/node
 
 # 1) Install the plugin from the local tarball (built from monorepo source).
-RUN node /app/dist/index.js plugins install "file:/tmp/ac2-plugin.tgz" --force
+RUN node /app/dist/index.js plugins install "file:/app/ac2-plugin.tgz" --force
 
 # 2) Rebuild the @napi-rs/keyring native addon (see plugin README). It ships as
 #    a prebuilt N-API binary, so `npm rebuild` just wires up the right platform
