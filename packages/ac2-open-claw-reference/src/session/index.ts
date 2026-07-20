@@ -38,3 +38,13 @@ export {
   type CapabilitiesResult,
 } from './flows.js';
 export { runAc2Channel, renderPairingQr, type ChannelDeps } from './channel-runtime.js';
+export { runConnectedSession, type ConnectedSessionOptions } from './connected-session.js';
+export {
+  Ac2ConnectionSupervisor,
+  connectionSupervisor,
+  isPairingAuthorizationError,
+  reconnectDelayMs,
+  type Ac2SupervisorOptions,
+  type Ac2SupervisorState,
+  type Ac2SupervisorStatus,
+} from './supervisor.js';

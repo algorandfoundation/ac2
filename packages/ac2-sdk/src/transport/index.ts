@@ -28,6 +28,17 @@ export type Ac2ErrorHandler = (err: Error) => void;
 /** Lifecycle event handler. */
 export type Ac2EventHandler = () => void;
 
+/** Remove a previously registered transport listener. Safe to call more than once. */
+export type Ac2Unsubscribe = () => void;
+
+/**
+ * Listener registration result.
+ *
+ * New transports SHOULD return an unsubscribe function. `void` remains allowed
+ * so transports written against older SDK releases remain source-compatible.
+ */
+export type Ac2Subscription = Ac2Unsubscribe | void;
+
 /** Callback for raw (non-AC2 JSON) messages. Used for chat. */
 export type RawMessageHandler = (payload: string) => void;
 
@@ -52,24 +63,37 @@ export interface Ac2Transport {
   /** Send a single, already-serialized AC2 message. */
   send(payload: string): void;
   /** Register a handler for inbound, parsed AC2 messages. */
-  onMessage(handler: Ac2MessageHandler): void;
-  /** Register a optional handler for inbound raw (non-AC2) messages. */
-  onRawMessage?(handler: RawMessageHandler): void;
+  onMessage(handler: Ac2MessageHandler): Ac2Subscription;
+  /** Register an optional handler for inbound raw (non-AC2) messages. */
+  onRawMessage?(handler: RawMessageHandler): Ac2Subscription;
   /**
    * Register an optional handler for inbound binary DataChannel frames.
    * If unregistered, binary frames are silently dropped (per spec).
    */
-  onBinaryMessage?(handler: BinaryMessageHandler): void;
+  onBinaryMessage?(handler: BinaryMessageHandler): Ac2Subscription;
   /** Register a handler for parse / transport errors. */
-  onError(handler: Ac2ErrorHandler): void;
+  onError(handler: Ac2ErrorHandler): Ac2Subscription;
   /** Register a handler for when the transport becomes ready. */
-  onOpen(handler: Ac2EventHandler): void;
+  onOpen(handler: Ac2EventHandler): Ac2Subscription;
   /** Register a handler for when the transport closes. */
-  onClose(handler: Ac2EventHandler): void;
+  onClose(handler: Ac2EventHandler): Ac2Subscription;
   /** Close the transport. */
   close(): void;
   /** True once the transport is ready to send. */
   readonly isOpen: boolean;
+}
+
+/**
+ * An AC2 transport whose listener registrations are all individually
+ * disposable. The SDK's built-in transports implement this stronger contract.
+ */
+export interface Ac2DisposableTransport extends Ac2Transport {
+  onMessage(handler: Ac2MessageHandler): Ac2Unsubscribe;
+  onRawMessage(handler: RawMessageHandler): Ac2Unsubscribe;
+  onBinaryMessage(handler: BinaryMessageHandler): Ac2Unsubscribe;
+  onError(handler: Ac2ErrorHandler): Ac2Unsubscribe;
+  onOpen(handler: Ac2EventHandler): Ac2Unsubscribe;
+  onClose(handler: Ac2EventHandler): Ac2Unsubscribe;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +115,16 @@ export interface RtcDataChannelLike {
   onmessage: ((ev: { data: unknown }) => void) | null;
 }
 
+function subscribe<T>(handlers: Set<T>, handler: T): Ac2Unsubscribe {
+  handlers.add(handler);
+  let active = true;
+  return () => {
+    if (!active) return;
+    active = false;
+    handlers.delete(handler);
+  };
+}
+
 /**
  * Wrap an existing `RTCDataChannel` (or compatible object) as an
  * `Ac2Transport`. The caller is responsible for creating the DataChannel
@@ -100,7 +134,7 @@ export interface RtcDataChannelLike {
  *
  * The wrapper enforces that the label matches `ac2-v1` and throws otherwise.
  */
-export function rtcDataChannelTransport(channel: RtcDataChannelLike): Ac2Transport {
+export function rtcDataChannelTransport(channel: RtcDataChannelLike): Ac2DisposableTransport {
   if (channel.label !== AC2_DATACHANNEL_LABEL) {
     throw new Error(
       `[ac2-sdk] DataChannel label MUST be "${AC2_DATACHANNEL_LABEL}" ` +
@@ -108,18 +142,22 @@ export function rtcDataChannelTransport(channel: RtcDataChannelLike): Ac2Transpo
     );
   }
 
-  let messageHandler: Ac2MessageHandler | null = null;
-  let rawMessageHandler: RawMessageHandler | null = null;
-  let binaryMessageHandler: BinaryMessageHandler | null = null;
-  let errorHandler: Ac2ErrorHandler | null = null;
-  let openHandler: Ac2EventHandler | null = null;
-  let closeHandler: Ac2EventHandler | null = null;
+  const messageHandlers = new Set<Ac2MessageHandler>();
+  const rawMessageHandlers = new Set<RawMessageHandler>();
+  const binaryMessageHandlers = new Set<BinaryMessageHandler>();
+  const errorHandlers = new Set<Ac2ErrorHandler>();
+  const openHandlers = new Set<Ac2EventHandler>();
+  const closeHandlers = new Set<Ac2EventHandler>();
 
-  channel.onopen = () => openHandler?.();
-  channel.onclose = () => closeHandler?.();
+  channel.onopen = () => {
+    for (const handler of [...openHandlers]) handler();
+  };
+  channel.onclose = () => {
+    for (const handler of [...closeHandlers]) handler();
+  };
   channel.onerror = (ev) => {
     const err = ev instanceof Error ? ev : new Error(`[ac2-sdk] DataChannel error: ${String(ev)}`);
-    errorHandler?.(err);
+    for (const handler of [...errorHandlers]) handler(err);
   };
   channel.onmessage = (ev) => {
     // Binary frames: route to the optional binary hook. Per SPEC.md →
@@ -127,15 +165,16 @@ export function rtcDataChannelTransport(channel: RtcDataChannelLike): Ac2Transpo
     // DataChannel messages — so this is NOT an error condition. If no
     // binary handler is registered, drop the frame silently.
     if (typeof ev.data !== 'string') {
-      if (!binaryMessageHandler) return;
       const data = ev.data;
       if (data instanceof ArrayBuffer) {
-        binaryMessageHandler(data);
+        for (const handler of [...binaryMessageHandlers]) handler(data);
       } else if (ArrayBuffer.isView(data)) {
         const view = data as ArrayBufferView;
-        binaryMessageHandler(
-          view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength) as ArrayBuffer,
-        );
+        const bytes = view.buffer.slice(
+          view.byteOffset,
+          view.byteOffset + view.byteLength,
+        ) as ArrayBuffer;
+        for (const handler of [...binaryMessageHandlers]) handler(bytes);
       }
       // Other shapes (e.g. Blob) are intentionally unhandled; consumers
       // that need Blob support should set `channel.binaryType = 'arraybuffer'`.
@@ -149,16 +188,16 @@ export function rtcDataChannelTransport(channel: RtcDataChannelLike): Ac2Transpo
       parsed = JSON.parse(raw);
     } catch (e) {
       // Not JSON; treat as raw chat
-      rawMessageHandler?.(raw);
+      for (const handler of [...rawMessageHandlers]) handler(raw);
       return;
     }
 
     if (!isAc2Message(parsed)) {
       // JSON but not AC2; treat as raw
-      rawMessageHandler?.(raw);
+      for (const handler of [...rawMessageHandlers]) handler(raw);
       return;
     }
-    messageHandler?.(parsed);
+    for (const handler of [...messageHandlers]) handler(parsed);
   };
 
   return {
@@ -169,23 +208,26 @@ export function rtcDataChannelTransport(channel: RtcDataChannelLike): Ac2Transpo
       channel.send(payload);
     },
     onMessage(h) {
-      messageHandler = h;
+      return subscribe(messageHandlers, h);
     },
     onRawMessage(h) {
-      rawMessageHandler = h;
+      return subscribe(rawMessageHandlers, h);
     },
     onBinaryMessage(h) {
-      binaryMessageHandler = h;
+      return subscribe(binaryMessageHandlers, h);
     },
     onError(h) {
-      errorHandler = h;
+      return subscribe(errorHandlers, h);
     },
     onOpen(h) {
-      openHandler = h;
+      const unsubscribe = subscribe(openHandlers, h);
       if (channel.readyState === 'open') h();
+      return unsubscribe;
     },
     onClose(h) {
-      closeHandler = h;
+      const unsubscribe = subscribe(closeHandlers, h);
+      if (channel.readyState === 'closed') h();
+      return unsubscribe;
     },
     close() {
       channel.close();
@@ -205,7 +247,7 @@ export function rtcDataChannelTransport(channel: RtcDataChannelLike): Ac2Transpo
  * surfaces on `b.onMessage` (and vice versa). Useful for unit tests of the
  * `Ac2Client` and for plumbing higher-level flows without a real DataChannel.
  */
-export function createInMemoryTransportPair(): [Ac2Transport, Ac2Transport] {
+export function createInMemoryTransportPair(): [Ac2DisposableTransport, Ac2DisposableTransport] {
   const a = makeMemTransport();
   const b = makeMemTransport();
   a._link(b);
@@ -218,19 +260,21 @@ export function createInMemoryTransportPair(): [Ac2Transport, Ac2Transport] {
   return [a, b];
 }
 
-interface MemTransport extends Ac2Transport {
+interface MemTransport extends Ac2DisposableTransport {
   _link(peer: MemTransport): void;
   _open(): void;
-  _deliver(payload: string): void;
+  _deliver(payload: string | ArrayBuffer | ArrayBufferView): void;
+  _error(error: Error): void;
 }
 
 function makeMemTransport(): MemTransport {
   let peer: MemTransport | null = null;
-  let messageHandler: Ac2MessageHandler | null = null;
-  let rawMessageHandler: RawMessageHandler | null = null;
-  let errorHandler: Ac2ErrorHandler | null = null;
-  let openHandler: Ac2EventHandler | null = null;
-  let closeHandler: Ac2EventHandler | null = null;
+  const messageHandlers = new Set<Ac2MessageHandler>();
+  const rawMessageHandlers = new Set<RawMessageHandler>();
+  const binaryMessageHandlers = new Set<BinaryMessageHandler>();
+  const errorHandlers = new Set<Ac2ErrorHandler>();
+  const openHandlers = new Set<Ac2EventHandler>();
+  const closeHandlers = new Set<Ac2EventHandler>();
   let open = false;
   let closed = false;
 
@@ -240,29 +284,41 @@ function makeMemTransport(): MemTransport {
       if (!open || !peer) throw new Error('[ac2-sdk] Transport not open');
       // Deliver asynchronously to mimic real channel semantics.
       const target = peer;
-      queueMicrotask(() => target._deliver(payload));
+      queueMicrotask(() => {
+        try {
+          target._deliver(payload);
+        } catch (error) {
+          target._error(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
     },
     onMessage(h) {
-      messageHandler = h;
+      return subscribe(messageHandlers, h);
     },
     onRawMessage(h) {
-      rawMessageHandler = h;
+      return subscribe(rawMessageHandlers, h);
+    },
+    onBinaryMessage(h) {
+      return subscribe(binaryMessageHandlers, h);
     },
     onError(h) {
-      errorHandler = h;
+      return subscribe(errorHandlers, h);
     },
     onOpen(h) {
-      openHandler = h;
+      const unsubscribe = subscribe(openHandlers, h);
       if (open) h();
+      return unsubscribe;
     },
     onClose(h) {
-      closeHandler = h;
+      const unsubscribe = subscribe(closeHandlers, h);
+      if (closed) h();
+      return unsubscribe;
     },
     close() {
       if (closed) return;
       closed = true;
       open = false;
-      closeHandler?.();
+      for (const handler of [...closeHandlers]) handler();
       const p = peer;
       peer = null;
       if (p && !(p as unknown as { _isClosed?: boolean })._isClosed) {
@@ -278,9 +334,22 @@ function makeMemTransport(): MemTransport {
     _open() {
       if (closed || open) return;
       open = true;
-      openHandler?.();
+      for (const handler of [...openHandlers]) handler();
+    },
+    _error(error) {
+      for (const handler of [...errorHandlers]) handler(error);
     },
     _deliver(payload) {
+      if (typeof payload !== 'string') {
+        const bytes = payload instanceof ArrayBuffer
+          ? payload
+          : payload.buffer.slice(
+              payload.byteOffset,
+              payload.byteOffset + payload.byteLength,
+            ) as ArrayBuffer;
+        for (const handler of [...binaryMessageHandlers]) handler(bytes);
+        return;
+      }
       if (payload.trim().length === 0) return; // Ignore heartbeats
 
       let parsed: unknown;
@@ -288,15 +357,15 @@ function makeMemTransport(): MemTransport {
         parsed = JSON.parse(payload);
       } catch (e) {
         // Not JSON; treat as raw chat
-        rawMessageHandler?.(payload);
+        for (const handler of [...rawMessageHandlers]) handler(payload);
         return;
       }
       if (!isAc2Message(parsed)) {
         // JSON but not AC2; treat as raw
-        rawMessageHandler?.(payload);
+        for (const handler of [...rawMessageHandlers]) handler(payload);
         return;
       }
-      messageHandler?.(parsed);
+      for (const handler of [...messageHandlers]) handler(parsed);
     },
   };
   return t;

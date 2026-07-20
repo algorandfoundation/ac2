@@ -12,7 +12,7 @@
     },
     {
       "name": "AC2_HEARTBEAT_TIMEOUT_MS",
-      "description": "Milliseconds without inbound ac2-heartbeat traffic before the plugin closes the channel. Defaults to 50000.",
+      "description": "Optional milliseconds without inbound ac2-heartbeat traffic before the plugin closes the channel. Disabled by default; values must be at least 40000.",
       "required": false
     }
   ],

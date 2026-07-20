@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,9 +11,15 @@ import {
   loadAc2State,
   recordConversationMessage,
   recordToolActivity,
+  saveAc2State,
+  clearAc2StatePendingRevocation,
+  clearMatchingPendingRevocation,
+  discardPendingPairing,
+  discardPendingPairingIfUnestablished,
   setConnectionIdentity,
   touchConnection,
 } from '../src/identity/state.js';
+import { ensurePersistedPairing } from '../src/identity/pairing.js';
 import { replayConversationHistory, replayConversationList } from '../src/index.js';
 
 /** Minimal transport spy capturing the frames sent to the controller. */
@@ -49,11 +55,171 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   delete process.env['OPENCLAW_STATE_DIR'];
   rmSync(stateDir, { recursive: true, force: true });
 });
 
 describe('multi-connection persistence', () => {
+  it('atomically persists a mode-0600 durable pairing credential', () => {
+    const pairing = {
+      version: 2 as const,
+      pairingId: 'pairing-1',
+      role: 'provider' as const,
+      credential: 'secret',
+    };
+    saveAc2State({ pairing });
+
+    expect(loadAc2State().pairing).toEqual(pairing);
+    expect(statSync(join(stateDir, 'ac2-state.json')).mode & 0o777).toBe(0o600);
+  });
+
+  it('retains only a revocation tombstone when local pairing is forgotten offline', () => {
+    const pairing = {
+      version: 2 as const,
+      pairingId: 'pairing-1',
+      role: 'provider' as const,
+      credential: 'secret',
+    };
+    saveAc2State({ pairing, requestId: pairing.pairingId });
+    clearAc2StatePendingRevocation(pairing);
+
+    const state = loadAc2State();
+    expect(state.pairing).toBeUndefined();
+    expect(state.requestId).toBeUndefined();
+    expect(state.pendingRevocation?.pairing).toEqual(pairing);
+  });
+
+  it('clears only the matching delivered revocation and preserves a replacement pairing', async () => {
+    const revoked = {
+      version: 2 as const,
+      pairingId: 'pairing-old',
+      role: 'provider' as const,
+      credential: 'secret-old',
+    };
+    const replacement = {
+      version: 2 as const,
+      pairingId: 'pairing-new',
+      role: 'provider' as const,
+      credential: 'secret-new',
+    };
+    clearAc2StatePendingRevocation(revoked);
+    saveAc2State({ pairing: replacement, requestId: replacement.pairingId });
+
+    const state = await clearMatchingPendingRevocation(revoked);
+
+    expect(state.pendingRevocation).toBeUndefined();
+    expect(state.pairing).toEqual(replacement);
+    expect(state.requestId).toBe(replacement.pairingId);
+  });
+
+  it('does not clear a newer revocation tombstone for a stale success response', async () => {
+    const stale = {
+      version: 2 as const,
+      pairingId: 'pairing-same',
+      role: 'provider' as const,
+      credential: 'secret-old',
+    };
+    const current = { ...stale, credential: 'secret-new' };
+    clearAc2StatePendingRevocation(current);
+
+    const state = await clearMatchingPendingRevocation(stale);
+
+    expect(state.pendingRevocation?.pairing).toEqual(current);
+  });
+
+  it('deduplicates concurrent invitation creation and persists before returning', async () => {
+    const pairing = {
+      version: 2 as const,
+      pairingId: 'pairing-shared',
+      role: 'provider' as const,
+      credential: 'secret-shared',
+    };
+    const fetchMock = vi.fn(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      return {
+        ok: true,
+        status: 201,
+        statusText: 'Created',
+        json: async () => pairing,
+      };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const results = await Promise.all([
+      ensurePersistedPairing('https://liquid.example'),
+      ensurePersistedPairing('https://liquid.example'),
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(results.map((result) => result.created).sort()).toEqual([false, true]);
+    expect(results[0]?.pairing).toEqual(pairing);
+    expect(results[1]?.pairing).toEqual(pairing);
+    expect(loadAc2State().pairing).toEqual(pairing);
+  });
+
+  it('refuses to replace malformed existing state with a new invitation', async () => {
+    writeFileSync(join(stateDir, 'ac2-state.json'), '{"pairing":', 'utf-8');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(() => loadAc2State()).toThrowError(
+      expect.objectContaining({ code: 'AC2_STATE_INVALID' }),
+    );
+    await expect(ensurePersistedPairing('https://liquid.example')).rejects.toMatchObject({
+      code: 'AC2_STATE_INVALID',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('discards only an unapproved invitation and preserves connection history', () => {
+    const pairing = {
+      version: 2 as const,
+      pairingId: 'pairing-pending',
+      role: 'provider' as const,
+      credential: 'secret-pending',
+    };
+    saveAc2State({ pairing, requestId: pairing.pairingId });
+    touchConnection('older-established-pairing');
+
+    discardPendingPairing(pairing.pairingId);
+
+    const state = loadAc2State();
+    expect(state.pairing).toBeUndefined();
+    expect(state.connections?.['older-established-pairing']).toBeDefined();
+  });
+
+  it('discards only the exact unauthorized invitation that remains unestablished', async () => {
+    const stale = {
+      version: 2 as const,
+      pairingId: 'pairing-pending',
+      role: 'provider' as const,
+      credential: 'secret-old',
+    };
+    const replacement = { ...stale, credential: 'secret-new' };
+    saveAc2State({ pairing: replacement, requestId: replacement.pairingId });
+
+    await expect(discardPendingPairingIfUnestablished(stale)).resolves.toBe(false);
+    expect(loadAc2State().pairing).toEqual(replacement);
+
+    await expect(discardPendingPairingIfUnestablished(replacement)).resolves.toBe(true);
+    expect(loadAc2State().pairing).toBeUndefined();
+  });
+
+  it('retains an unauthorized pairing after it has established connection history', async () => {
+    const pairing = {
+      version: 2 as const,
+      pairingId: 'pairing-established',
+      role: 'provider' as const,
+      credential: 'secret',
+    };
+    saveAc2State({ pairing, requestId: pairing.pairingId });
+    touchConnection(pairing.pairingId);
+
+    await expect(discardPendingPairingIfUnestablished(pairing)).resolves.toBe(false);
+    expect(loadAc2State().pairing).toEqual(pairing);
+  });
+
   it('touchConnection creates a connection and marks it active', () => {
     const conn = touchConnection('req-1');
     expect(conn.requestId).toBe('req-1');

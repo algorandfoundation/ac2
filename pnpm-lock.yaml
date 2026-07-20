@@ -75,8 +75,8 @@ importers:
   packages/ac2-open-claw-reference:
     dependencies:
       '@algorandfoundation/ac2-sdk':
-        specifier: 1.0.0-canary.1
-        version: 1.0.0-canary.1
+        specifier: workspace:^
+        version: link:../ac2-sdk
       '@algorandfoundation/algokit-utils':
         specifier: 10.0.0-beta.4
         version: 10.0.0-beta.4
@@ -84,8 +84,8 @@ importers:
         specifier: 1.0.0-canary.16
         version: 1.0.0-canary.16(@tanstack/store@0.9.3)(before-after-hook@4.0.0)
       '@algorandfoundation/liquid-client':
-        specifier: 1.0.0-canary.8
-        version: 1.0.0-canary.8(socket.io-client@4.8.3)
+        specifier: ^1.0.0-canary.9
+        version: 1.0.0-canary.9(socket.io-client@4.8.3)
       '@napi-rs/keyring':
         specifier: ^1.3.0
         version: 1.3.0
@@ -111,7 +111,7 @@ importers:
         specifier: ^0.12.0
         version: 0.12.0
       socket.io-client:
-        specifier: ^4.7.5
+        specifier: ^4.8.0
         version: 4.8.3
     devDependencies:
       '@algorandfoundation/package-releaser':
@@ -177,9 +177,6 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
-  '@algorandfoundation/ac2-sdk@1.0.0-canary.1':
-    resolution: {integrity: sha512-OYP/TpCWTLpcjWtG9+RLxMhCKFb7mQwmF2KgI/Kv/7F5vILZoSoE8jAnrbkRfjo4zylvhmI7bb4G92AGzlZM1A==}
-
   '@algorandfoundation/algokit-utils@10.0.0-alpha.46':
     resolution: {integrity: sha512-Lx56ET6RmrDCFGwx6qyIr7YRX3Q3MyKgqkNeumLkFHXVkqMnXnK1aLeEbV59EOK8UHQ5UPJofSj1zvRMm9Du7w==}
     engines: {node: '>=20.0'}
@@ -201,8 +198,8 @@ packages:
       '@algorandfoundation/log-store':
         optional: true
 
-  '@algorandfoundation/liquid-client@1.0.0-canary.8':
-    resolution: {integrity: sha512-sGsI5PMFy3DZfxuiUyVlotS+NNVJbTZ+z20c+b0Fsc9NjxVxM6cpbFxNx4G+XtrMuGUxHqjSGJmPNKRdotw6gw==}
+  '@algorandfoundation/liquid-client@1.0.0-canary.9':
+    resolution: {integrity: sha512-ACZq4SPJ0XHkb1mAo21rlopgobTrTeLiEHrJuNUgdcCiPwoz/S2/KsKyhEvlb34J2HZmyudN4oh+KvA0EqllXw==}
     peerDependencies:
       qr-code-styling: ^1.9.2
       socket.io-client: ^4.7.5
@@ -3248,9 +3245,8 @@ packages:
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
 
-  uuid@10.0.0:
-    resolution: {integrity: sha512-8XkAphELsDnEGrDxUOHB3RGvXz6TeuYSGEZBOjtTtPm2lwhGBjLgOzLHB63IUWfBpNucQjND6d3AOudO+H3RWQ==}
-    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
+  uuid@11.1.1:
+    resolution: {integrity: sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==}
     hasBin: true
 
   validate-npm-package-license@3.0.4:
@@ -3509,10 +3505,6 @@ snapshots:
     dependencies:
       zod: 4.4.3
 
-  '@algorandfoundation/ac2-sdk@1.0.0-canary.1':
-    dependencies:
-      ajv: 8.20.0
-
   '@algorandfoundation/algokit-utils@10.0.0-alpha.46':
     dependencies:
       '@algorandfoundation/xhd-wallet-api': 2.0.0-canary.1
@@ -3559,11 +3551,11 @@ snapshots:
       '@tanstack/store': 0.9.3
       before-after-hook: 4.0.0
 
-  '@algorandfoundation/liquid-client@1.0.0-canary.8(socket.io-client@4.8.3)':
+  '@algorandfoundation/liquid-client@1.0.0-canary.9(socket.io-client@4.8.3)':
     dependencies:
       '@algorandfoundation/algokit-utils': 10.0.0-beta.4
       eventemitter3: 5.0.4
-      uuid: 10.0.0
+      uuid: 11.1.1
     optionalDependencies:
       socket.io-client: 4.8.3
 
@@ -6437,7 +6429,7 @@ snapshots:
 
   util-deprecate@1.0.2: {}
 
-  uuid@10.0.0: {}
+  uuid@11.1.1: {}
 
   validate-npm-package-license@3.0.4:
     dependencies:
