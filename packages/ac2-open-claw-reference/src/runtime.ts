@@ -40,16 +40,36 @@ export function getActiveRuntime(): any {
   return activeRuntime;
 }
 
-/** Resolve effective config from `api.config` + `api.pluginConfig`. */
+/**
+ * Resolve effective config from `channels.<id>` + `plugins.entries.<id>.config`
+ * + `api.pluginConfig`, then apply the `AC2_LIQUID_AUTH_SERVER` env override.
+ *
+ * `liquidAuthServer` is documented on the `channels.ac2` config surface (the
+ * one `ac2 setup` writes and `ac2 status` reads), so it must be read from
+ * there — not just from `plugins.entries.ac2.config` — otherwise the pairing
+ * flow silently falls back to the default server and ignores the configured
+ * URL. The `AC2_LIQUID_AUTH_SERVER` env var overrides it at runtime, matching
+ * the channel runtime and the documented behaviour.
+ */
 export function resolveConfig(api: OpenClawApi): ResolvedConfig {
   const fromPluginConfig = (api.pluginConfig ?? {}) as ResolvedConfig;
   const cfg = api.config as unknown as
     | {
         plugins?: { entries?: Record<string, { config?: ResolvedConfig }> };
+        channels?: Record<string, Partial<ResolvedConfig>>;
       }
     | undefined;
+  const fromChannel = (cfg?.channels?.[CHANNEL_ID] ?? {}) as Partial<ResolvedConfig>;
   const fromConfig = cfg?.plugins?.entries?.[PLUGIN_ID]?.config ?? ({} as ResolvedConfig);
-  return { ...fromConfig, ...fromPluginConfig };
+  const resolved: ResolvedConfig = { ...fromChannel, ...fromConfig, ...fromPluginConfig };
+
+  const envServer =
+    typeof process !== 'undefined' ? process.env?.['AC2_LIQUID_AUTH_SERVER']?.trim() : undefined;
+  if (envServer) {
+    resolved.liquidAuthServer = envServer;
+  }
+
+  return resolved;
 }
 
 /** Log through the host logger and the console (best-effort). */

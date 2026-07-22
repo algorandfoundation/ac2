@@ -4,6 +4,7 @@ import {
   extractEd25519PublicKey,
   normalizeDidKey,
   publicKeyToDidKey,
+  resolveStableControllerDid,
 } from '../src/identity/did.js';
 
 // A genuine W3C did:key ed25519 example. We derive the public-key bytes from
@@ -54,5 +55,56 @@ describe('did:key normalization', () => {
   it('leaves non-key placeholders untouched', () => {
     expect(normalizeDidKey('did:key:zAc2Controller')).toBe('did:key:zAc2Controller');
     expect(extractEd25519PublicKey('did:key:zAc2Controller')).toBeUndefined();
+  });
+});
+
+/**
+ * The agent's OpenClaw session is keyed by `ac2:<controllerDid>:<thid>`, and
+ * that transcript is persisted on disk — so a reconnect only restores the
+ * thread's context when `controllerDid` resolves to the same value every time.
+ * `resolveStableControllerDid` anchors it to the granted identity so a
+ * presence-only reconnect (which may omit the wallet / carry a differently
+ * encoded peer DID) can never rotate the key and "forget" the conversation.
+ */
+describe('resolveStableControllerDid — reconnect session-key stability', () => {
+  const GRANTED = CANONICAL_DID;
+
+  it('anchors to the granted identity even when the live link omits the account', () => {
+    expect(
+      resolveStableControllerDid({ storedControllerDid: GRANTED, connectedAccountDid: undefined }),
+    ).toBe(GRANTED);
+  });
+
+  it('keeps the granted identity even if the live link reports a different account', () => {
+    // A presence-only reconnect must not rebind the routing key to a new DID.
+    expect(
+      resolveStableControllerDid({
+        storedControllerDid: GRANTED,
+        connectedAccountDid: 'did:key:zSomeOtherAccount',
+      }),
+    ).toBe(GRANTED);
+  });
+
+  it('falls back to the live account before any identity is granted', () => {
+    expect(
+      resolveStableControllerDid({
+        storedControllerDid: undefined,
+        connectedAccountDid: GRANTED,
+      }),
+    ).toBe(GRANTED);
+  });
+
+  it('falls back to an explicit placeholder when nothing is known', () => {
+    expect(
+      resolveStableControllerDid({
+        storedControllerDid: undefined,
+        connectedAccountDid: undefined,
+        placeholder: 'did:key:zPlaceholder',
+      }),
+    ).toBe('did:key:zPlaceholder');
+  });
+
+  it('uses the default placeholder when none is provided', () => {
+    expect(resolveStableControllerDid({})).toBe('did:key:zAc2Controller');
   });
 });

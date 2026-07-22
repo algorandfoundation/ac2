@@ -69,6 +69,17 @@ export async function runAc2Channel(
     const { transport, streamChannel: streamTransport } = paired;
     const client = new Ac2Client(transport);
 
+    // Control-frame surface used by host-initiated outbound sends (e.g.
+    // sub-agent completion announces) to emit thread-scoped `finalize` frames.
+    const streamSendable = streamTransport
+      ? {
+          send: (payload: string) => streamTransport.send(payload),
+          get isOpen() {
+            return streamTransport.readyState === 'open';
+          },
+        }
+      : undefined;
+
     // Agent → wallet (prefer `ac2-stream` when present).
     const sendChat = async (text: string): Promise<void> => {
       if (streamTransport && streamTransport.readyState === 'open') {
@@ -113,6 +124,8 @@ export async function runAc2Channel(
         client,
         controllerDid,
         agentDid,
+        identityGranted: true,
+        ...(streamSendable ? { controlTransport: streamSendable } : {}),
         ...(walletAddress !== undefined ? { walletAddress } : {}),
       });
       context.logger?.info('[ac2-open-claw] channel connected; tools are live');
@@ -120,6 +133,22 @@ export async function runAc2Channel(
       context.logger?.error(
         `[ac2-open-claw] identity bootstrap failed; signing tools stay disabled: ${(err as Error).message}`,
       );
+      // The transport is up and the wallet is chatting, so the channel IS
+      // connected — register the session anyway (with `identityGranted: false`)
+      // instead of leaving it inactive. Otherwise `sessionManager.getActive()`
+      // stays null and the channel/tools report "registered but not online" /
+      // `no_active_session` even while the user is actively chatting. Signing
+      // stays gated on `identityGranted` (see `signFlow`), so the agent can
+      // explain and keep chatting until the wallet grants an identity.
+      manager.setActive({
+        transport,
+        client,
+        controllerDid: paired.peer?.did ?? 'did:key:zAc2Controller',
+        agentDid: 'did:ac2:agent',
+        identityGranted: false,
+        ...(streamSendable ? { controlTransport: streamSendable } : {}),
+        ...(walletAddress !== undefined ? { walletAddress } : {}),
+      });
       try {
         await sendChat(NO_IDENTITY_NOTICE);
       } catch (sendErr) {

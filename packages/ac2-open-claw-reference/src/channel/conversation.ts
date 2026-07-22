@@ -6,6 +6,25 @@ import { sendStreamControl, type Sendable } from './stream.js';
 
 export const DEFAULT_THID = 'default';
 
+/**
+ * Build the canonical OpenClaw session key for a controller + thread.
+ *
+ * The default thread collapses to the bare `ac2:<controllerDid>` base key, so
+ * the key handed to the host on an inbound turn is byte-identical to the one
+ * `resolveAc2OutboundSessionRoute` / `resolveAc2SessionConversation` resolve
+ * for the same conversation. Otherwise an inbound turn on the default thread
+ * would be keyed `ac2:<did>:default` while every other path (outbound sends,
+ * session resolution, the persisted transcript) uses `ac2:<did>`, splitting a
+ * single logical conversation across two OpenClaw sessions — so the agent
+ * "forgets" the thread whenever the two keys diverge (e.g. on a reconnect).
+ */
+export function buildAc2SessionKey(controllerDid: string, thid?: string): string {
+  const base = `${CHANNEL_ID}:${controllerDid}`;
+  return thid !== undefined && thid.length > 0 && thid !== DEFAULT_THID
+    ? `${base}:${thid}`
+    : base;
+}
+
 const activeThreadByConnection = new Map<string, string>();
 
 function connectionThreadKey(controllerDid: string, requestId?: string): string {
@@ -90,8 +109,8 @@ export function resolveAc2OutboundSessionRoute(params: {
       ? String(params.threadId)
       : undefined;
   const thid = explicit ?? parsedThid ?? DEFAULT_THID;
-  const baseSessionKey = `${CHANNEL_ID}:${to}`;
-  const sessionKey = thid === DEFAULT_THID ? baseSessionKey : `${baseSessionKey}:${thid}`;
+  const baseSessionKey = buildAc2SessionKey(to);
+  const sessionKey = buildAc2SessionKey(to, thid);
   return {
     sessionKey,
     baseSessionKey,
@@ -159,22 +178,35 @@ export function replayConversationHistory(
     t: 'history',
     thid,
     ...(conversation.title !== undefined ? { title: conversation.title } : {}),
-    messages: conversation.messages.map((m) =>
-      m.role === 'tool'
-        ? {
-            role: 'tool' as const,
-            text: '',
-            at: m.at,
-            ...(m.id !== undefined ? { id: m.id } : {}),
-            ...(m.tool !== undefined ? { name: m.tool } : {}),
-            ...(m.command !== undefined ? { command: m.command } : {}),
-            ...(m.output !== undefined ? { output: m.output } : {}),
-          }
-        : {
-            role: m.role === 'user' ? ('user' as const) : ('assistant' as const),
-            text: m.text,
-            at: m.at,
-          },
-    ),
+    messages: conversation.messages.map((m) => {
+      if (m.role === 'tool') {
+        return {
+          role: 'tool' as const,
+          text: '',
+          at: m.at,
+          ...(m.id !== undefined ? { id: m.id } : {}),
+          ...(m.tool !== undefined ? { name: m.tool } : {}),
+          ...(m.command !== undefined ? { command: m.command } : {}),
+          ...(m.output !== undefined ? { output: m.output } : {}),
+        };
+      }
+      if (m.role === 'task') {
+        return {
+          role: 'task' as const,
+          text: '',
+          at: m.at,
+          ...(m.id !== undefined ? { id: m.id } : {}),
+          ...(m.title !== undefined ? { title: m.title } : {}),
+          ...(m.prompt !== undefined ? { prompt: m.prompt } : {}),
+          ...(m.status !== undefined ? { status: m.status } : {}),
+          ...(m.result !== undefined ? { result: m.result } : {}),
+        };
+      }
+      return {
+        role: m.role === 'user' ? ('user' as const) : ('assistant' as const),
+        text: m.text,
+        at: m.at,
+      };
+    }),
   });
 }
