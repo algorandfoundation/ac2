@@ -16,6 +16,7 @@ import type {
 import { rtcDataChannelTransport, type Ac2Transport } from '@algorandfoundation/ac2-sdk/transport';
 import qrcode from 'qrcode-terminal';
 import { normalizeDidKey } from '../identity/did.js';
+import { getSessionCookie, setSessionCookie } from '../identity/state.js';
 
 // @ts-ignore - compiled JS in node_modules
 import { SignalClient } from '@algorandfoundation/liquid-client/signal';
@@ -409,6 +410,228 @@ export function withSignalingHealthGuard<T>(
   });
 }
 
+/**
+ * Presence detection for a `requestId`, handled outside `SignalClient` on the
+ * signaling socket. The Liquid Auth server exposes a dedicated `presence`
+ * websocket event: emitting `{ requestId }` returns an ack `{ requestId,
+ * deviceCount, online }`, and the same shape is broadcast to the room whenever
+ * a peer joins/leaves. This lets a (potentially offline) peer detect whether
+ * there is anyone connected for a `requestId` before attempting to reconnect.
+ */
+export interface PresenceResult {
+  requestId: string;
+  /** Number of devices currently connected for the `requestId`. */
+  deviceCount: number;
+  /** Convenience flag: `deviceCount > 0`. */
+  online: boolean;
+}
+
+/** Minimal socket surface the presence helpers rely on (socket.io-client). */
+export interface PresenceSocket {
+  emit: (event: string, ...args: any[]) => unknown;
+  on?: (event: string, listener: (...args: any[]) => void) => unknown;
+  off?: (event: string, listener: (...args: any[]) => void) => unknown;
+}
+
+export const AC2_PRESENCE_EVENT = 'presence';
+const AC2_DEFAULT_PRESENCE_TIMEOUT_MS = 10000;
+
+/**
+ * Coerce an arbitrary presence payload into a well-formed `PresenceResult`,
+ * tolerating a missing/partial ack from an older server. Falls back to the
+ * queried `requestId` and derives `online` from `deviceCount` when absent.
+ */
+export function normalizePresence(requestId: string, data: unknown): PresenceResult {
+  const record = (data ?? {}) as Record<string, unknown>;
+  const deviceCount =
+    typeof record.deviceCount === 'number' && Number.isFinite(record.deviceCount)
+      ? record.deviceCount
+      : 0;
+  const online = typeof record.online === 'boolean' ? record.online : deviceCount > 0;
+  const resolvedRequestId =
+    typeof record.requestId === 'string' && record.requestId.length > 0
+      ? record.requestId
+      : requestId;
+  return { requestId: resolvedRequestId, deviceCount, online };
+}
+
+/**
+ * Query how many devices are connected for `requestId` by emitting the
+ * `presence` event and awaiting the server ack. Rejects on an empty
+ * `requestId` or if no ack arrives within `timeoutMs`.
+ */
+export function queryPresence(
+  socket: PresenceSocket,
+  requestId: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<PresenceResult> {
+  const timeoutMs = opts.timeoutMs ?? AC2_DEFAULT_PRESENCE_TIMEOUT_MS;
+  return new Promise<PresenceResult>((resolve, reject) => {
+    if (typeof requestId !== 'string' || requestId.length === 0) {
+      reject(new Error('[ac2-open-claw] presence query requires a non-empty requestId'));
+      return;
+    }
+
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(
+        new Error(
+          `[ac2-open-claw] timed out waiting for presence ack for ${requestId} (${timeoutMs}ms)`,
+        ),
+      );
+    }, timeoutMs);
+
+    try {
+      socket.emit(AC2_PRESENCE_EVENT, { requestId }, (data: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(normalizePresence(requestId, data));
+      });
+    } catch (err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err as Error);
+    }
+  });
+}
+
+/**
+ * Subscribe to server-broadcast `presence` updates. Returns an unsubscribe
+ * function. Safe to call against a socket that lacks `on`/`off` (no-op).
+ */
+export function subscribeToPresence(
+  socket: PresenceSocket,
+  handler: (presence: PresenceResult) => void,
+): () => void {
+  const listener = (data: unknown): void => {
+    const record = (data ?? {}) as Record<string, unknown>;
+    const requestId = typeof record.requestId === 'string' ? record.requestId : '';
+    handler(normalizePresence(requestId, data));
+  };
+  socket.on?.(AC2_PRESENCE_EVENT, listener);
+  return () => {
+    socket.off?.(AC2_PRESENCE_EVENT, listener);
+  };
+}
+
+/**
+ * Convenience wrapper for the reconnect decision: resolves `true` when at
+ * least one device is connected for `requestId`. Swallows query errors and
+ * timeouts into `false` so an offline client simply declines to reconnect.
+ */
+export async function hasPeerPresence(
+  socket: PresenceSocket,
+  requestId: string,
+  opts?: { timeoutMs?: number },
+): Promise<boolean> {
+  try {
+    const presence = await queryPresence(socket, requestId, opts);
+    return presence.online;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Decide whether a `presence` broadcast means the linked wallet has gone away
+ * and the session should be torn down so the caller can await a fresh link.
+ *
+ * Mirrors the Liquid Auth demo app's offer-side reset: only AFTER a wallet has
+ * actually linked (`peerLinked`) does a drop back to a single device (just this
+ * agent) indicate the wallet went offline. Before the first link a single
+ * device is the normal "still awaiting the wallet" state and must NOT trigger
+ * teardown; an already-closed session never re-triggers.
+ *
+ * The WebRTC data channel is the source of truth for an established p2p
+ * connection: once it is live (`connected`) it survives signaling-server loss,
+ * so a presence drop is NOT a real departure — it's almost always a signaling
+ * artifact (most commonly the signaling server restarting and not yet having
+ * re-counted the still-connected peer in the room). Never tear down a live
+ * connection on presence; rely instead on the data channel's own failure
+ * detection (the heartbeat watchdog and control-transport `onClose`), which is
+ * the standard "drop only when the data channel fails" behavior. Presence-driven
+ * teardown therefore only applies while still connecting (linked but not yet
+ * live), where there is no live data channel to trust.
+ */
+export function shouldTeardownOnPresence(
+  presence: PresenceResult,
+  state: { peerLinked: boolean; closed: boolean; connected: boolean },
+): boolean {
+  if (!state.peerLinked || state.closed || state.connected) return false;
+  return presence.deviceCount <= 1;
+}
+
+/**
+ * Parse a raw `set-cookie` response header into a `Cookie` request-header
+ * value (`name=value; name2=value2`). Accepts either an array of cookie
+ * strings (Node's typical shape) or a single comma-joined string, splitting
+ * only at genuine cookie boundaries so `Expires=...,` dates are not mangled.
+ */
+export function cookiePairsFromSetCookie(
+  setCookie: string | string[] | null | undefined,
+): string | undefined {
+  if (!setCookie) return undefined;
+  const entries = Array.isArray(setCookie)
+    ? setCookie
+    : String(setCookie).split(/,(?=[^;,]+?=)/);
+  const pairs = entries
+    .map((entry) => entry.split(';')[0]?.trim())
+    .filter((pair): pair is string => Boolean(pair && pair.includes('=')));
+  return pairs.length > 0 ? pairs.join('; ') : undefined;
+}
+
+/**
+ * Persist the signaling server's session cookie so the agent reuses the SAME
+ * server session across restarts (like a browser would). Reusing one session
+ * avoids leaving stale sessions bound to this `requestId` on the server, which
+ * would otherwise shadow the live wallet session during the reconnect
+ * rendezvous and leave the agent "waiting on a link".
+ *
+ * The cookie is captured from the polling handshake response, persisted to
+ * disk for the next launch, and mirrored into the manager's `extraHeaders` so
+ * in-process reconnects resend it too. Best-effort throughout: cookie handling
+ * is a reconnect optimization and must never break pairing.
+ */
+function attachSessionCookiePersistence(socket: any, requestId: string): void {
+  const capture = (): void => {
+    try {
+      const transport = socket?.io?.engine?.transport;
+      const xhr = transport?.pollXhr?.xhr;
+      if (!xhr || typeof xhr.getResponseHeader !== 'function') return;
+      const cookie = cookiePairsFromSetCookie(xhr.getResponseHeader('set-cookie'));
+      if (!cookie) return;
+      if (socket.io) {
+        socket.io.opts = socket.io.opts ?? {};
+        socket.io.opts.extraHeaders = { ...(socket.io.opts.extraHeaders ?? {}), cookie };
+      }
+      setSessionCookie(requestId, cookie);
+    } catch {
+      // best-effort
+    }
+  };
+  const bind = (): void => {
+    try {
+      const transport = socket?.io?.engine?.transport;
+      if (transport && typeof transport.on === 'function') {
+        transport.on('pollComplete', capture);
+      }
+    } catch {
+      // best-effort
+    }
+  };
+  // A reconnect spins up a fresh engine/transport, so (re)bind on every open.
+  try {
+    socket?.io?.on?.('open', bind);
+  } catch {
+    // best-effort
+  }
+  bind();
+}
+
 export interface LiquidAuthChannelProviderOptions {
   /** Liquid Auth signaling server origin. */
   origin?: string;
@@ -418,6 +641,13 @@ export interface LiquidAuthChannelProviderOptions {
   includeStreamChannel?: boolean;
   /** Milliseconds without inbound heartbeat traffic before closing. */
   heartbeatTimeoutMs?: number;
+  /**
+   * Optional presence listener. When provided, server-broadcast `presence`
+   * updates for the `requestId` are forwarded here so the caller can track how
+   * many devices are connected (and decide whether reconnecting is worthwhile).
+   * Handled outside `SignalClient`, directly on the signaling socket.
+   */
+  onPresence?: (presence: PresenceResult) => void;
 }
 
 export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
@@ -434,16 +664,79 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       resolveHeartbeatTimeoutMs(process.env['AC2_HEARTBEAT_TIMEOUT_MS']);
 
     // Build the signaling socket from the Node-native `socket.io-client` and
-    // pass it to `SignalClient` via its `{ socket }` option.
+    // pass it to `SignalClient` via its `{ socket }` option. Replay any
+    // previously captured server session cookie so the agent reuses the same
+    // session across restarts (see `attachSessionCookiePersistence`), which is
+    // what lets the reconnect rendezvous find the live wallet session instead
+    // of a stale duplicate.
+    const persistedCookie = getSessionCookie(requestId);
     const socket = createSocketIoClient(origin, {
       autoConnect: true,
+      ...(persistedCookie ? { extraHeaders: { cookie: persistedCookie } } : {}),
     });
+    attachSessionCookiePersistence(socket, requestId);
 
     const client = new SignalClient(origin, { socket: socket as any });
 
-    // Capture the wallet account from the Liquid Auth `link` response.
+    // Session lifecycle state, declared up-front so the presence subscription
+    // below can drive teardown once a wallet has linked.
+    let peerLinked = false;
+    let closed = false;
+    // Set once the control DataChannel is actually live. A live data channel is
+    // the source of truth for the p2p connection and survives signaling-server
+    // loss, so presence-driven teardown is suppressed while it holds (see
+    // `shouldTeardownOnPresence`); a real drop is then handled by the heartbeat
+    // watchdog / control-transport `onClose` instead.
+    let connected = false;
+    // Forward-declared so the presence subscription (and the heartbeat interval
+    // inside `connect()`) can trigger teardown before `connect()` assigns the
+    // real implementation. Reassigned inside `connect()`.
+    let close: () => Promise<void> = async () => {
+      /* assigned in connect() */
+    };
+
+    // Presence is handled outside SignalClient, directly on the socket. Track
+    // how many devices are connected for this requestId — used to detect
+    // whether a peer is available before/after pairing (the "should an offline
+    // client even attempt to reconnect?" decision).
+    const onPresence = this.defaults.onPresence;
+    subscribeToPresence(socket as unknown as PresenceSocket, (presence) => {
+      if (presence.requestId && presence.requestId !== requestId) return;
+      // eslint-disable-next-line no-console
+      console.log(
+        `[ac2-open-claw] presence for ${presence.requestId}: ${presence.deviceCount} device(s), online=${presence.online}`,
+      );
+      onPresence?.(presence);
+      // Presence-driven teardown, but ONLY while still connecting (linked, not
+      // yet live). Once the control data channel is `connected`, it is the
+      // source of truth for the p2p connection: it survives signaling-server
+      // loss, so a presence drop while connected is a signaling artifact (the
+      // server restarting and not yet re-counting the still-present peer) — NOT
+      // a real departure. Tearing down there would needlessly restart a healthy
+      // p2p connection on every signaling blip. A genuinely gone peer is caught
+      // instead by the heartbeat watchdog / control-transport `onClose` (the
+      // standard "drop only when the data channel fails" behavior).
+      //
+      // Before the channel is live there is no p2p connection to trust, so a
+      // linked peer dropping to a single device DOES mean it abandoned the
+      // handshake: tear down now to resolve `onClose` so the caller's re-pair
+      // loop returns to awaiting a fresh link on the same requestId. Mirrors the
+      // Liquid Auth demo app's offer-side reset.
+      if (shouldTeardownOnPresence(presence, { peerLinked, closed, connected })) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[ac2-open-claw] peer went offline (presence: ${presence.deviceCount} device(s)) — tearing down to await re-link.`,
+        );
+        void close();
+      }
+    });
+
+    // Capture the wallet account from the Liquid Auth `link` response. The
+    // `link-message` also marks the wallet as linked, arming the presence-driven
+    // teardown above (a later drop to a single device means the wallet left).
     let linkedWallet: string | undefined;
     client.on('link-message', (data: { wallet?: string; credId?: string } | undefined) => {
+      peerLinked = true;
       if (data && typeof data.wallet === 'string' && data.wallet.length > 0) {
         linkedWallet = data.wallet;
       }
@@ -524,13 +817,6 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
     };
 
     let heartbeat: ReturnType<typeof setInterval> | undefined;
-    let closed = false;
-
-    // Forward-declare so the heartbeat interval (defined inside `connect`)
-    // can call it on liveness timeout.
-    let close: () => Promise<void> = async () => {
-      /* assigned in connect() */
-    };
 
     const connect = async (): Promise<Ac2PairedChannel> => {
       // `peer(...)` resolves with the primary channel; the rest arrive via `'data-channel'`.
@@ -611,6 +897,12 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         });
       }
 
+      // The control data channel is now live. Mark the p2p connection as the
+      // source of truth so presence-driven teardown stands down (see the
+      // presence subscription): from here a signaling-server blip must NOT tear
+      // down the connection — only the heartbeat watchdog / `onClose` may.
+      connected = true;
+
       // Bidirectional keep-alive: each side pings on its own timer AND replies
       // PONG to the peer's pings. `lastInboundAt` is updated on any inbound
       // frame (PING or PONG); the interval below declares the peer dead if no
@@ -659,6 +951,7 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       close = async (): Promise<void> => {
         if (closed) return;
         closed = true;
+        connected = false;
         if (heartbeat) {
           clearInterval(heartbeat);
           heartbeat = undefined;

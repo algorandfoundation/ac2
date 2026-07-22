@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isMissingWebRtcError } from '../src/cli/ac2-command.js';
+import { isMissingWebRtcError, shouldSeedConnectionId } from '../src/cli/ac2-command.js';
 
 function moduleLoadError(code: 'ERR_MODULE_NOT_FOUND' | 'MODULE_NOT_FOUND', message: string): Error {
   const err = new Error(message) as Error & { code: string };
@@ -52,5 +52,25 @@ describe('ac2 command WebRTC error handling', () => {
     expect(
       isMissingWebRtcError(moduleLoadError('MODULE_NOT_FOUND', "Cannot find module 'socket.io-client'")),
     ).toBe(false);
+  });
+});
+
+describe('shouldSeedConnectionId', () => {
+  it('seeds the stable connection id from the first pairing when none is persisted', () => {
+    expect(shouldSeedConnectionId(undefined, 'req-fresh')).toBe(true);
+    expect(shouldSeedConnectionId('', 'req-fresh')).toBe(true);
+  });
+
+  it('never re-seeds once a stable connection id already exists (reconnect keeps the id)', () => {
+    // The whole point of the fix: a reconnect mints a *fresh* Liquid Auth
+    // requestId, but the persisted connection id must stay put so history and
+    // identity are not orphaned.
+    expect(shouldSeedConnectionId('stable-connection-id', 'req-fresh')).toBe(false);
+  });
+
+  it('does not seed when the freshly-minted requestId is missing or blank', () => {
+    expect(shouldSeedConnectionId(undefined, undefined)).toBe(false);
+    expect(shouldSeedConnectionId(undefined, '')).toBe(false);
+    expect(shouldSeedConnectionId(undefined, 42)).toBe(false);
   });
 });

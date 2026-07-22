@@ -40,9 +40,27 @@ export {
   resolveAc2OutboundSessionRoute,
   replayConversationList,
   replayConversationHistory,
+  deriveTaskThid,
+  isTaskThid,
+  registerTask,
+  attachSpawnResult,
+  taskDisplayTitle,
+  getTaskByThid,
+  findTaskByRun,
+  findPendingTaskForParent,
+  markTaskResult,
+  listTasks,
+  resetTasks,
+  TASK_THREAD_PREFIX,
+  registerSubagentHooks,
+  handleSubagentSpawned,
+  handleSubagentEnded,
+  resetSubagentHooksRegistration,
   type Ac2MediaSourceParams,
   type Ac2SessionConversation,
   type Ac2OutboundSessionRoute,
+  type Ac2Task,
+  type Ac2TaskStatus,
 } from './channel/index.js';
 export { buildAc2Command } from './cli/index.js';
 export { buildSignTool, buildCapabilitiesTool, buildX402FetchTool } from './tools/index.js';
@@ -61,7 +79,11 @@ export {
   type X402PaymentContext,
   type X402PaymentSelection,
 } from './x402/index.js';
-export type { LiquidAuthChannelProviderOptions } from './providers/liquid-auth.js';
+export type {
+  LiquidAuthChannelProviderOptions,
+  PresenceResult,
+  PresenceSocket,
+} from './providers/liquid-auth.js';
 export async function loadLiquidAuthChannelProvider(): Promise<
   typeof import('./providers/liquid-auth.js')
 > {

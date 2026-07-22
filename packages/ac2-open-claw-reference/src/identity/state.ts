@@ -52,6 +52,15 @@ export interface PersistedConnection {
   requestId: string;
   /** Identity key the wallet granted the agent on this connection. */
   identity?: PersistedIdentity;
+  /**
+   * The signaling server session cookie (e.g. `connect.sid=...`) captured on
+   * this connection. Replaying it on subsequent launches lets the agent reuse
+   * the SAME server session across restarts instead of creating a fresh one
+   * each time. Without this the server accumulates stale sessions bound to the
+   * same requestId, which can shadow the live wallet session during the
+   * reconnect rendezvous and leave the agent waiting on a `link`.
+   */
+  sessionCookie?: string;
   /** Unix epoch (ms) the connection was first established. */
   createdAt: number;
   /** Unix epoch (ms) of the most recent activity on the connection. */
@@ -133,6 +142,28 @@ export function touchConnection(requestId: string): PersistedConnection {
   connections[requestId] = connection;
   saveAc2State({ connections, activeRequestId: requestId, requestId });
   return connection;
+}
+
+/** The persisted signaling session cookie for a `requestId`, if any. */
+export function getSessionCookie(requestId: string): string | undefined {
+  return loadAc2State().connections?.[requestId]?.sessionCookie;
+}
+
+/**
+ * Persist the signaling session cookie for a `requestId` so the agent reuses
+ * the same server session on the next launch. A no-op when the cookie is
+ * unchanged, to avoid rewriting the state file on every reconnect.
+ */
+export function setSessionCookie(requestId: string, sessionCookie: string): void {
+  const state = loadAc2State();
+  const connections = { ...state.connections };
+  const now = Date.now();
+  const existing = connections[requestId];
+  if (existing?.sessionCookie === sessionCookie) return;
+  connections[requestId] = existing
+    ? { ...existing, sessionCookie, lastActiveAt: now }
+    : { requestId, createdAt: now, lastActiveAt: now, conversations: {}, sessionCookie };
+  saveAc2State({ connections, activeRequestId: requestId, requestId });
 }
 
 /** Persist the identity granted on a connection. */

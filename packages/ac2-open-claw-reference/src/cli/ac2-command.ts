@@ -4,6 +4,7 @@ import qrcode from 'qrcode-terminal';
 import { Ac2Client } from '@algorandfoundation/ac2-sdk';
 import { isValidAddress } from '@algorandfoundation/algokit-utils/common';
 import { resolveConfig, safeLog, type OpenClawApi } from '../runtime.js';
+import { readChannelStatus } from '../setup/config.js';
 import { BootstrapError, bootstrapAgentIdentity } from '../session/bootstrap.js';
 import type { ChannelContext } from '../session/contracts.js';
 import { sessionManager } from '../session/manager.js';
@@ -17,7 +18,8 @@ import {
   setConnectionIdentity,
   touchConnection,
 } from '../identity/state.js';
-import { normalizeDidKey } from '../identity/did.js';
+import { normalizeDidKey, resolveStableControllerDid } from '../identity/did.js';
+import { decideControllerBinding } from '../identity/binding.js';
 import {
   clearAgentIdentities,
   hasAgentIdentity,
@@ -29,23 +31,58 @@ import {
   replayConversationHistory,
   replayConversationList,
   routeInboundToAgent,
-  sendFinalize,
+  sendNotice,
   setActiveConversation,
   warmUpAgent,
 } from '../channel/index.js';
 
-/** Chat notice shown when the wallet has not granted the agent an identity. */
+/**
+ * Banner notice shown when the wallet has not granted the agent an identity
+ * yet. Surfaced only as a banner (not a chat message), so the wallet can also
+ * block new messages until an identity is granted. Kept short.
+ */
 const NO_IDENTITY_NOTICE =
-  "I don't have an identity yet. To work with you securely I need my own " +
-  'dedicated key — a `did:key` identity your wallet issues to me. It lets me ' +
-  'prove who I am on this channel and sign my own messages, and it is kept ' +
-  'separate from your personal accounts and keys (I never see or use those). ' +
-  'Until you grant one, I can chat with you but cannot perform signing-related ' +
-  'actions. When you are ready, approve the identity request in your wallet to ' +
-  'continue.';
+  "This agent has no identity yet and isn't registered to this wallet. Approve " +
+  'the identity request in your wallet to register and start chatting.';
+
+/**
+ * Banner notice shown when a *different* controller (wallet) connects to an
+ * agent that is already registered to another one. The agent refuses to be
+ * taken over: it will not reuse or regenerate its identity for the new wallet.
+ * To let a new wallet take over, the operator must clear the agent's keys
+ * (`ac2 forget`). Kept short — it is surfaced only as a banner, not a chat
+ * message.
+ */
+const CONTROLLER_LOCKED_NOTICE =
+  "This agent is already registered to another wallet and won't switch " +
+  'automatically. To let this wallet take over, the operator must clear the ' +
+  'agent keys on the server (`ac2 forget`).';
 
 const NODE_MODULE_LOAD_ERROR_CODES = new Set(['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND']);
 const ROAMHQ_WRTC_PACKAGE_PATTERN = /@roamhq\/wrtc(?:-[a-z0-9-]+)?/i;
+
+/**
+ * Decide whether to seed the *stable* connection id from a freshly-minted
+ * Liquid Auth `requestId`.
+ *
+ * The Liquid Auth `requestId` is a one-shot pairing nonce: once a wallet has
+ * linked and the WebRTC session has been established, that same id can no
+ * longer be re-linked. We therefore let the provider mint a fresh `requestId`
+ * on every pairing cycle, but keep a single stable connection id — seeded from
+ * the very first pairing — to key on-disk persistence (identity, conversation
+ * history). Only seed it when one is not already persisted, so reconnects never
+ * rotate the connection id (and never orphan its history).
+ */
+export function shouldSeedConnectionId(
+  persistedConnectionId: string | undefined,
+  usedRequestId: unknown,
+): usedRequestId is string {
+  return (
+    (persistedConnectionId === undefined || persistedConnectionId.length === 0) &&
+    typeof usedRequestId === 'string' &&
+    usedRequestId.length > 0
+  );
+}
 
 export function isMissingWebRtcError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -92,12 +129,27 @@ export function buildAc2Command(api: OpenClawApi): unknown {
       const sub = tokens[0] ?? 'pair';
 
       if (sub === 'status') {
+        const channelStatus = readChannelStatus();
         const active = sessionManager.getActive();
-        const lines = ['Channel: ac2', `Online: ${active ? 'yes' : 'no'}`];
+        const lines = [
+          'Channel: ac2',
+          `Config: ${channelStatus.configPath}`,
+          `Plugin allow-listed: ${channelStatus.pluginAllowed ? 'yes' : 'no'}`,
+          `Plugin enabled: ${channelStatus.pluginEnabled ? 'yes' : 'no'}`,
+          `Bound to agent: ${channelStatus.bound ? 'yes' : 'no'}`,
+          `Ready: ${channelStatus.ready ? 'yes' : 'no'}`,
+          `Liquid Auth server: ${channelStatus.liquidAuthServer} (${channelStatus.liquidAuthServerSource})`,
+          `Online: ${active ? 'yes' : 'no'}`,
+        ];
         if (active) {
           lines.push(`Agent DID: ${active.agentDid}`);
           lines.push(`Controller DID: ${active.controllerDid}`);
           if (active.requestId) lines.push(`Connection: ${active.requestId}`);
+          if (active.locked) {
+            lines.push(
+              'Locked: yes (a different wallet is connecting; run `ac2 forget` to re-register)',
+            );
+          }
         }
         const connections = listConnections();
         lines.push(`Known connections: ${connections.length}`);
@@ -154,19 +206,31 @@ export function buildAc2Command(api: OpenClawApi): unknown {
           connect: () => Promise<import('@algorandfoundation/ac2-sdk/signaling').Ac2PairedChannel>;
           qrString: string;
         }> => {
-          // Reuse a persisted requestId so the wallet reconnects to the same connection.
-          const persistedRequestId = loadAc2State().requestId;
+          // Reuse the persisted Liquid Auth requestId across pairing cycles so
+          // a previously-paired wallet can reconnect without re-running its
+          // FIDO2 passkey assertion — mirroring the debug app, which keeps a
+          // stable requestId and just renegotiates. The signaling server now
+          // supports reconnecting on the same requestId (presence + `auth`
+          // re-announce + an always-waiting `link`), so the id is no longer a
+          // one-shot nonce: the wallet remembers the requestId it authenticated
+          // for and re-links to it, and the server re-announces the wallet's
+          // `auth` so this offer side resolves and both peers just renegotiate
+          // the WebRTC session (no new passkey). On the very first pairing there
+          // is nothing persisted yet, so the provider mints a fresh id which is
+          // then seeded as the stable connection id (see `shouldSeedConnectionId`)
+          // and reused on every subsequent cycle.
+          const persistedConnectionId = loadAc2State().requestId;
           const { LiquidAuthChannelProvider } = await import('../providers/liquid-auth.js');
           const provider: import('@algorandfoundation/ac2-sdk/signaling').Ac2ChannelProvider =
             new LiquidAuthChannelProvider({
               origin,
-              ...(persistedRequestId ? { requestId: persistedRequestId } : {}),
+              ...(persistedConnectionId ? { requestId: persistedConnectionId } : {}),
             });
           const handle = await provider.startPairing({
             timeoutMs: cfg.defaultTimeoutMs ?? 120_000,
           });
           const usedRequestId = handle.pairing.metadata?.['requestId'];
-          if (typeof usedRequestId === 'string' && usedRequestId.length > 0) {
+          if (shouldSeedConnectionId(persistedConnectionId, usedRequestId)) {
             saveAc2State({ requestId: usedRequestId });
           }
           const qr = await new Promise<string>((resolve) => {
@@ -245,21 +309,71 @@ export function buildAc2Command(api: OpenClawApi): unknown {
             const connectedAccountDid =
               connectedAccount !== undefined
                 ? normalizeDidKey(`did:key:${connectedAccount}`)
-                : connected.peer?.did;
+                : connected.peer?.did !== undefined
+                  ? normalizeDidKey(connected.peer.did)
+                  : undefined;
 
             // Reuse a stored identity for this connection, otherwise bootstrap.
             const storedIdentity =
               (connectionRequestId
                 ? loadAc2State().connections?.[connectionRequestId]?.identity
                 : undefined) ?? loadAc2State().identity;
+            // The controller this agent install is already registered to (the
+            // first wallet that ever granted it an identity). A *different*
+            // controller must not be able to take over — see `decideControllerBinding`.
+            const boundControllerDid = loadAc2State().identity?.controllerDid
+              ? normalizeDidKey(loadAc2State().identity!.controllerDid)
+              : undefined;
+            const bindingDecision = decideControllerBinding({
+              boundControllerDid,
+              connectedAccountDid,
+              hasStoredIdentity: storedIdentity !== undefined,
+            });
             // Placeholders — overridden on a granted identity, else session goes active
             // with `identityGranted = false` so the agent can explain.
             let agentDid = 'did:ac2:agent';
             let controllerDid = connectedAccountDid ?? 'did:key:zAc2Controller';
             let identityGranted = true;
-            if (storedIdentity) {
+            let locked = false;
+            if (bindingDecision === 'locked') {
+              // A different wallet is connecting to an already-registered agent.
+              // Refuse the takeover: do NOT reuse the bound identity and do NOT
+              // bootstrap a fresh one. Route the (blocked) session under the
+              // foreign controller's own DID so nothing can touch the bound
+              // controller's OpenClaw session/context.
+              locked = true;
+              identityGranted = false;
+              controllerDid = connectedAccountDid ?? 'did:key:zAc2Controller';
+              safeLog(
+                api,
+                'warn',
+                `[ac2] Refusing controller ${connectedAccountDid} — agent is already registered ` +
+                  `to ${boundControllerDid}. Operator must clear keys (\`ac2 forget\`) to re-register.`,
+              );
+            } else if (bindingDecision === 'reuse' && storedIdentity) {
               ({ agentDid } = storedIdentity);
-              controllerDid = connectedAccountDid ?? storedIdentity.controllerDid;
+              // Anchor the session key (`ac2:<controllerDid>:<thid>`) to the
+              // identity bound at grant time so a presence-only reconnect —
+              // which may omit the wallet address and fall back to a
+              // differently-encoded peer DID — cannot rotate `controllerDid`
+              // and make the agent reload a different, empty OpenClaw session
+              // (i.e. "forget" the thread's context).
+              controllerDid = resolveStableControllerDid({
+                storedControllerDid: storedIdentity.controllerDid,
+                connectedAccountDid,
+              });
+              if (
+                connectedAccountDid !== undefined &&
+                connectedAccountDid !== storedIdentity.controllerDid
+              ) {
+                safeLog(
+                  api,
+                  'warn',
+                  `[ac2] linked account ${connectedAccountDid} differs from the granted ` +
+                    `controller ${storedIdentity.controllerDid}; keeping the granted identity ` +
+                    'to preserve conversation context.',
+                );
+              }
               // Migrate legacy plaintext material into the keystore.
               if (storedIdentity.material && !hasAgentIdentity(agentDid)) {
                 await recordAgentIdentity({
@@ -322,21 +436,6 @@ export function buildAc2Command(api: OpenClawApi): unknown {
                 }
               }
             }
-            sessionManager.setActive({
-              transport,
-              client,
-              controllerDid,
-              agentDid,
-              identityGranted,
-              ...(walletAddress ? { walletAddress } : {}),
-              ...(connectionRequestId ? { requestId: connectionRequestId } : {}),
-            });
-            safeLog(
-              api,
-              'info',
-              `[ac2] Channel paired and active. agentDid=${agentDid} controllerDid=${controllerDid}`,
-            );
-
             // Adapter to give `streamChannel` a `send` + `isOpen` surface.
             const streamSendable = streamTransport
               ? {
@@ -347,6 +446,26 @@ export function buildAc2Command(api: OpenClawApi): unknown {
               }
               : undefined;
             const controlSendable = streamSendable ?? transport;
+
+            sessionManager.setActive({
+              transport,
+              client,
+              controllerDid,
+              agentDid,
+              identityGranted,
+              locked,
+              // The stream control surface used by host-initiated outbound sends
+              // (e.g. sub-agent completion announces) to emit thread-scoped
+              // `finalize` frames instead of raw, thread-less transport writes.
+              ...(streamSendable ? { controlTransport: streamSendable } : {}),
+              ...(walletAddress ? { walletAddress } : {}),
+              ...(connectionRequestId ? { requestId: connectionRequestId } : {}),
+            });
+            safeLog(
+              api,
+              'info',
+              `[ac2] Channel paired and active. agentDid=${agentDid} controllerDid=${controllerDid}`,
+            );
 
             client.updateHandlers({
               'ac2/ConversationOpen': (msg) => {
@@ -379,17 +498,33 @@ export function buildAc2Command(api: OpenClawApi): unknown {
               },
             });
 
-            // Replay threads + default-thread history for reconnecting controllers.
-            replayConversationList(controlSendable, connectionRequestId);
-            replayConversationHistory(controlSendable, connectionRequestId, DEFAULT_THID);
+            if (locked) {
+              // A foreign wallet is locked out: surface a banner only (no chat
+              // message), and DO NOT replay the bound controller's history to
+              // it. Routing is also blocked below, so the agent never sees its
+              // messages.
+              sendNotice(controlSendable, {
+                code: 'controller_locked',
+                level: 'warning',
+                title: 'New wallet not registered',
+                text: CONTROLLER_LOCKED_NOTICE,
+              });
+            } else {
+              // Replay threads + default-thread history for reconnecting controllers.
+              replayConversationList(controlSendable, connectionRequestId);
+              replayConversationHistory(controlSendable, connectionRequestId, DEFAULT_THID);
 
-            if (!identityGranted) {
-              sendFinalize(
-                controlSendable,
-                DEFAULT_THID,
-                `ac2-noid-${Date.now()}`,
-                NO_IDENTITY_NOTICE,
-              );
+              if (!identityGranted) {
+                // Not registered (no identity granted yet): surface a banner
+                // only (no chat message). The wallet uses this code to block
+                // new messages until an identity is granted.
+                sendNotice(controlSendable, {
+                  code: 'identity_missing',
+                  level: 'warning',
+                  title: 'Not registered',
+                  text: NO_IDENTITY_NOTICE,
+                });
+              }
             }
 
             if (streamTransport) {
@@ -397,6 +532,17 @@ export function buildAc2Command(api: OpenClawApi): unknown {
                 const raw = event.data;
                 if (typeof raw === 'string' && raw.trim().length > 0) {
                   const active = sessionManager.getActive()!;
+                  // A locked (foreign-wallet) session never reaches the agent —
+                  // re-surface the lock notice instead of routing its messages.
+                  if (active.locked) {
+                    sendNotice(streamSendable!, {
+                      code: 'controller_locked',
+                      level: 'warning',
+                      title: 'New wallet not registered',
+                      text: CONTROLLER_LOCKED_NOTICE,
+                    });
+                    return;
+                  }
                   await routeInboundToAgent(
                     api,
                     raw,
@@ -409,6 +555,15 @@ export function buildAc2Command(api: OpenClawApi): unknown {
             }
             transport.onRawMessage?.(async (text: string) => {
               const active = sessionManager.getActive()!;
+              if (active.locked) {
+                sendNotice(streamSendable ?? transport, {
+                  code: 'controller_locked',
+                  level: 'warning',
+                  title: 'New wallet not registered',
+                  text: CONTROLLER_LOCKED_NOTICE,
+                });
+                return;
+              }
               await routeInboundToAgent(
                 api,
                 text,

@@ -5,6 +5,7 @@ import {
   awaitSignalConnect,
   closeAwareTransport,
   closeRtcDataChannel,
+  cookiePairsFromSetCookie,
   resolveHeartbeatTimeoutMs,
   withSignalingHealthGuard,
 } from '../src/providers/liquid-auth.js';
@@ -377,6 +378,43 @@ describe('LiquidAuthChannelProvider heartbeat timeout', () => {
   it('falls back for invalid or too-small overrides', () => {
     expect(resolveHeartbeatTimeoutMs('not-a-number')).toBe(50_000);
     expect(resolveHeartbeatTimeoutMs('39999')).toBe(50_000);
+  });
+});
+
+describe('cookiePairsFromSetCookie', () => {
+  it('returns undefined for missing headers', () => {
+    expect(cookiePairsFromSetCookie(undefined)).toBeUndefined();
+    expect(cookiePairsFromSetCookie(null)).toBeUndefined();
+    expect(cookiePairsFromSetCookie('')).toBeUndefined();
+  });
+
+  it('extracts the name=value pair from a single set-cookie string', () => {
+    expect(cookiePairsFromSetCookie('connect.sid=s%3Aabc.def; Path=/; HttpOnly; SameSite=Lax')).toBe(
+      'connect.sid=s%3Aabc.def',
+    );
+  });
+
+  it('joins multiple cookies from an array of set-cookie strings', () => {
+    expect(
+      cookiePairsFromSetCookie([
+        'connect.sid=abc; Path=/; HttpOnly',
+        'other=xyz; Path=/; Secure',
+      ]),
+    ).toBe('connect.sid=abc; other=xyz');
+  });
+
+  it('splits a comma-joined header without mangling Expires dates', () => {
+    // A single cookie whose Expires attribute contains a comma must not be
+    // split into two "cookies"; only the name=value pair is kept anyway.
+    expect(
+      cookiePairsFromSetCookie(
+        'connect.sid=abc; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Path=/',
+      ),
+    ).toBe('connect.sid=abc');
+  });
+
+  it('splits two comma-joined cookies at their boundary', () => {
+    expect(cookiePairsFromSetCookie('a=1; Path=/, b=2; Path=/')).toBe('a=1; b=2');
   });
 });
 

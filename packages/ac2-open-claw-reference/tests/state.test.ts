@@ -6,12 +6,14 @@ import { join } from 'node:path';
 import {
   ensureConversation,
   getConnection,
+  getSessionCookie,
   listConnections,
   listConversations,
   loadAc2State,
   recordConversationMessage,
   recordToolActivity,
   setConnectionIdentity,
+  setSessionCookie,
   touchConnection,
 } from '../src/identity/state.js';
 import { replayConversationHistory, replayConversationList } from '../src/index.js';
@@ -222,6 +224,34 @@ describe('conversation restore (control-frame replay)', () => {
       command: 'ls -la',
       output: 'a\nb',
     });
+  });
+});
+
+describe('session-cookie persistence', () => {
+  it('returns undefined when no cookie has been stored', () => {
+    expect(getSessionCookie('req-1')).toBeUndefined();
+  });
+
+  it('persists and reads back a session cookie scoped to a connection', () => {
+    setSessionCookie('req-1', 'connect.sid=abc');
+    expect(getSessionCookie('req-1')).toBe('connect.sid=abc');
+    // Survives a reload from disk and does not leak across connections.
+    expect(loadAc2State().connections?.['req-1']?.sessionCookie).toBe('connect.sid=abc');
+    expect(getSessionCookie('req-2')).toBeUndefined();
+  });
+
+  it('overwrites the cookie on a later capture (rolling session)', () => {
+    setSessionCookie('req-1', 'connect.sid=old');
+    setSessionCookie('req-1', 'connect.sid=new');
+    expect(getSessionCookie('req-1')).toBe('connect.sid=new');
+  });
+
+  it('preserves existing connection data when storing a cookie', () => {
+    recordConversationMessage('req-1', 'thread-a', { role: 'user', text: 'hi', at: 1 });
+    setSessionCookie('req-1', 'connect.sid=abc');
+    expect(getSessionCookie('req-1')).toBe('connect.sid=abc');
+    // The conversation history is untouched by the cookie write.
+    expect(listConversations('req-1')).toHaveLength(1);
   });
 });
 

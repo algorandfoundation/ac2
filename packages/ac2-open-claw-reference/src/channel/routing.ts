@@ -1,7 +1,11 @@
 /** Inbound chat routing: wallet → OpenClaw agent → wallet. */
 
 import { CHANNEL_ID, getActiveRuntime, safeLog, type OpenClawApi } from '../runtime.js';
-import { recordConversationMessage, recordToolActivity } from '../identity/state.js';
+import {
+  ensureConversation,
+  recordConversationMessage,
+  recordToolActivity,
+} from '../identity/state.js';
 import { sessionManager } from '../session/manager.js';
 import {
   sendDiscard,
@@ -11,7 +15,41 @@ import {
   type Ac2LivePhase,
   type Sendable,
 } from './stream.js';
-import { getActiveConversation, parseInboundChat } from './conversation.js';
+import {
+  getActiveConversation,
+  parseInboundChat,
+  replayConversationList,
+} from './conversation.js';
+import {
+  attachSpawnResult,
+  findPendingTaskForParent,
+  registerTask,
+  taskDisplayTitle,
+} from './tasks.js';
+
+/** Built-in host tool that starts an isolated background sub-agent run. */
+const TOOL_SESSIONS_SPAWN = 'sessions_spawn';
+/** Built-in host tool that ends the turn to await sub-agent completions. */
+const TOOL_SESSIONS_YIELD = 'sessions_yield';
+
+/** Extract `{ runId, childSessionKey }` from an accepted `sessions_spawn` result. */
+function parseAcceptedSpawn(text: string | undefined): {
+  runId?: string;
+  childSessionKey?: string;
+} {
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    return {
+      ...(typeof parsed['runId'] === 'string' ? { runId: parsed['runId'] } : {}),
+      ...(typeof parsed['childSessionKey'] === 'string'
+        ? { childSessionKey: parsed['childSessionKey'] }
+        : {}),
+    };
+  } catch {
+    return {};
+  }
+}
 
 export async function routeInboundToAgent(
   api: OpenClawApi,
@@ -54,6 +92,10 @@ export async function routeInboundToAgent(
   let agentReply = '';
   let previewText = '';
   let toolActivitySeq = 0;
+  // True once this turn delegated work via `sessions_spawn`, so a turn that
+  // ends on `sessions_yield` with no assistant text is reported as "working"
+  // instead of silently discarded.
+  let spawnedThisTurn = false;
 
   const toolCardIds = new Map<string, string>();
   const toolCommands = new Map<string, string>();
@@ -124,6 +166,69 @@ export async function routeInboundToAgent(
     }
   };
 
+  // Render a `sessions_spawn` tool call as a first-class background task:
+  // register it, seed a dedicated `task-<name>` thread, refresh the wallet's
+  // conversation list, and card it in the parent thread. Returns true when the
+  // tool was a sub-session tool (so the generic tool-card path is skipped).
+  const handleSubSessionTool = (
+    name: string | undefined,
+    key: string | undefined,
+    args: Record<string, unknown> | undefined,
+    resultText?: string,
+  ): boolean => {
+    if (name === TOOL_SESSIONS_SPAWN) {
+      const a = args ?? {};
+      const taskText = typeof a['task'] === 'string' ? (a['task'] as string) : '';
+      const taskName = typeof a['taskName'] === 'string' ? (a['taskName'] as string) : undefined;
+      const label = typeof a['label'] === 'string' ? (a['label'] as string) : undefined;
+      const agentId = typeof a['agentId'] === 'string' ? (a['agentId'] as string) : undefined;
+      const task = registerTask({
+        parentThid: thid,
+        task: taskText,
+        ...(taskName !== undefined ? { taskName } : {}),
+        ...(label !== undefined ? { label } : {}),
+        ...(agentId !== undefined ? { agentId } : {}),
+      });
+      spawnedThisTurn = true;
+      const title = taskDisplayTitle(task);
+      // Enrich with the accepted `{ runId, childSessionKey }` when present.
+      const accepted = parseAcceptedSpawn(resultText);
+      if (accepted.runId !== undefined || accepted.childSessionKey !== undefined) {
+        attachSpawnResult(task.taskThid, accepted);
+      }
+      // Materialize the task's own thread and seed the delegated prompt so the
+      // wallet can open `task-<name>` and see what was requested.
+      if (requestId) {
+        ensureConversation(requestId, task.taskThid, title);
+        if (taskText.length > 0) {
+          recordConversationMessage(requestId, task.taskThid, {
+            role: 'user',
+            text: taskText,
+            at: Date.now(),
+          });
+        }
+        replayConversationList(transport, requestId);
+      }
+      emitToolCard(key ?? `spawn:${task.taskThid}`, {
+        name: `🧵 task · ${title}`,
+        ...(taskText.length > 0 ? { command: taskText } : {}),
+        output: `Started background task \`${task.taskThid}\` — running…`,
+      });
+      return true;
+    }
+    if (name === TOOL_SESSIONS_YIELD) {
+      // Yield ends the turn; keep the thread visibly "working" rather than
+      // letting it fall silent while children run.
+      streamPreview('thinking');
+      emitToolCard(key ?? 'yield', {
+        name: '⏳ awaiting background task',
+        output: 'Delegated work is running; results will post here when ready.',
+      });
+      return true;
+    }
+    return false;
+  };
+
   try {
     runtime.channel?.routing?.resolveAgentRoute?.({
       cfg,
@@ -178,6 +283,17 @@ export async function routeInboundToAgent(
     if (replyText.length > 0) {
       sendFinalize(transport, thid, messageSid, replyText);
       safeLog(api, 'info', `[ac2] Finalized agent reply to wallet (len=${replyText.length})`);
+    } else if (spawnedThisTurn) {
+      // The turn delegated work and yielded without composing a reply. Post a
+      // durable "working" note so the thread isn't left silent; the child's
+      // result arrives later on its own host-initiated turn.
+      const note =
+        'Working on that in the background \u2014 I\'ll post the result here as soon as the task finishes.';
+      sendFinalize(transport, thid, messageSid, note);
+      if (requestId) {
+        recordConversationMessage(requestId, thid, { role: 'agent', text: note, at: Date.now() });
+      }
+      safeLog(api, 'info', '[ac2] turn yielded to background task(s); posted working note.');
     } else {
       sendDiscard(transport, thid);
     }
@@ -206,6 +322,13 @@ export async function routeInboundToAgent(
                   : typeof payload?.name === 'string'
                     ? payload.name
                     : undefined;
+            // Sub-session tools render as durable task cards (see onToolStart);
+            // keep the transient spinner generic instead of flashing the raw
+            // `sessions_spawn` / `sessions_yield` name.
+            if (toolName === TOOL_SESSIONS_SPAWN || toolName === TOOL_SESSIONS_YIELD) {
+              streamPreview('thinking');
+              return;
+            }
             streamPreview('tool', toolName ? { detail: toolName } : undefined);
             return;
           }
@@ -251,9 +374,10 @@ export async function routeInboundToAgent(
           args?: Record<string, unknown>;
         }): void => {
           const detail = typeof payload?.name === 'string' ? payload.name : undefined;
-          streamPreview('tool', detail ? { detail } : undefined);
           const key =
             payload?.toolCallId ?? payload?.itemId ?? (detail ? `name:${detail}` : undefined);
+          if (handleSubSessionTool(detail, key ?? undefined, payload?.args)) return;
+          streamPreview('tool', detail ? { detail } : undefined);
           if (key == null) return;
           const command = formatToolCommand(payload?.args);
           if (command) toolCommands.set(key, command);
@@ -294,6 +418,23 @@ export async function routeInboundToAgent(
           });
         },
         onToolResult: (payload: any): void => {
+          const toolName = typeof payload?.name === 'string' ? payload.name : undefined;
+          if (toolName === TOOL_SESSIONS_SPAWN) {
+            // Enrich the task registered at spawn-start with the accepted
+            // `{ runId, childSessionKey }` envelope; never render it raw.
+            const accepted = parseAcceptedSpawn(
+              typeof payload?.text === 'string' ? payload.text : undefined,
+            );
+            const pending = findPendingTaskForParent(thid);
+            if (
+              pending &&
+              (accepted.runId !== undefined || accepted.childSessionKey !== undefined)
+            ) {
+              attachSpawnResult(pending.taskThid, accepted);
+            }
+            return;
+          }
+          if (toolName === TOOL_SESSIONS_YIELD) return;
           const key =
             typeof payload?.toolCallId === 'string'
               ? payload.toolCallId

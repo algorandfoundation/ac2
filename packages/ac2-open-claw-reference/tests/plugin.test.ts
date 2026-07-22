@@ -603,7 +603,7 @@ describe('ac2 plugin', () => {
       }
     });
 
-    it('keeps the channel open (no_active_session) and notifies the user when the wallet rejects the bootstrap KeyRequest', async () => {
+    it('keeps the channel open (active but identity-less) and notifies the user when the wallet rejects the bootstrap KeyRequest', async () => {
       const peerRaw: string[] = [];
       const provider = new (class extends InMemoryChannelProvider {
         protected override onPairingPrepared(peerTransport: Ac2Transport): void {
@@ -625,8 +625,8 @@ describe('ac2 plugin', () => {
               ),
             );
           });
-          // Capture the chat-surface notice the agent sends after a failed
-          // bootstrap.
+          // Capture the banner notice the agent pushes after a failed
+          // bootstrap (surfaced as a `notice` control frame, not a chat message).
           peerTransport.onRawMessage?.((msg) => {
             peerRaw.push(msg);
           });
@@ -648,15 +648,34 @@ describe('ac2 plugin', () => {
       // Let the bootstrap round-trip + the no-identity notice flow.
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // A rejected bootstrap is non-fatal: the session is never activated
-      // (tools keep seeing `no_active_session`), but the channel stays open
-      // so the user can still converse.
-      expect(manager.getActive()).toBeNull();
+      // A rejected bootstrap is non-fatal: the transport is up and the wallet
+      // is chatting, so the channel IS connected. The session is registered as
+      // active with `identityGranted: false` (instead of being left inactive,
+      // which used to make the channel/tools report "registered but not online"
+      // while the user was actively chatting). Signing stays locked until the
+      // wallet grants an identity, and no agent DID is surfaced.
+      const active = manager.getActive();
+      expect(active).not.toBeNull();
+      expect(active!.identityGranted).toBe(false);
+
       const caps = capabilitiesFlow({}, { manager });
-      expect(caps.status).toBe('no_active_session');
+      expect(caps.status).toBe('ok');
+      expect(caps.session.connected).toBe(true);
       expect(caps.agent.did).toBeNull();
 
-      // The user is told (over the chat surface) that an identity is needed.
+      // Signing is still gated on the missing identity.
+      const signOutcome = await signFlow(
+        {
+          description: 'should be locked — no identity granted',
+          payload_base64: Buffer.from('x').toString('base64'),
+        },
+        {},
+        { manager },
+      );
+      expect(signOutcome.status).toBe('rejected');
+      if (signOutcome.status === 'rejected') expect(signOutcome.reason).toBe('no_identity');
+
+      // The user is told (via a `notice` banner frame) that an identity is needed.
       expect(peerRaw.some((m) => m.toLowerCase().includes('identity'))).toBe(true);
 
       // Aborting ends the still-open channel cleanly (it does not throw).

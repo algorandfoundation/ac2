@@ -1,6 +1,7 @@
 /**
  * `ac2-stream` control-frame protocol. Each frame is `STX` (`\u0002`) + JSON:
- * `preview` / `finalize` / `discard` / `tool` / `conversations` / `history`.
+ * `preview` / `finalize` / `discard` / `tool` / `conversations` / `history` /
+ * `notice`.
  */
 
 /** Transport a control frame can be written to. */
@@ -12,6 +13,21 @@ export interface Sendable {
 export const AC2_STREAM_CONTROL_PREFIX = '\u0002';
 
 export type Ac2LivePhase = 'thinking' | 'tool' | 'typing';
+
+/** Severity for an out-of-band `notice` control frame. */
+export type Ac2NoticeLevel = 'info' | 'warning' | 'error';
+
+/** An out-of-band advisory the wallet renders as a banner (never a chat bubble). */
+export interface Ac2Notice {
+  /** Machine-readable code so the wallet can special-case a notice. */
+  code: string;
+  /** Severity; defaults to `warning` on the wire when omitted. */
+  level?: Ac2NoticeLevel;
+  /** Optional short heading. */
+  title?: string;
+  /** Human-facing body text. */
+  text: string;
+}
 
 /** Write one control frame. Best-effort, never throws. */
 export function sendStreamControl(transport: Sendable, frame: Record<string, unknown>): void {
@@ -62,5 +78,16 @@ export function sendToolActivity(
     ...(activity.name ? { name: activity.name } : {}),
     ...(activity.command ? { command: activity.command } : {}),
     ...(activity.output !== undefined ? { output: activity.output } : {}),
+  });
+}
+
+/** Emit an out-of-band advisory banner (e.g. a locked/new-controller notice). */
+export function sendNotice(transport: Sendable, notice: Ac2Notice): void {
+  sendStreamControl(transport, {
+    t: 'notice',
+    code: notice.code,
+    level: notice.level ?? 'warning',
+    ...(notice.title ? { title: notice.title } : {}),
+    text: notice.text,
   });
 }
