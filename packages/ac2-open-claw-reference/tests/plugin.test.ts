@@ -33,6 +33,9 @@ import {
   sessionManager,
   resolveAc2SessionConversation,
   resolveAc2OutboundSessionRoute,
+  buildAc2SessionKey,
+  routeInboundToAgent,
+  classifyAgentError,
   AC2_MEDIA_SOURCE_PARAMS,
   getToolPluginMetadata,
   pluginManifest as plugin,
@@ -855,6 +858,313 @@ describe('ac2 plugin', () => {
       expect(
         resolveAc2OutboundSessionRoute({ target: `${did}:default`, from: 'a' }).sessionKey,
       ).toBe(`ac2:${did}`);
+    });
+  });
+
+  describe('canonical session key (buildAc2SessionKey)', () => {
+    const did = 'did:key:zStubController';
+
+    it('collapses the default thread (and empty/undefined) to the bare base key', () => {
+      expect(buildAc2SessionKey(did)).toBe(`ac2:${did}`);
+      expect(buildAc2SessionKey(did, 'default')).toBe(`ac2:${did}`);
+      expect(buildAc2SessionKey(did, '')).toBe(`ac2:${did}`);
+    });
+
+    it('suffixes an explicit (non-default) thread', () => {
+      expect(buildAc2SessionKey(did, 'thread-7')).toBe(`ac2:${did}:thread-7`);
+    });
+
+    it('matches the outbound route for the same controller + thread', () => {
+      expect(buildAc2SessionKey(did)).toBe(
+        resolveAc2OutboundSessionRoute({ target: did, from: 'did:key:zAgent' }).sessionKey,
+      );
+      expect(buildAc2SessionKey(did, 'thread-7')).toBe(
+        resolveAc2OutboundSessionRoute({ target: did, from: 'did:key:zAgent', threadId: 'thread-7' })
+          .sessionKey,
+      );
+    });
+  });
+
+  describe('inbound session-key consistency (routeInboundToAgent)', () => {
+    /**
+     * Capture the `SessionKey` the plugin hands the host reply dispatcher on an
+     * inbound turn. The host persists the agent's conversation under exactly
+     * this key, so it MUST match the canonical outbound key — otherwise the
+     * default-thread conversation is split across `ac2:<did>` and
+     * `ac2:<did>:default` and the agent "forgets" the thread on reconnect.
+     */
+    interface RecordedInbound {
+      storePath?: string;
+      sessionKey?: string;
+      createIfMissing?: boolean;
+      ctxSessionKey?: string;
+      ctxAgentId?: string;
+    }
+
+    interface Captured {
+      sessionKey?: string;
+      /** Inbound-session records the plugin asked the host to persist. */
+      recorded: RecordedInbound[];
+      /** `resolveStorePath` invocations: `[store, opts]`. */
+      storePathCalls: Array<{ store?: string | undefined; agentId?: string | undefined }>;
+      /** True once dispatch ran; asserts recording happened BEFORE dispatch. */
+      dispatchedAfterRecord?: boolean;
+    }
+
+    /**
+     * Build a host `api` double that captures both the `SessionKey` handed to
+     * the reply dispatcher AND the inbound-session record the plugin persists
+     * first. `withSession` toggles the `channel.session` surface so we can also
+     * prove the plugin degrades gracefully on a runtime that lacks it.
+     */
+    function makeCapturingApi(opts?: {
+      withSession?: boolean;
+      agentId?: string;
+    }): { api: any; captured: Captured } {
+      const withSession = opts?.withSession ?? true;
+      const agentId = opts?.agentId;
+      const captured: Captured = { recorded: [], storePathCalls: [] };
+      const channel: any = {
+        routing: {
+          resolveAgentRoute(_params: unknown): { agentId: string } | undefined {
+            return agentId !== undefined ? { agentId } : undefined;
+          },
+        },
+        reply: {
+          dispatchReplyWithBufferedBlockDispatcher(this: unknown, args: any): void {
+            captured.sessionKey = args?.ctx?.SessionKey;
+            captured.dispatchedAfterRecord = captured.recorded.length > 0;
+            // Settle the turn immediately with no assistant text.
+            args?.dispatcherOptions?.onIdle?.();
+          },
+        },
+      };
+      if (withSession) {
+        channel.session = {
+          resolveStorePath(store?: string, o?: { agentId?: string }): string {
+            captured.storePathCalls.push({ store, agentId: o?.agentId });
+            return `/tmp/openclaw/agents/${o?.agentId ?? 'main'}/sessions/sessions.json`;
+          },
+          async recordInboundSession(params: any): Promise<void> {
+            captured.recorded.push({
+              storePath: params?.storePath,
+              sessionKey: params?.sessionKey,
+              createIfMissing: params?.createIfMissing,
+              ctxSessionKey: params?.ctx?.SessionKey,
+              ctxAgentId: params?.ctx?.AgentId,
+            });
+          },
+        };
+      }
+      const api = {
+        config: {},
+        logger: { info(): void {}, warn(): void {}, error(): void {} },
+        runtime: { channel },
+      };
+      return { api, captured };
+    }
+
+    const noopTransport = { isOpen: true, send(): void {} } as unknown as Ac2Transport;
+
+    it('keys a default-thread turn to the bare base key (matches the outbound route)', async () => {
+      const did = 'did:key:zInboundController';
+      const { api, captured } = makeCapturingApi();
+      await routeInboundToAgent(api, 'hello', noopTransport, did);
+      const outbound = resolveAc2OutboundSessionRoute({ target: did, from: 'did:key:zAgent' });
+      expect(captured.sessionKey).toBe(`ac2:${did}`);
+      expect(captured.sessionKey).toBe(outbound.sessionKey);
+    });
+
+    it('suffixes an explicit thread and matches the outbound route for that thread', async () => {
+      const did = 'did:key:zInboundController';
+      const { api, captured } = makeCapturingApi();
+      const frame = JSON.stringify({ thid: 'thread-7', body: { content: 'hi' } });
+      await routeInboundToAgent(api, frame, noopTransport, did);
+      const outbound = resolveAc2OutboundSessionRoute({
+        target: did,
+        from: 'did:key:zAgent',
+        threadId: 'thread-7',
+      });
+      expect(captured.sessionKey).toBe(`ac2:${did}:thread-7`);
+      expect(captured.sessionKey).toBe(outbound.sessionKey);
+    });
+
+    /**
+     * The buffered reply dispatcher only mirrors the assistant reply into an
+     * already-recorded session entry; it does not create the durable
+     * per-`SessionKey` entry the host reloads after a shutdown. The plugin must
+     * therefore call `recordInboundSession` (createIfMissing) BEFORE dispatch,
+     * under the same key — otherwise the agent "forgets" the conversation on
+     * every OpenClaw restart even though the key is stable.
+     */
+    it('records the inbound session (createIfMissing) before dispatch, under the same key', async () => {
+      const did = 'did:key:zInboundController';
+      const { api, captured } = makeCapturingApi({ agentId: 'main' });
+      await routeInboundToAgent(api, 'hello', noopTransport, did);
+      expect(captured.recorded).toHaveLength(1);
+      const rec = captured.recorded[0]!;
+      expect(rec.sessionKey).toBe(`ac2:${did}`);
+      // Persisted under the exact key the dispatcher used.
+      expect(rec.sessionKey).toBe(captured.sessionKey);
+      expect(rec.ctxSessionKey).toBe(captured.sessionKey);
+      expect(rec.createIfMissing).toBe(true);
+      // Recording precedes dispatch so the entry exists when the run persists.
+      expect(captured.dispatchedAfterRecord).toBe(true);
+    });
+
+    it('resolves the store path (and ctx.AgentId) with the resolved route agent', async () => {
+      const did = 'did:key:zInboundController';
+      const { api, captured } = makeCapturingApi({ agentId: 'support' });
+      await routeInboundToAgent(api, 'hello', noopTransport, did);
+      expect(captured.storePathCalls).toHaveLength(1);
+      expect(captured.storePathCalls[0]!.agentId).toBe('support');
+      expect(captured.recorded[0]!.storePath).toBe(
+        '/tmp/openclaw/agents/support/sessions/sessions.json',
+      );
+      // ctx.AgentId anchors the dispatcher's own store lookup to the same agent.
+      expect(captured.recorded[0]!.ctxAgentId).toBe('support');
+    });
+
+    it('still dispatches when the runtime lacks a session surface (older hosts)', async () => {
+      const did = 'did:key:zInboundController';
+      const { api, captured } = makeCapturingApi({ withSession: false });
+      await routeInboundToAgent(api, 'hello', noopTransport, did);
+      expect(captured.recorded).toHaveLength(0);
+      expect(captured.sessionKey).toBe(`ac2:${did}`);
+    });
+  });
+
+  describe('classifyAgentError', () => {
+    it('classifies quota / rate-limit / billing failures as quota_exceeded', () => {
+      const quotaCases: unknown[] = [
+        'You have exceeded your monthly quota',
+        new Error('Rate limit reached for requests'),
+        'rate_limit_exceeded',
+        'RateLimitError: slow down',
+        'HTTP 429 Too Many Requests',
+        'insufficient_quota',
+        'Your account has insufficient funds',
+        'insufficient credit remaining',
+        'You are out of credit',
+        'billing hard limit reached',
+        'Payment Required',
+      ];
+      for (const raw of quotaCases) {
+        expect(classifyAgentError(raw).code).toBe('quota_exceeded');
+      }
+    });
+
+    it('classifies everything else as a generic agent_error', () => {
+      expect(classifyAgentError(new Error('network timeout')).code).toBe('agent_error');
+      expect(classifyAgentError('some random failure').code).toBe('agent_error');
+      expect(classifyAgentError(undefined).code).toBe('agent_error');
+      expect(classifyAgentError(null).code).toBe('agent_error');
+    });
+
+    it('never leaks the raw error text into the client-facing message', () => {
+      const raw = 'internal stacktrace secret-token quota exceeded at provider.ts:42';
+      const classified = classifyAgentError(raw);
+      expect(classified.code).toBe('quota_exceeded');
+      expect(classified.text).not.toContain('secret-token');
+      expect(classified.text).not.toContain('provider.ts');
+      expect(classified.text.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('agent-error reply (routeInboundToAgent)', () => {
+    const did = 'did:key:zErrController';
+
+    /** A wallet transport that records every control frame the plugin sends. */
+    function makeCapturingTransport(): { transport: Ac2Transport; frames: any[] } {
+      const frames: any[] = [];
+      const transport = {
+        isOpen: true,
+        send(payload: string): void {
+          // Control frames are STX (\u0002) + JSON; ignore anything else.
+          if (typeof payload === 'string' && payload.startsWith('\u0002')) {
+            try {
+              frames.push(JSON.parse(payload.slice(1)));
+            } catch {
+              // not a control frame we care about
+            }
+          }
+        },
+      } as unknown as Ac2Transport;
+      return { transport, frames };
+    }
+
+    /**
+     * A host `api` double whose reply dispatcher fails the turn: either by
+     * invoking the dispatcher's `onError` callback (the common provider-error
+     * path) or by throwing synchronously (exercising the outer `catch`).
+     */
+    function makeErroringApi(opts: { error: unknown; throwSync?: boolean }): any {
+      return {
+        config: {},
+        logger: { info(): void {}, warn(): void {}, error(): void {} },
+        runtime: {
+          channel: {
+            reply: {
+              dispatchReplyWithBufferedBlockDispatcher(this: unknown, args: any): void {
+                if (opts.throwSync) throw opts.error;
+                args?.dispatcherOptions?.onError?.(opts.error);
+              },
+            },
+          },
+        },
+      };
+    }
+
+    const finals = (frames: any[]): any[] => frames.filter((f) => f?.t === 'finalize');
+    const notices = (frames: any[]): any[] => frames.filter((f) => f?.t === 'notice');
+    const discards = (frames: any[]): any[] => frames.filter((f) => f?.t === 'discard');
+
+    it('delivers a quota-specific error reply + error notice instead of a silent discard', async () => {
+      const err = new Error('Provider rejected request: 429 insufficient_quota');
+      const { transport, frames } = makeCapturingTransport();
+      await routeInboundToAgent(makeErroringApi({ error: err }), 'hello', transport, did);
+
+      const finalized = finals(frames);
+      expect(finalized).toHaveLength(1);
+      expect(finalized[0]!.thid).toBe('default');
+      // The client gets the canned, quota-aware message — never the raw error.
+      expect(finalized[0]!.text).toBe(classifyAgentError(err).text);
+      expect(finalized[0]!.text).not.toContain('insufficient_quota');
+      // The turn is NOT silently discarded.
+      expect(discards(frames)).toHaveLength(0);
+
+      const noticed = notices(frames);
+      expect(noticed).toHaveLength(1);
+      expect(noticed[0]!.code).toBe('quota_exceeded');
+      expect(noticed[0]!.level).toBe('error');
+    });
+
+    it('delivers a generic error reply for a non-quota agent failure', async () => {
+      const err = new Error('upstream connection reset');
+      const { transport, frames } = makeCapturingTransport();
+      await routeInboundToAgent(makeErroringApi({ error: err }), 'hello', transport, did);
+
+      const finalized = finals(frames);
+      expect(finalized).toHaveLength(1);
+      expect(finalized[0]!.text).toBe(classifyAgentError(err).text);
+      expect(discards(frames)).toHaveLength(0);
+      expect(notices(frames)[0]!.code).toBe('agent_error');
+    });
+
+    it('also reports an error message when the dispatch call itself throws', async () => {
+      const err = new Error('rate limit exceeded');
+      const { transport, frames } = makeCapturingTransport();
+      await routeInboundToAgent(
+        makeErroringApi({ error: err, throwSync: true }),
+        'hello',
+        transport,
+        did,
+      );
+      const finalized = finals(frames);
+      expect(finalized).toHaveLength(1);
+      expect(finalized[0]!.text).toBe(classifyAgentError(err).text);
+      expect(notices(frames)[0]!.code).toBe('quota_exceeded');
+      expect(discards(frames)).toHaveLength(0);
     });
   });
 

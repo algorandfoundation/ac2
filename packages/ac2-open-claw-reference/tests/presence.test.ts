@@ -133,14 +133,14 @@ describe('shouldTeardownOnPresence', () => {
     expect(
       shouldTeardownOnPresence(
         { requestId: 'req-1', deviceCount: 1, online: true },
-        { peerLinked: true, closed: false, connected: false },
+        { peerLinked: true, closed: false, connected: false, signalingStable: true },
       ),
     ).toBe(true);
     // Zero devices (both gone) also counts as the peer being offline.
     expect(
       shouldTeardownOnPresence(
         { requestId: 'req-1', deviceCount: 0, online: false },
-        { peerLinked: true, closed: false, connected: false },
+        { peerLinked: true, closed: false, connected: false, signalingStable: true },
       ),
     ).toBe(true);
   });
@@ -149,7 +149,7 @@ describe('shouldTeardownOnPresence', () => {
     expect(
       shouldTeardownOnPresence(
         { requestId: 'req-1', deviceCount: 2, online: true },
-        { peerLinked: true, closed: false, connected: false },
+        { peerLinked: true, closed: false, connected: true, signalingStable: true },
       ),
     ).toBe(false);
   });
@@ -158,7 +158,7 @@ describe('shouldTeardownOnPresence', () => {
     expect(
       shouldTeardownOnPresence(
         { requestId: 'req-1', deviceCount: 1, online: true },
-        { peerLinked: false, closed: false, connected: false },
+        { peerLinked: false, closed: false, connected: false, signalingStable: true },
       ),
     ).toBe(false);
   });
@@ -167,28 +167,56 @@ describe('shouldTeardownOnPresence', () => {
     expect(
       shouldTeardownOnPresence(
         { requestId: 'req-1', deviceCount: 0, online: false },
-        { peerLinked: true, closed: true, connected: false },
+        { peerLinked: true, closed: true, connected: true, signalingStable: true },
       ),
     ).toBe(false);
   });
 
-  it('does not tear down a live data channel on a presence drop (survives signaling loss)', () => {
-    // Once the p2p data channel is live it is the source of truth: a presence
-    // drop (e.g. the signaling server restarting and not yet re-counting the
-    // still-connected peer) must NOT restart a healthy connection. A genuine
-    // drop is handled by the heartbeat watchdog / control-transport `onClose`.
+  it('tears down a LIVE connection when the peer goes offline and signaling is stable', () => {
+    // The phone closed: the server broadcasts a drop to a single device while
+    // our own signaling link is healthy. This is a real departure — close now
+    // (and re-arm) rather than waiting out the heartbeat.
     expect(
       shouldTeardownOnPresence(
         { requestId: 'req-1', deviceCount: 1, online: true },
-        { peerLinked: true, closed: false, connected: true },
+        { peerLinked: true, closed: false, connected: true, signalingStable: true },
+      ),
+    ).toBe(true);
+    expect(
+      shouldTeardownOnPresence(
+        { requestId: 'req-1', deviceCount: 0, online: false },
+        { peerLinked: true, closed: false, connected: true, signalingStable: true },
+      ),
+    ).toBe(true);
+  });
+
+  it('does NOT tear down a live connection on a presence drop caused by a signaling-server loss', () => {
+    // Our own signaling socket dropped/reconnected (`signalingStable === false`)
+    // so a transient low device count is a recount artifact, not a departure.
+    // The live data channel already proves the peer is there; leave it alone.
+    expect(
+      shouldTeardownOnPresence(
+        { requestId: 'req-1', deviceCount: 1, online: true },
+        { peerLinked: true, closed: false, connected: true, signalingStable: false },
       ),
     ).toBe(false);
     expect(
       shouldTeardownOnPresence(
         { requestId: 'req-1', deviceCount: 0, online: false },
-        { peerLinked: true, closed: false, connected: true },
+        { peerLinked: true, closed: false, connected: true, signalingStable: false },
       ),
     ).toBe(false);
+  });
+
+  it('still tears down while connecting even if signaling is unstable (no live channel to trust)', () => {
+    // Before the control channel is live there is no p2p connection to protect,
+    // so a linked peer dropping to a single device is always acted on.
+    expect(
+      shouldTeardownOnPresence(
+        { requestId: 'req-1', deviceCount: 1, online: true },
+        { peerLinked: true, closed: false, connected: false, signalingStable: false },
+      ),
+    ).toBe(true);
   });
 });
 

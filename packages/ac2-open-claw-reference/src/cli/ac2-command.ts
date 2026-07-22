@@ -204,6 +204,10 @@ export function buildAc2Command(api: OpenClawApi): unknown {
         const startPairingCycle = async (): Promise<{
           pairing: import('@algorandfoundation/ac2-sdk/signaling').Ac2PairingInfo;
           connect: () => Promise<import('@algorandfoundation/ac2-sdk/signaling').Ac2PairedChannel>;
+          /** Whether the provider's persistent signaling socket is still live. */
+          isSignalingAlive: () => boolean;
+          /** Fully tear down the provider's signaling socket + peer. */
+          dispose: () => Promise<void>;
           qrString: string;
         }> => {
           // Reuse the persisted Liquid Auth requestId across pairing cycles so
@@ -226,9 +230,15 @@ export function buildAc2Command(api: OpenClawApi): unknown {
               origin,
               ...(persistedConnectionId ? { requestId: persistedConnectionId } : {}),
             });
-          const handle = await provider.startPairing({
+          // Cast to surface the LiquidAuth provider's optional persistent-
+          // signaling lifecycle hooks (the base `Ac2ChannelProvider` return
+          // type omits them). Optional so any other provider still works.
+          const handle = (await provider.startPairing({
             timeoutMs: cfg.defaultTimeoutMs ?? 120_000,
-          });
+          })) as import('@algorandfoundation/ac2-sdk/signaling').Ac2PairingHandle & {
+            isSignalingAlive?(): boolean;
+            dispose?(): Promise<void>;
+          };
           const usedRequestId = handle.pairing.metadata?.['requestId'];
           if (shouldSeedConnectionId(persistedConnectionId, usedRequestId)) {
             saveAc2State({ requestId: usedRequestId });
@@ -238,7 +248,16 @@ export function buildAc2Command(api: OpenClawApi): unknown {
               resolve(rendered);
             });
           });
-          return { pairing: handle.pairing, connect: handle.connect, qrString: qr };
+          return {
+            pairing: handle.pairing,
+            connect: handle.connect,
+            // Fall back gracefully for providers that don't expose the optional
+            // persistent-signaling lifecycle hooks (e.g. an in-memory provider):
+            // treat signaling as never-reusable so the loop always rebuilds.
+            isSignalingAlive: () => handle.isSignalingAlive?.() ?? false,
+            dispose: () => handle.dispose?.() ?? Promise.resolve(),
+            qrString: qr,
+          };
         };
 
         const buildInvitationText = (
@@ -588,15 +607,46 @@ export function buildAc2Command(api: OpenClawApi): unknown {
 
         void (async () => {
           let cycle = firstCycle;
-          // Re-pairing loop: re-render the QR after a dropped DataChannel.
+          // Re-pairing loop. After a dropped DataChannel there are two cases:
+          //
+          //  1. The signaling socket is STILL connected (the common case when
+          //     the wallet is simply reopened): keep it and re-arm `connect()`
+          //     on the SAME handle. The provider answers the returning wallet's
+          //     fresh offer in place, so we stay in the requestId room (no
+          //     presence churn) and the controller rejoins automatically — no
+          //     QR rescan, no manual "Reconnect". Mirrors the wallet, which
+          //     keeps its socket and just re-runs `peer()` on reconnect.
+          //
+          //  2. The signaling socket itself died (network/server outage): tear
+          //     the handle down and rebuild a fresh pairing cycle, re-rendering
+          //     the QR, with capped exponential backoff so a transient outage
+          //     self-heals.
           // eslint-disable-next-line no-constant-condition
           while (true) {
             await runConnectedSession(cycle.connect);
+
+            if (cycle.isSignalingAlive()) {
+              safeLog(
+                api,
+                'info',
+                '[ac2] Controller link dropped — signaling still connected; awaiting the wallet to re-link on the same session (no rescan needed).',
+              );
+              // Loop straight back to `runConnectedSession(cycle.connect)`,
+              // which re-arms the answer on the live socket.
+              continue;
+            }
+
             safeLog(
               api,
               'info',
-              '[ac2] DataChannel closed — waiting for the controller to re-link. Scan the QR code again.',
+              '[ac2] Signaling connection lost — rebuilding pairing. Scan the QR code again.',
             );
+            // Best-effort: drop the dead handle before replacing it.
+            try {
+              await cycle.dispose();
+            } catch {
+              // Already torn down; ignore.
+            }
             // Retry with capped exponential backoff instead of giving up: a
             // transient signaling-server/network outage should self-heal so
             // pairing resumes automatically once conditions improve.

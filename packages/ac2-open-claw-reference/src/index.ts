@@ -38,6 +38,9 @@ export {
   clearActiveConversation,
   resolveAc2SessionConversation,
   resolveAc2OutboundSessionRoute,
+  buildAc2SessionKey,
+  routeInboundToAgent,
+  classifyAgentError,
   replayConversationList,
   replayConversationHistory,
   deriveTaskThid,
@@ -45,6 +48,7 @@ export {
   registerTask,
   attachSpawnResult,
   taskDisplayTitle,
+  taskCardId,
   getTaskByThid,
   findTaskByRun,
   findPendingTaskForParent,
@@ -52,15 +56,27 @@ export {
   listTasks,
   resetTasks,
   TASK_THREAD_PREFIX,
+  emitTaskCardUpdate,
   registerSubagentHooks,
   handleSubagentSpawned,
   handleSubagentEnded,
   resetSubagentHooksRegistration,
+  watchTaskCompletion,
+  resetTaskWatchers,
+  subagentPolling,
+  readChildResultText,
+  readChildSessionStatus,
+  discoverChildSessionKey,
+  describeSubagentCandidates,
+  sendTaskCard,
+  type Ac2AgentError,
   type Ac2MediaSourceParams,
   type Ac2SessionConversation,
   type Ac2OutboundSessionRoute,
   type Ac2Task,
   type Ac2TaskStatus,
+  type Ac2TaskCardStatus,
+  type ChildSessionStatus,
 } from './channel/index.js';
 export { buildAc2Command } from './cli/index.js';
 export { buildSignTool, buildCapabilitiesTool, buildX402FetchTool } from './tools/index.js';
@@ -81,6 +97,7 @@ export {
 } from './x402/index.js';
 export type {
   LiquidAuthChannelProviderOptions,
+  LiquidAuthPairingHandle,
   PresenceResult,
   PresenceSocket,
 } from './providers/liquid-auth.js';

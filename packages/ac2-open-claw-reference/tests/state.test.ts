@@ -11,6 +11,7 @@ import {
   listConversations,
   loadAc2State,
   recordConversationMessage,
+  recordTaskActivity,
   recordToolActivity,
   setConnectionIdentity,
   setSessionCookie,
@@ -225,6 +226,31 @@ describe('conversation restore (control-frame replay)', () => {
       output: 'a\nb',
     });
   });
+
+  it('replayConversationHistory replays background-task cards with their status/result', () => {
+    recordTaskActivity('req-1', 'thread-a', {
+      id: 'task:task-research',
+      title: 'Weather research',
+      prompt: 'research the weather API',
+      status: 'completed',
+      result: 'It is sunny.',
+    });
+
+    const { sent, transport } = transportSpy();
+    replayConversationHistory(transport, 'req-1', 'thread-a');
+
+    const frame = parseControlFrame(sent[0]!);
+    expect(frame.t).toBe('history');
+    const task = frame.messages.find((m: any) => m.role === 'task');
+    expect(task).toMatchObject({
+      role: 'task',
+      id: 'task:task-research',
+      title: 'Weather research',
+      prompt: 'research the weather API',
+      status: 'completed',
+      result: 'It is sunny.',
+    });
+  });
 });
 
 describe('session-cookie persistence', () => {
@@ -272,5 +298,51 @@ describe('tool-activity persistence', () => {
     );
     expect(tools).toHaveLength(1);
     expect(tools[0]).toMatchObject({ id: 'tool-1', command: 'ls', output: 'file-a' });
+  });
+});
+
+describe('background-task-card persistence', () => {
+  it('records a new task entry (running) on a thread', () => {
+    recordTaskActivity('req-1', 'thread-a', {
+      id: 'task:task-x',
+      title: 'Do x',
+      prompt: 'do x',
+      status: 'running',
+    });
+    const convo = getConnection('req-1')?.conversations['thread-a'];
+    const task = convo?.messages.find((m) => m.role === 'task');
+    expect(task).toMatchObject({
+      id: 'task:task-x',
+      title: 'Do x',
+      prompt: 'do x',
+      status: 'running',
+    });
+  });
+
+  it('upserts the same task id in place (running → completed + result)', () => {
+    recordTaskActivity('req-1', 'thread-a', {
+      id: 'task:task-x',
+      title: 'Do x',
+      prompt: 'do x',
+      status: 'running',
+    });
+    // Completion re-records the same id with a terminal status + result; the
+    // earlier title/prompt must be preserved (merge only supplied fields).
+    recordTaskActivity('req-1', 'thread-a', {
+      id: 'task:task-x',
+      status: 'completed',
+      result: 'x is done',
+    });
+    const tasks = (getConnection('req-1')?.conversations['thread-a']?.messages ?? []).filter(
+      (m) => m.role === 'task',
+    );
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({
+      id: 'task:task-x',
+      title: 'Do x',
+      prompt: 'do x',
+      status: 'completed',
+      result: 'x is done',
+    });
   });
 });

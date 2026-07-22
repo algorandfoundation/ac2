@@ -11,6 +11,7 @@ import {
   getTaskByThid,
   listTasks,
   resetTasks,
+  taskCardId,
   TASK_THREAD_PREFIX,
 } from '../src/index.js';
 
@@ -93,5 +94,19 @@ describe('sub-agent task registry', () => {
     markTaskResult(task.taskThid, 'failed', 'boom');
     expect(getTaskByThid(task.taskThid)?.status).toBe('failed');
     expect(findPendingTaskForParent('default')).toBeUndefined();
+  });
+
+  it('records a stopped terminal status', () => {
+    const task = registerTask({ parentThid: 'default', task: 'x', taskName: 'x' });
+    markTaskResult(task.taskThid, 'stopped', 'killed');
+    expect(getTaskByThid(task.taskThid)?.status).toBe('stopped');
+  });
+
+  it('derives a stable card id from the task thread id', () => {
+    const task = registerTask({ parentThid: 'default', task: 'x', taskName: 'weather_research' });
+    // The spawn card and the completion update must share this id so the wallet
+    // upserts one card in place across its lifecycle.
+    expect(taskCardId(task.taskThid)).toBe(`task:${task.taskThid}`);
+    expect(taskCardId(task.taskThid)).toBe(taskCardId(task.taskThid));
   });
 });

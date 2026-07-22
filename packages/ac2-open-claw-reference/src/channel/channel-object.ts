@@ -26,6 +26,7 @@ import {
 } from './conversation.js';
 import { recordConversationMessage } from '../identity/state.js';
 import { findPendingTaskForParent, markTaskResult } from './tasks.js';
+import { emitTaskCardUpdate } from './task-card.js';
 
 /** Media-source param map for the message tool's `describeMessageTool`. */
 export type Ac2MediaSourceParams = Readonly<Record<string, readonly string[]>>;
@@ -78,11 +79,16 @@ function resolveOutboundThid(threadId: unknown): string {
  * session. When a control (stream) transport is available we emit a proper
  * thread-scoped `finalize` frame so the reply renders in the right conversation
  * (previously these were written as raw, thread-less text and were effectively
- * lost). We also persist the message and, best-effort, flip the matching
- * background task to `completed` and mirror the result into its `task-…` thread.
+ * lost). Falls back to a raw transport write when no control channel was
+ * negotiated, preserving the plain-text contract for stream-unaware wallets.
  *
- * Falls back to a raw transport write when no control channel was negotiated,
- * preserving the plain-text contract for stream-unaware wallets.
+ * Special case — background-task completion: if a `sessions_spawn` task is still
+ * running on the target thread, this host-driven agent text IS that task's
+ * completion announce (the rare case where the host's own delivery reaches us).
+ * We then flip the task's card in place to `completed` with the result inline
+ * (the self-contained task-card model) instead of posting a separate reply
+ * bubble, and mark the task reconciled so the poller / `subagent_ended`
+ * follow-up doesn't double-post the same result.
  */
 function deliverAgentText(params: { to?: string; text: string; threadId?: unknown }): string {
   const active = sessionManager.requireActive();
@@ -93,6 +99,12 @@ function deliverAgentText(params: { to?: string; text: string; threadId?: unknow
   }
   const thid = resolveOutboundThid(params.threadId);
   const messageId = `ac2-${Date.now()}`;
+  const pending = findPendingTaskForParent(thid);
+  if (pending) {
+    markTaskResult(pending.taskThid, 'completed', params.text);
+    emitTaskCardUpdate({ thid, task: pending, status: 'completed', result: params.text });
+    return messageId;
+  }
   const control = active.controlTransport;
   if (control && control.isOpen) {
     sendFinalize(control, thid, messageId, params.text);
@@ -105,21 +117,6 @@ function deliverAgentText(params: { to?: string; text: string; threadId?: unknow
       text: params.text,
       at: Date.now(),
     });
-  }
-  // Scope A (no native thread binding yet): the host delivers a child's
-  // completion announce to the parent/requester thread. If that thread has a
-  // pending task, treat this as its result — mark it done and mirror the text
-  // into the task's own `task-…` thread.
-  const pending = findPendingTaskForParent(thid);
-  if (pending) {
-    markTaskResult(pending.taskThid, 'completed', params.text);
-    if (active.requestId) {
-      recordConversationMessage(active.requestId, pending.taskThid, {
-        role: 'agent',
-        text: params.text,
-        at: Date.now(),
-      });
-    }
   }
   return messageId;
 }

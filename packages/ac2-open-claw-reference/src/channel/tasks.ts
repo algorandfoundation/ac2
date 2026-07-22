@@ -6,8 +6,13 @@
  * the child finishes, delivers its result back to the requester session as a
  * *separate* host-initiated turn — never inline through the spawning turn's
  * reply stream. To surface that work in the wallet we mirror each child as a
- * first-class "task": it gets a dedicated `task-<name>` conversation thread and
- * a lifecycle (`running` → `completed`/`failed`) that the parent chat can card.
+ * first-class "task" with a lifecycle (`running` → `completed`/`failed`) so its
+ * completion follow-up can be delivered back into the parent conversation.
+ *
+ * `taskThid` is a stable, human-friendly registry *key* (`task-<name|run>`); it
+ * is no longer a distinct wallet conversation. Background work is surfaced
+ * inline in the parent thread (the app renders it via a task indicator), so the
+ * completion is posted to `parentThid` — there is no dedicated `task-…` thread.
  *
  * This registry is intentionally in-memory and process-scoped (like
  * `activeThreadByConnection` in `conversation.ts`): a single wallet owns a
@@ -19,14 +24,20 @@
 export const TASK_THREAD_PREFIX = 'task-';
 
 /** Lifecycle of a tracked background task. */
-export type Ac2TaskStatus = 'running' | 'completed' | 'failed';
+export type Ac2TaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
 /** A single tracked sub-agent run. */
 export interface Ac2Task {
-  /** Synthetic wallet thread id for this task (`task-<name|run>`), the map key. */
+  /** Registry key for this task (`task-<name|run>`); not a wallet conversation. */
   taskThid: string;
-  /** The parent conversation `thid` the `sessions_spawn` tool call ran in. */
+  /** The parent conversation `thid` the `sessions_spawn` tool call ran in; where
+   * the task card and its completion follow-up are shown. */
   parentThid: string;
+  /** The full parent session key (`ac2:<controllerDid>:<thid>`) the spawn ran
+   * under. The host stamps this onto the child entry's `spawnedBy`, so it lets
+   * us discover the child session key when the accepted-spawn envelope did not
+   * surface it (see `discoverChildSessionKey`). */
+  parentSessionKey?: string;
   /** The delegated task prompt (`sessions_spawn` `task` arg). */
   task: string;
   /** Host run id from the accepted spawn envelope, once known. */
@@ -86,6 +97,17 @@ export function isTaskThid(thid: string): boolean {
 }
 
 /**
+ * Stable id for a task's wallet card. Both the spawning turn (which renders the
+ * initial `running` card) and the completion path (which flips it to
+ * `completed`/`failed`/`stopped` and attaches the result) derive the SAME id
+ * from `taskThid`, so the wallet upserts one card in place across its lifecycle
+ * instead of appending a second one on completion.
+ */
+export function taskCardId(taskThid: string): string {
+  return `task:${taskThid}`;
+}
+
+/**
  * Register (or update) a task from a `sessions_spawn` observation. Idempotent
  * on `taskThid`: a later call carrying the accepted `runId`/`childSessionKey`
  * enriches the existing record instead of creating a duplicate.
@@ -93,6 +115,7 @@ export function isTaskThid(thid: string): boolean {
 export function registerTask(input: {
   parentThid: string;
   task: string;
+  parentSessionKey?: string;
   taskName?: string;
   label?: string;
   agentId?: string;
@@ -110,6 +133,9 @@ export function registerTask(input: {
     ? {
         ...existing,
         updatedAt: now,
+        ...(input.parentSessionKey !== undefined
+          ? { parentSessionKey: input.parentSessionKey }
+          : {}),
         ...(input.runId !== undefined ? { runId: input.runId } : {}),
         ...(input.childSessionKey !== undefined
           ? { childSessionKey: input.childSessionKey }
@@ -123,6 +149,9 @@ export function registerTask(input: {
         status: 'running',
         createdAt: now,
         updatedAt: now,
+        ...(input.parentSessionKey !== undefined
+          ? { parentSessionKey: input.parentSessionKey }
+          : {}),
         ...(input.taskName !== undefined ? { taskName: input.taskName } : {}),
         ...(input.label !== undefined ? { label: input.label } : {}),
         ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),

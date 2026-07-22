@@ -58,7 +58,7 @@ describe('host-initiated outbound (sub-agent completion delivery)', () => {
     });
   }
 
-  it('emits a thread-scoped finalize frame and completes the matching task', async () => {
+  it('flips the matching task card to completed with the result inline', async () => {
     activate(true);
     const task = registerTask({ parentThid: 'thread-7', task: 'do research', taskName: 'research' });
 
@@ -69,25 +69,59 @@ describe('host-initiated outbound (sub-agent completion delivery)', () => {
       threadId: 'thread-7',
     });
 
-    // The reply rides the ac2-stream control channel as a finalize frame keyed
-    // to the originating thread — not a raw, thread-less transport write.
+    // A host-driven completion for a still-running task is delivered as the
+    // self-contained task card flipping to `completed` with the result inline —
+    // NOT a separate finalize reply bubble.
     expect(baseSent).toHaveLength(0);
     expect(controlSent).toHaveLength(1);
     const frame = JSON.parse(controlSent[0]!.slice(1));
     expect(controlSent[0]!.startsWith(STX)).toBe(true);
     expect(frame).toMatchObject({
-      t: 'finalize',
+      t: 'task',
       thid: 'thread-7',
-      text: 'here is the research result',
+      status: 'completed',
+      result: 'here is the research result',
     });
-    expect(typeof frame.mid).toBe('string');
 
     // The completion announce flips the pending task to completed.
     expect(getTaskByThid(task.taskThid)?.status).toBe('completed');
     expect(getTaskByThid(task.taskThid)?.resultText).toBe('here is the research result');
   });
 
-  it('falls back to a raw transport write when no control channel exists', async () => {
+  it('flips the task card over the main transport when no separate stream channel exists', async () => {
+    // Regression: with a single DataChannel (no dedicated `ac2-stream`), the
+    // session has no `controlTransport`. The completion for a still-running task
+    // MUST still be emitted as a `t:'task'` control frame over the main transport
+    // so the card flips in place — NOT downgraded to a raw text write, which left
+    // the card stuck `running` and posted a disconnected reply bubble.
+    activate(false);
+    const task = registerTask({
+      parentThid: 'thread-7',
+      task: 'do research',
+      taskName: 'research',
+    });
+
+    const channel = buildChannelObject() as unknown as SendTextChannel;
+    await channel.message.send.text({
+      to: CONTROLLER,
+      text: 'here is the research result',
+      threadId: 'thread-7',
+    });
+
+    expect(controlSent).toHaveLength(0);
+    expect(baseSent).toHaveLength(1);
+    expect(baseSent[0]!.startsWith(STX)).toBe(true);
+    const frame = JSON.parse(baseSent[0]!.slice(1));
+    expect(frame).toMatchObject({
+      t: 'task',
+      thid: 'thread-7',
+      status: 'completed',
+      result: 'here is the research result',
+    });
+    expect(getTaskByThid(task.taskThid)?.status).toBe('completed');
+  });
+
+  it('falls back to a raw transport write for untracked agent text when no control channel exists', async () => {
     activate(false);
     const channel = buildChannelObject() as unknown as SendTextChannel;
     await channel.message.send.text({ to: CONTROLLER, text: 'plain fallback' });

@@ -18,11 +18,11 @@ export interface PersistedIdentity {
 
 /** A single persisted message within a conversation thread. */
 export interface PersistedConversationMessage {
-  role: 'user' | 'agent' | 'tool';
-  /** Empty for `tool` entries. */
+  role: 'user' | 'agent' | 'tool' | 'task';
+  /** Empty for `tool`/`task` entries. */
   text: string;
   at: number;
-  /** Stable card id for `tool` entries (upsert key). */
+  /** Stable card id for `tool`/`task` entries (upsert key). */
   id?: string;
   /** Tool name for a `tool` entry (e.g. `exec`, `write`). */
   tool?: string;
@@ -30,6 +30,14 @@ export interface PersistedConversationMessage {
   command?: string;
   /** The (possibly truncated) tool output/result text, for a `tool` entry. */
   output?: string;
+  /** Display title for a `task` (background sub-agent) entry. */
+  title?: string;
+  /** Delegated task prompt for a `task` entry. */
+  prompt?: string;
+  /** Lifecycle status for a `task` entry (`running`/`completed`/`failed`/`stopped`). */
+  status?: string;
+  /** The child's final result text for a completed `task` entry. */
+  result?: string;
 }
 
 /** A conversation thread on a connection (keyed by AC2 `thid`). */
@@ -259,6 +267,65 @@ export function recordToolActivity(
       ...(tool.name ? { tool: tool.name } : {}),
       ...(tool.command ? { command: tool.command } : {}),
       ...(tool.output !== undefined ? { output: tool.output } : {}),
+    });
+  }
+  const conversation: PersistedConversation = { ...existing, updatedAt: now, messages };
+  conversations[thid] = conversation;
+  connections[requestId] = { ...connection, lastActiveAt: now, conversations };
+  saveAc2State({ connections, activeRequestId: requestId, requestId });
+  return conversation;
+}
+
+/**
+ * Upsert a durable background-task (`sessions_spawn`) card on a thread (keyed by
+ * `id`). The spawning turn records it `running`; the completion path re-records
+ * the same `id` with a terminal `status` and the child's `result` text, so a
+ * fresh device restoring history replays exactly one task card in its final
+ * state (mirrors `recordToolActivity`).
+ */
+export function recordTaskActivity(
+  requestId: string,
+  thid: string,
+  task: { id: string; title?: string; prompt?: string; status?: string; result?: string },
+): PersistedConversation {
+  const state = loadAc2State();
+  const connections = { ...state.connections };
+  const now = Date.now();
+  const connection: PersistedConnection = connections[requestId] ?? {
+    requestId,
+    createdAt: now,
+    lastActiveAt: now,
+    conversations: {},
+  };
+  const conversations = { ...connection.conversations };
+  const existing = conversations[thid] ?? {
+    thid,
+    createdAt: now,
+    updatedAt: now,
+    messages: [] as PersistedConversationMessage[],
+  };
+  const messages = [...existing.messages];
+  const idx = messages.findIndex((m) => m.role === 'task' && m.id === task.id);
+  if (idx !== -1) {
+    const prev = messages[idx]!;
+    messages[idx] = {
+      ...prev,
+      at: now,
+      ...(task.title !== undefined ? { title: task.title } : {}),
+      ...(task.prompt !== undefined ? { prompt: task.prompt } : {}),
+      ...(task.status !== undefined ? { status: task.status } : {}),
+      ...(task.result !== undefined ? { result: task.result } : {}),
+    };
+  } else {
+    messages.push({
+      role: 'task',
+      text: '',
+      at: now,
+      id: task.id,
+      ...(task.title !== undefined ? { title: task.title } : {}),
+      ...(task.prompt !== undefined ? { prompt: task.prompt } : {}),
+      ...(task.status !== undefined ? { status: task.status } : {}),
+      ...(task.result !== undefined ? { result: task.result } : {}),
     });
   }
   const conversation: PersistedConversation = { ...existing, updatedAt: now, messages };
