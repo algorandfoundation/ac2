@@ -124,8 +124,30 @@ export interface Ac2PairingHandle {
   /**
    * Resolves when the remote peer has completed pairing and the
    * channel is open. Rejects on timeout, abort, or signaling failure.
+   *
+   * Providers MAY support calling `connect()` more than once on the same
+   * handle: each call (re)establishes the peer session over a persistent
+   * signaling connection. This lets a caller answer a returning peer's fresh
+   * bringup in place — without dropping the underlying signaling link — so a
+   * reconnect does not churn presence or force the peer to re-pair.
    */
   connect(): Promise<Ac2PairedChannel>;
+  /**
+   * Optional: whether the provider's underlying signaling connection is still
+   * live. When a paired channel drops, a caller can consult this to decide
+   * between re-arming pairing on the SAME signaling connection (call
+   * `connect()` again) versus starting a fresh pairing handle. Providers with
+   * no persistent signaling connection omit this.
+   */
+  isSignalingAlive?(): boolean;
+  /**
+   * Optional: fully tear down the provider's persistent signaling connection
+   * (and any peer session). Idempotent. Callers use this when abandoning a
+   * handle whose signaling connection is still open (e.g. before replacing it
+   * with a fresh handle). Providers with no persistent signaling connection
+   * omit this.
+   */
+  dispose?(): Promise<void>;
 }
 
 /**

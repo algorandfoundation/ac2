@@ -23,6 +23,17 @@ identity key is **issued by the wallet** during pairing (bootstrap
 `KeyRequest`) and persisted in an OS-keychain-protected keystore — the
 agent never touches the user's account keys or passkeys.
 
+**First-controller lock.** The agent registers to the **first** wallet
+(controller) that grants it an identity and stays bound to it. If a
+*different* wallet later connects — e.g. because the mobile app flushed
+its keystore and now presents a brand-new account key — the agent refuses
+the takeover: it will **not** reuse the bound identity or regenerate a
+fresh one for the new wallet. The connection is locked (no messages are
+routed to the agent) and the wallet is shown a `notice` banner explaining
+that the operator must clear the agent's keys — run `openclaw ac2 forget`
+(or delete the agent state under `~/.openclaw`) — before a new wallet can
+register and be issued a fresh identity. `ac2 status` reports the lock.
+
 ## Getting started
 
 ### Prerequisites

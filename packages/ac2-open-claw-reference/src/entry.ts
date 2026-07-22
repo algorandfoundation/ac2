@@ -11,7 +11,8 @@ import { PLUGIN_ID, setActiveApi, setActiveRuntime, type OpenClawApi } from './r
 import { getToolPluginMetadata } from './session/contracts.js';
 import { sessionManager } from './session/manager.js';
 import { buildSignTool, buildCapabilitiesTool, buildX402FetchTool } from './tools/index.js';
-import { cmdSetup } from './setup/config.js';
+import { registerSubagentHooks } from './channel/subagent-hooks.js';
+import { cmdSetup, readChannelStatus } from './setup/config.js';
 import { listConnections } from './identity/state.js';
 
 const MANIFEST_DESCRIPTION =
@@ -43,7 +44,21 @@ function runAc2SlashCommand(ctx: { args?: string }): { text: string } {
 
   if (sub === 'status') {
     const active = sessionManager.getActive();
-    const lines = ['AC2 channel status', '', `Online: ${active ? 'yes' : 'no'}`];
+    const lines = ['AC2 channel status', ''];
+    try {
+      const channelStatus = readChannelStatus();
+      lines.push(
+        `Plugin allow-listed: ${channelStatus.pluginAllowed ? 'yes' : 'no'}`,
+        `Plugin enabled:      ${channelStatus.pluginEnabled ? 'yes' : 'no'}`,
+        `Bound to agent:      ${channelStatus.bound ? 'yes' : 'no'}`,
+        `Ready:               ${channelStatus.ready ? 'yes' : 'no'}`,
+        `Liquid Auth server:  ${channelStatus.liquidAuthServer} (${channelStatus.liquidAuthServerSource})`,
+        '',
+      );
+    } catch {
+      // config-derived readiness read is best-effort
+    }
+    lines.push(`Online: ${active ? 'yes' : 'no'}`);
     if (active) {
       lines.push(`Agent DID:      ${active.agentDid}`);
       lines.push(`Controller DID: ${active.controllerDid}`);
@@ -197,6 +212,10 @@ function registerFull(api: OpenClawApi): void {
   } catch (err) {
     console.error(`[${PLUGIN_ID}] registerTool failed: ${err}`);
   }
+  // Subscribe to the host's in-process sub-agent lifecycle hooks so background
+  // tasks report a reliable completion message even when the host's own
+  // announce/direct delivery cannot reach a threaded conversation.
+  registerSubagentHooks(api);
 }
 
 /** The bundled channel entry. */

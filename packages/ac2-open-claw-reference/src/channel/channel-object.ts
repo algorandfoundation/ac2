@@ -15,14 +15,18 @@ import {
   defineAc2MessageAdapter,
   type MessageReceipt,
 } from './message-adapter.js';
-import { sendDiscard, sendPreview } from './stream.js';
+import { sendDiscard, sendFinalize, sendPreview } from './stream.js';
 import {
+  DEFAULT_THID,
   getActiveConversation,
   resolveAc2OutboundSessionRoute,
   resolveAc2SessionConversation,
   type Ac2OutboundSessionRoute,
   type Ac2SessionConversation,
 } from './conversation.js';
+import { recordConversationMessage } from '../identity/state.js';
+import { findPendingTaskForParent, markTaskResult } from './tasks.js';
+import { emitTaskCardUpdate } from './task-card.js';
 
 /** Media-source param map for the message tool's `describeMessageTool`. */
 export type Ac2MediaSourceParams = Readonly<Record<string, readonly string[]>>;
@@ -45,6 +49,76 @@ function emitHeartbeatPresence(
   const thid = getActiveConversation(active.controllerDid, active.requestId);
   if (kind === 'typing') sendPreview(active.transport, thid, 'typing');
   else sendDiscard(active.transport, thid);
+}
+
+/**
+ * Resolve the wallet `thid` for a host-initiated outbound send. `threadId` is
+ * whatever `messaging.resolveOutboundSessionRoute` produced (normally a plain
+ * `thid`); tolerate a full `ac2:<did>:<thid>` session key too, and fall back to
+ * the connection's active conversation.
+ */
+function resolveOutboundThid(threadId: unknown): string {
+  if (typeof threadId === 'string' && threadId.length > 0) {
+    if (threadId.includes(':')) {
+      return resolveAc2SessionConversation(threadId).threadId ?? DEFAULT_THID;
+    }
+    return threadId;
+  }
+  if (typeof threadId === 'number') return String(threadId);
+  const active = sessionManager.getActive();
+  return active ? getActiveConversation(active.controllerDid, active.requestId) : DEFAULT_THID;
+}
+
+/**
+ * Deliver an agent-initiated (host-driven) text message to the wallet.
+ *
+ * Unlike the per-turn streaming reply (which the agent finalizes itself over
+ * the control channel in `routing.ts`), this path handles messages the host
+ * pushes through the channel adapters — most importantly **sub-agent completion
+ * announces**, which arrive as a fresh `agent` turn targeting the requester
+ * session. When a control (stream) transport is available we emit a proper
+ * thread-scoped `finalize` frame so the reply renders in the right conversation
+ * (previously these were written as raw, thread-less text and were effectively
+ * lost). Falls back to a raw transport write when no control channel was
+ * negotiated, preserving the plain-text contract for stream-unaware wallets.
+ *
+ * Special case — background-task completion: if a `sessions_spawn` task is still
+ * running on the target thread, this host-driven agent text IS that task's
+ * completion announce (the rare case where the host's own delivery reaches us).
+ * We then flip the task's card in place to `completed` with the result inline
+ * (the self-contained task-card model) instead of posting a separate reply
+ * bubble, and mark the task reconciled so the poller / `subagent_ended`
+ * follow-up doesn't double-post the same result.
+ */
+function deliverAgentText(params: { to?: string; text: string; threadId?: unknown }): string {
+  const active = sessionManager.requireActive();
+  if (params.to && active.controllerDid !== params.to) {
+    throw new Error(
+      `[${CHANNEL_ID}] target ${params.to} does not match active peer ${active.controllerDid}`,
+    );
+  }
+  const thid = resolveOutboundThid(params.threadId);
+  const messageId = `ac2-${Date.now()}`;
+  const pending = findPendingTaskForParent(thid);
+  if (pending) {
+    markTaskResult(pending.taskThid, 'completed', params.text);
+    emitTaskCardUpdate({ thid, task: pending, status: 'completed', result: params.text });
+    return messageId;
+  }
+  const control = active.controlTransport;
+  if (control && control.isOpen) {
+    sendFinalize(control, thid, messageId, params.text);
+  } else if (active.transport.isOpen) {
+    active.transport.send(params.text);
+  }
+  if (active.requestId) {
+    recordConversationMessage(active.requestId, thid, {
+      role: 'agent',
+      text: params.text,
+      at: Date.now(),
+    });
+  }
+  return messageId;
 }
 
 export function buildChannelObject(): ChannelPlugin {
@@ -106,20 +180,18 @@ export function buildChannelObject(): ChannelPlugin {
         async sendText({
           to,
           text,
+          threadId,
         }: {
           to: { conversationId: string };
           text: string;
+          threadId?: string | number | null;
         }): Promise<{ messageId: string }> {
-          const active = sessionManager.requireActive();
-          if (to.conversationId && active.controllerDid !== to.conversationId) {
-            throw new Error(
-              `[${CHANNEL_ID}] conversationId ${to.conversationId} does not match active peer ${active.controllerDid}`,
-            );
-          }
-          if (active.transport.isOpen) {
-            active.transport.send(text);
-          }
-          return { messageId: `ac2-${Date.now()}` };
+          const messageId = deliverAgentText({
+            ...(to?.conversationId ? { to: to.conversationId } : {}),
+            text,
+            threadId,
+          });
+          return { messageId };
         },
       },
     },
@@ -153,17 +225,18 @@ export function buildChannelObject(): ChannelPlugin {
         capabilities: { ...AC2_DURABLE_FINAL_CAPABILITIES },
       },
       send: {
-        text: async (ctx: { to: string; text: string }): Promise<{ receipt: MessageReceipt }> => {
-          const active = sessionManager.requireActive();
-          if (ctx.to && active.controllerDid !== ctx.to) {
-            throw new Error(
-              `[${CHANNEL_ID}] target ${ctx.to} does not match active peer ${active.controllerDid}`,
-            );
-          }
-          const messageId = `ac2-${Date.now()}`;
-          if (active.transport.isOpen) active.transport.send(ctx.text);
+        text: async (ctx: {
+          to: string;
+          text: string;
+          threadId?: string | number | null;
+        }): Promise<{ receipt: MessageReceipt }> => {
+          const messageId = deliverAgentText({
+            ...(ctx.to ? { to: ctx.to } : {}),
+            text: ctx.text,
+            threadId: ctx.threadId,
+          });
           return {
-            receipt: buildAc2MessageReceipt(messageId, active.controllerDid),
+            receipt: buildAc2MessageReceipt(messageId, sessionManager.requireActive().controllerDid),
           };
         },
       },
