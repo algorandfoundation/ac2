@@ -60,6 +60,10 @@ Keep the `@next` tag in the install command and do not add `--pin`. OpenClaw
 records that moving npm spec, which lets both the normal OpenClaw updater and
 the plugin-only updater discover newer AC2 canary releases.
 
+Use `@next` while testing canary releases published from `master`. The
+unversioned package and `@latest` both follow stable releases published from
+the `release` branch, so they do not receive new canary builds.
+
 The npm-registry install lays the plugin and its dependencies out in
 OpenClaw's managed npm-project directory under the active state directory.
 
