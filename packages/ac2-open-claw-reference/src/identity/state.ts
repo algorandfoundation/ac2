@@ -18,11 +18,11 @@ export interface PersistedIdentity {
 
 /** A single persisted message within a conversation thread. */
 export interface PersistedConversationMessage {
-  role: 'user' | 'agent' | 'tool';
-  /** Empty for `tool` entries. */
+  role: 'user' | 'agent' | 'tool' | 'task';
+  /** Empty for `tool`/`task` entries. */
   text: string;
   at: number;
-  /** Stable card id for `tool` entries (upsert key). */
+  /** Stable card id for `tool`/`task` entries (upsert key). */
   id?: string;
   /** Tool name for a `tool` entry (e.g. `exec`, `write`). */
   tool?: string;
@@ -30,6 +30,14 @@ export interface PersistedConversationMessage {
   command?: string;
   /** The (possibly truncated) tool output/result text, for a `tool` entry. */
   output?: string;
+  /** Display title for a `task` (background sub-agent) entry. */
+  title?: string;
+  /** Delegated task prompt for a `task` entry. */
+  prompt?: string;
+  /** Lifecycle status for a `task` entry (`running`/`completed`/`failed`/`stopped`). */
+  status?: string;
+  /** The child's final result text for a completed `task` entry. */
+  result?: string;
 }
 
 /** A conversation thread on a connection (keyed by AC2 `thid`). */
@@ -52,6 +60,15 @@ export interface PersistedConnection {
   requestId: string;
   /** Identity key the wallet granted the agent on this connection. */
   identity?: PersistedIdentity;
+  /**
+   * The signaling server session cookie (e.g. `connect.sid=...`) captured on
+   * this connection. Replaying it on subsequent launches lets the agent reuse
+   * the SAME server session across restarts instead of creating a fresh one
+   * each time. Without this the server accumulates stale sessions bound to the
+   * same requestId, which can shadow the live wallet session during the
+   * reconnect rendezvous and leave the agent waiting on a `link`.
+   */
+  sessionCookie?: string;
   /** Unix epoch (ms) the connection was first established. */
   createdAt: number;
   /** Unix epoch (ms) of the most recent activity on the connection. */
@@ -133,6 +150,28 @@ export function touchConnection(requestId: string): PersistedConnection {
   connections[requestId] = connection;
   saveAc2State({ connections, activeRequestId: requestId, requestId });
   return connection;
+}
+
+/** The persisted signaling session cookie for a `requestId`, if any. */
+export function getSessionCookie(requestId: string): string | undefined {
+  return loadAc2State().connections?.[requestId]?.sessionCookie;
+}
+
+/**
+ * Persist the signaling session cookie for a `requestId` so the agent reuses
+ * the same server session on the next launch. A no-op when the cookie is
+ * unchanged, to avoid rewriting the state file on every reconnect.
+ */
+export function setSessionCookie(requestId: string, sessionCookie: string): void {
+  const state = loadAc2State();
+  const connections = { ...state.connections };
+  const now = Date.now();
+  const existing = connections[requestId];
+  if (existing?.sessionCookie === sessionCookie) return;
+  connections[requestId] = existing
+    ? { ...existing, sessionCookie, lastActiveAt: now }
+    : { requestId, createdAt: now, lastActiveAt: now, conversations: {}, sessionCookie };
+  saveAc2State({ connections, activeRequestId: requestId, requestId });
 }
 
 /** Persist the identity granted on a connection. */
@@ -228,6 +267,65 @@ export function recordToolActivity(
       ...(tool.name ? { tool: tool.name } : {}),
       ...(tool.command ? { command: tool.command } : {}),
       ...(tool.output !== undefined ? { output: tool.output } : {}),
+    });
+  }
+  const conversation: PersistedConversation = { ...existing, updatedAt: now, messages };
+  conversations[thid] = conversation;
+  connections[requestId] = { ...connection, lastActiveAt: now, conversations };
+  saveAc2State({ connections, activeRequestId: requestId, requestId });
+  return conversation;
+}
+
+/**
+ * Upsert a durable background-task (`sessions_spawn`) card on a thread (keyed by
+ * `id`). The spawning turn records it `running`; the completion path re-records
+ * the same `id` with a terminal `status` and the child's `result` text, so a
+ * fresh device restoring history replays exactly one task card in its final
+ * state (mirrors `recordToolActivity`).
+ */
+export function recordTaskActivity(
+  requestId: string,
+  thid: string,
+  task: { id: string; title?: string; prompt?: string; status?: string; result?: string },
+): PersistedConversation {
+  const state = loadAc2State();
+  const connections = { ...state.connections };
+  const now = Date.now();
+  const connection: PersistedConnection = connections[requestId] ?? {
+    requestId,
+    createdAt: now,
+    lastActiveAt: now,
+    conversations: {},
+  };
+  const conversations = { ...connection.conversations };
+  const existing = conversations[thid] ?? {
+    thid,
+    createdAt: now,
+    updatedAt: now,
+    messages: [] as PersistedConversationMessage[],
+  };
+  const messages = [...existing.messages];
+  const idx = messages.findIndex((m) => m.role === 'task' && m.id === task.id);
+  if (idx !== -1) {
+    const prev = messages[idx]!;
+    messages[idx] = {
+      ...prev,
+      at: now,
+      ...(task.title !== undefined ? { title: task.title } : {}),
+      ...(task.prompt !== undefined ? { prompt: task.prompt } : {}),
+      ...(task.status !== undefined ? { status: task.status } : {}),
+      ...(task.result !== undefined ? { result: task.result } : {}),
+    };
+  } else {
+    messages.push({
+      role: 'task',
+      text: '',
+      at: now,
+      id: task.id,
+      ...(task.title !== undefined ? { title: task.title } : {}),
+      ...(task.prompt !== undefined ? { prompt: task.prompt } : {}),
+      ...(task.status !== undefined ? { status: task.status } : {}),
+      ...(task.result !== undefined ? { result: task.result } : {}),
     });
   }
   const conversation: PersistedConversation = { ...existing, updatedAt: now, messages };
