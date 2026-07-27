@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.21](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.20...ac2-open-claw-reference@1.0.0-canary.21) (2026-07-27)
+
+
+### Features
+
+* presence of peers, identity lockdown, subagent details ([6067d60](https://github.com/algorandfoundation/ac2/commit/6067d60a032c32bbf1433e5274079b1a81237b0a))
+
 # [ac2-open-claw-reference@1.0.0-canary.20](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.19...ac2-open-claw-reference@1.0.0-canary.20) (2026-07-16)
 
 
