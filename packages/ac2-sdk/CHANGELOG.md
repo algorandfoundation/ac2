@@ -1,3 +1,10 @@
+# [ac2-sdk@1.0.0-canary.3](https://github.com/algorandfoundation/ac2/compare/ac2-sdk@1.0.0-canary.2...ac2-sdk@1.0.0-canary.3) (2026-07-27)
+
+
+### Features
+
+* presence of peers, identity lockdown, subagent details ([6067d60](https://github.com/algorandfoundation/ac2/commit/6067d60a032c32bbf1433e5274079b1a81237b0a))
+
 # [ac2-sdk@1.0.0-canary.2](https://github.com/algorandfoundation/ac2/compare/ac2-sdk@1.0.0-canary.1...ac2-sdk@1.0.0-canary.2) (2026-07-07)
 
 
