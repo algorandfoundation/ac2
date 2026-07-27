@@ -41,35 +41,27 @@ register and be issued a fresh identity. `ac2 status` reports the lock.
 - Node.js ≥ 22, pnpm ≥ 10
 - `openclaw` CLI on `PATH`
 - `openclaw` already set up with an agent
-- The plugin uses the `@napi-rs/keyring` native addon (OS keystore) that may
-  need to be rebuilt against your local Node version. The WebRTC transport
-  (`@roamhq/wrtc`) ships prebuilt binaries and needs no rebuild.
+- The plugin's native dependencies (`@napi-rs/keyring` and `@roamhq/wrtc`)
+  publish platform packages that OpenClaw installs automatically.
 
 ### Install the plugin into OpenClaw
 
 #### From the npm registry (canary)
 
 ```bash
-openclaw plugins install npm:@algorandfoundation/ac2-open-claw-reference@1.0.0-canary.20
-
-# openclaw plugins install runs `npm install --ignore-scripts`, so the
-# @napi-rs/keyring native addon is not built automatically. Rebuild it from
-# the plugin project dir (@roamhq/wrtc ships prebuilt and needs no rebuild):
-PLUGIN_DIR="$(ls -d "${OPENCLAW_HOME:-$HOME/.openclaw}"/npm/projects/algorandfoundation-ac2-open-claw-reference-* | head -n1)"
-
-npm rebuild --prefix "$PLUGIN_DIR" @napi-rs/keyring
-
+openclaw plugins install @algorandfoundation/ac2-open-claw-reference@next
 openclaw plugins enable ac2
 openclaw ac2 setup                                    # wire channel + tools into openclaw.json
 openclaw ac2 status
 openclaw gateway restart
 ```
 
-The npm-registry install lays the plugin out at
-`${OPENCLAW_HOME:-~/.openclaw}/npm/projects/algorandfoundation-ac2-open-claw-reference-<hash>/node_modules/@algorandfoundation/ac2-open-claw-reference`,
-so `npm rebuild --prefix` must point at the **project root** (the
-`npm/projects/<slug>/` directory), not at the inner package — that's
-where the rebuildable `node_modules/` tree lives.
+Keep the `@next` tag in the install command and do not add `--pin`. OpenClaw
+records that moving npm spec, which lets both the normal OpenClaw updater and
+the plugin-only updater discover newer AC2 canary releases.
+
+The npm-registry install lays the plugin and its dependencies out in
+OpenClaw's managed npm-project directory under the active state directory.
 
 #### From this monorepo (pre-release / development)
 
@@ -89,6 +81,25 @@ tarball with workspace-only devDependencies stripped, installs it into
 `${OPENCLAW_HOME:-~/.openclaw}/extensions/ac2`, rebuilds the native
 `@napi-rs/keyring` addon via `npm rebuild`, and
 enables the plugin.
+
+### Update the plugin
+
+An npm install made with the moving `@next` tag is updated automatically when
+you update OpenClaw:
+
+```bash
+openclaw update
+```
+
+To check and update AC2 without updating OpenClaw itself, run:
+
+```bash
+openclaw plugins update ac2
+openclaw gateway restart
+```
+
+You can preview a plugin update with `openclaw plugins update ac2 --dry-run`.
+OpenClaw reports the currently installed and available package versions.
 
 To uninstall (either install path):
 
