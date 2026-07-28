@@ -6,7 +6,6 @@ import {
   bytesForSigning,
   decodeTransaction,
   encodeSignedTransaction,
-  TransactionType,
   type Transaction,
 } from '@algorandfoundation/algokit-utils/transact';
 import type { ClientAvmSigner } from '@x402/avm';
@@ -67,48 +66,6 @@ function decodeUnsignedTransaction(txnBytes: Uint8Array, index: number): Transac
   }
 }
 
-function formatAmount(amount: bigint | undefined): string {
-  return amount === undefined ? 'unknown amount' : amount.toString();
-}
-
-function compactAddress(address: string): string {
-  return address.length > 16 ? `${address.slice(0, 8)}...${address.slice(-6)}` : address;
-}
-
-function formatNetwork(network: string | undefined): string {
-  if (!network) return 'Algorand';
-  if (network.includes('SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=')) {
-    return 'Algorand TestNet';
-  }
-  if (network.includes('wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=')) {
-    return 'Algorand MainNet';
-  }
-  return network.startsWith('algorand:') ? 'Algorand' : network;
-}
-
-function summarizeTransaction(txn: Transaction): string {
-  if (txn.type === TransactionType.AssetTransfer && txn.assetTransfer) {
-    const xfer = txn.assetTransfer;
-    return [
-      'ASA transfer',
-      `asset ${xfer.assetId.toString()}`,
-      `amount ${formatAmount(xfer.amount)}`,
-      `to ${compactAddress(xfer.receiver.toString())}`,
-    ].join(' · ');
-  }
-
-  if (txn.type === TransactionType.Payment && txn.payment) {
-    const payment = txn.payment;
-    return [
-      'ALGO payment',
-      `${formatAmount(payment.amount)} microAlgos`,
-      `to ${compactAddress(payment.receiver.toString())}`,
-    ].join(' · ');
-  }
-
-  return `Algorand ${txn.type} transaction`;
-}
-
 function resourceName(resource?: ResourceInfo): string {
   const name = resource?.description ?? resource?.serviceName;
   return typeof name === 'string' && name.trim().length > 0 ? name.trim() : 'paid resource';
@@ -122,36 +79,11 @@ function resourceDetails(resource?: ResourceInfo): string {
   return parts.length > 0 ? `Resource: ${parts.join(' · ')}` : '';
 }
 
-function buildSigningDescription(args: {
-  readonly txn: Transaction;
-  readonly txnIndex: number;
-  readonly groupSize: number;
-  readonly signerAddress: string;
-  readonly paymentContext?: X402PaymentContext;
-}): string {
-  const req = args.paymentContext?.requirements;
+function buildSigningDescription(args: { readonly paymentContext?: X402PaymentContext }): string {
   const resource = args.paymentContext?.resource;
   const title = `Approve x402 payment for ${resourceName(resource)}.`;
-  const paymentLine = req
-    ? `Payment: ${req.amount} of asset ${req.asset} to ${compactAddress(req.payTo)}.`
-    : 'Payment: exact Algorand payment.';
-  const networkLine = `Network: ${formatNetwork(req?.network)}.`;
-  const signingLine = `Sign transaction ${args.txnIndex + 1} of ${args.groupSize} as ${compactAddress(
-    args.signerAddress,
-  )}.`;
-  const senderLine = `Sender: ${compactAddress(args.txn.sender.toString())}.`;
 
-  return [
-    title,
-    paymentLine,
-    networkLine,
-    signingLine,
-    summarizeTransaction(args.txn),
-    senderLine,
-    resourceDetails(resource),
-  ]
-    .filter(Boolean)
-    .join('\n');
+  return [title, resourceDetails(resource)].filter(Boolean).join('\n');
 }
 
 function base64(bytes: Uint8Array): string {
@@ -213,15 +145,11 @@ export function createAc2AvmSigner(options: Ac2AvmSignerOptions): ClientAvmSigne
         const result = await signFlow(
           {
             description: buildSigningDescription({
-              txn,
-              txnIndex: i,
-              groupSize: txns.length,
-              signerAddress: address,
               ...(paymentContext !== undefined ? { paymentContext } : {}),
             }),
             payload_base64: base64(signingBytes),
             schema: X402_ALGORAND_SIGNING_SCHEMA,
-            sig_hint: 'raw-ed25519',
+            sig_hint: 'transaction-algorand',
             display_hint: 'hex',
             key_type: 'account',
           },
