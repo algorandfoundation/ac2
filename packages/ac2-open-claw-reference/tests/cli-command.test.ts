@@ -12,6 +12,7 @@ import {
   readGitSetupRecord,
   recordGitSetup,
   shouldSeedConnectionId,
+  tokenizeArgs,
 } from '../src/cli/ac2-command.js';
 
 function moduleLoadError(
@@ -111,6 +112,32 @@ describe('parseGitConfigArgs', () => {
     });
     expect(parseGitConfigArgs(['--bogus'])).toEqual({ error: 'unknown option --bogus' });
     expect(parseGitConfigArgs(['a', 'b'])).toEqual({ error: 'unexpected argument b' });
+  });
+
+  it('accepts --opt=value syntax', () => {
+    expect(parseGitConfigArgs(['/r', '--name=alice', '--email=a@ex.com', '--pat=t=ok'])).toEqual({
+      repoDir: '/r',
+      name: 'alice',
+      email: 'a@ex.com',
+      pat: 't=ok',
+    });
+    expect(parseGitConfigArgs(['--name='])).toEqual({ error: 'missing value for --name' });
+    expect(parseGitConfigArgs(['--bogus=x'])).toEqual({ error: 'unknown option --bogus' });
+  });
+});
+
+describe('tokenizeArgs', () => {
+  it('splits on whitespace and honours quotes', () => {
+    expect(tokenizeArgs('git-config /r --name "Alice Smith" --email a@ex.com')).toEqual([
+      'git-config',
+      '/r',
+      '--name',
+      'Alice Smith',
+      '--email',
+      'a@ex.com',
+    ]);
+    expect(tokenizeArgs("--name 'Alice Smith'")).toEqual(['--name', 'Alice Smith']);
+    expect(tokenizeArgs('  ')).toEqual([]);
   });
 });
 

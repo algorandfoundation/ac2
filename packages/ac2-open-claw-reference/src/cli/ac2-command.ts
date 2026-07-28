@@ -139,8 +139,7 @@ function webRtcUnavailableInstructions(): string {
  * An Algorand address *is* the account's Ed25519 key, so decoding it yields
  * the SSH signing key.
  */
-export function resolveWalletSigningPublicKey():
-  { address: string; publicKey: Uint8Array } | undefined {
+export function resolveWalletSigningPublicKey(): { address: string; publicKey: Uint8Array } | undefined {
   const active = sessionManager.getActive();
   const boundControllerDid = loadAc2State().identity?.controllerDid;
   const address = active
@@ -205,23 +204,44 @@ export interface GitConfigOptions {
 
 const GIT_CONFIG_USAGE =
   'Usage: ac2 git-config [repo-dir] [--global] [--name <github-username>] ' +
-  '[--email <email>] [--pat <token>]';
+  '[--email <email>] [--pat <token>]\n' +
+  'Values may be given as `--name alice` or `--name=alice`; quote values ' +
+  'containing spaces (`--name "Alice Smith"`).';
 
-/** Parse the `git-config` subcommand arguments. */
+/**
+ * Split a raw argument string into tokens, honouring single/double quotes so
+ * values like `--name "Alice Smith"` survive as one token. Agents routinely
+ * quote values; a naive whitespace split mangles them.
+ */
+export function tokenizeArgs(raw: string): string[] {
+  const tokens: string[] = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(raw)) !== null) {
+    tokens.push(match[1] ?? match[2] ?? match[3]!.replace(/^(["'])(.*)\1$/, '$2'));
+  }
+  return tokens;
+}
+
+/** Parse the `git-config` subcommand arguments (`--opt value` or `--opt=value`). */
 export function parseGitConfigArgs(tokens: string[]): GitConfigOptions | { error: string } {
   const opts: GitConfigOptions = {};
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i]!;
-    if (token === '--global') {
+    const eq = token.startsWith('--') ? token.indexOf('=') : -1;
+    const flag = eq === -1 ? token : token.slice(0, eq);
+    if (flag === '--global') {
       opts.global = true;
-    } else if (token === '--name' || token === '--email' || token === '--pat') {
-      const value = tokens[++i];
-      if (!value || value.startsWith('--')) return { error: `missing value for ${token}` };
-      if (token === '--name') opts.name = value;
-      else if (token === '--email') opts.email = value;
+    } else if (flag === '--name' || flag === '--email' || flag === '--pat') {
+      const value = eq === -1 ? tokens[++i] : token.slice(eq + 1);
+      if (!value || (eq === -1 && value.startsWith('--'))) {
+        return { error: `missing value for ${flag}` };
+      }
+      if (flag === '--name') opts.name = value;
+      else if (flag === '--email') opts.email = value;
       else opts.pat = value;
-    } else if (token.startsWith('--')) {
-      return { error: `unknown option ${token}` };
+    } else if (flag.startsWith('--')) {
+      return { error: `unknown option ${flag}` };
     } else if (opts.repoDir === undefined) {
       opts.repoDir = token;
     } else {
@@ -349,12 +369,16 @@ export function gitSetupAlreadyConfiguredNotice(record: GitSetupRecord): string[
 export function buildAc2Command(api: OpenClawApi): unknown {
   return {
     name: 'ac2',
-    description: 'AC2 channel control (pair, status, forget).',
+    description:
+      'AC2 channel control: pair | status | connections | forget | github-key | ' +
+      'git-config [repo-dir] [--global] [--name <github-username>] [--email <email>] ' +
+      '[--pat <token>]. `github-key` prints the wallet SSH signing key; `git-config` ' +
+      'wires wallet-signed commits (and HTTPS push with --pat) into a repo.',
     acceptsArgs: true,
     requireAuth: false,
     async handler(ctx: any): Promise<{ text: string; keepAlive?: boolean }> {
       const args = (ctx.args ?? '').trim();
-      const tokens = args.split(/\s+/).filter(Boolean);
+      const tokens = tokenizeArgs(args);
       const sub = tokens[0] ?? 'pair';
 
       if (sub === 'status') {
@@ -461,8 +485,8 @@ export function buildAc2Command(api: OpenClawApi): unknown {
           `Wrote allowed signers file:  ${assets.allowedSignersPath}`,
           ...(parsed.pat
             ? [
-                `Wrote push credentials:      ${join(resolveAc2StateDir(), 'git-credentials')} (0600)`,
-              ]
+              `Wrote push credentials:      ${join(resolveAc2StateDir(), 'git-credentials')} (0600)`,
+            ]
             : []),
           `Bridge socket:               ${gitSignSocketPath()}`,
           '',
@@ -694,7 +718,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
                 api,
                 'warn',
                 `[ac2] Refusing controller ${connectedAccountDid} — agent is already registered ` +
-                  `to ${boundControllerDid}. Operator must clear keys (\`ac2 forget\`) to re-register.`,
+                `to ${boundControllerDid}. Operator must clear keys (\`ac2 forget\`) to re-register.`,
               );
             } else if (bindingDecision === 'reuse' && storedIdentity) {
               ({ agentDid } = storedIdentity);
@@ -716,8 +740,8 @@ export function buildAc2Command(api: OpenClawApi): unknown {
                   api,
                   'warn',
                   `[ac2] linked account ${connectedAccountDid} differs from the granted ` +
-                    `controller ${storedIdentity.controllerDid}; keeping the granted identity ` +
-                    'to preserve conversation context.',
+                  `controller ${storedIdentity.controllerDid}; keeping the granted identity ` +
+                  'to preserve conversation context.',
                 );
               }
               // Migrate legacy plaintext material into the keystore.
@@ -758,7 +782,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
                 ) {
                   throw new BootstrapError(
                     `[ac2-open-claw] KeyResponse.from (${bootstrapped.controllerDid}) does not match ` +
-                      `the linked account (${connectedAccountDid}); refusing to grant identity.`,
+                    `the linked account (${connectedAccountDid}); refusing to grant identity.`,
                   );
                 }
                 controllerDid = connectedAccountDid ?? bootstrapped.controllerDid;
@@ -785,11 +809,11 @@ export function buildAc2Command(api: OpenClawApi): unknown {
             // Adapter to give `streamChannel` a `send` + `isOpen` surface.
             const streamSendable = streamTransport
               ? {
-                  send: (payload: string) => streamTransport.send(payload),
-                  get isOpen() {
-                    return streamTransport.readyState === 'open';
-                  },
-                }
+                send: (payload: string) => streamTransport.send(payload),
+                get isOpen() {
+                  return streamTransport.readyState === 'open';
+                },
+              }
               : undefined;
             const controlSendable = streamSendable ?? transport;
 
