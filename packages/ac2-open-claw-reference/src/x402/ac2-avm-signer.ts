@@ -221,7 +221,7 @@ export function createAc2AvmSigner(options: Ac2AvmSignerOptions): ClientAvmSigne
             }),
             payload_base64: base64(signingBytes),
             schema: X402_ALGORAND_SIGNING_SCHEMA,
-            sig_hint: 'raw-ed25519',
+            sig_hint: 'transaction-algorand',
             display_hint: 'hex',
             key_type: 'account',
           },
