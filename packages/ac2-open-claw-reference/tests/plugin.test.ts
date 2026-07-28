@@ -449,6 +449,14 @@ describe('ac2 plugin', () => {
 
       const decoded = decodeSignedTransaction(signed[0]!);
       expect(decoded.txn.txId()).toBe(txn.txId());
+      expect(decoded.txn.sender.toString()).toBe(sender.toString());
+      expect(decoded.txn.genesisId).toBe('testnet-v1.0');
+      expect(Buffer.from(decoded.txn.genesisHash ?? new Uint8Array()).toString('base64')).toBe(
+        Buffer.from(txn.genesisHash ?? new Uint8Array()).toString('base64'),
+      );
+      expect(decoded.txn.assetTransfer?.assetId).toBe(10_458_941n);
+      expect(decoded.txn.assetTransfer?.amount).toBe(123n);
+      expect(decoded.txn.assetTransfer?.receiver.toString()).toBe(receiver.toString());
       expect(Buffer.from(decoded.sig ?? new Uint8Array()).toString('base64')).toBe(
         Buffer.from(signature).toString('base64'),
       );
@@ -520,9 +528,18 @@ describe('ac2 plugin', () => {
       expect(signed[0]).toBeInstanceOf(Uint8Array);
       const decoded = decodeSignedTransaction(signed[0]!);
       expect(decoded.txn.sender.toString()).toBe(sender.toString());
+      expect(decoded.txn.genesisId).toBe('testnet-v1.0');
+      expect(Buffer.from(decoded.txn.genesisHash ?? new Uint8Array()).toString('base64')).toBe(
+        Buffer.from(txn.genesisHash ?? new Uint8Array()).toString('base64'),
+      );
+      expect(decoded.txn.assetTransfer?.assetId).toBe(10_458_941n);
+      expect(decoded.txn.assetTransfer?.amount).toBe(1_000n);
+      expect(decoded.txn.assetTransfer?.receiver.toString()).toBe(receiver.toString());
       expect(Buffer.from(decoded.sig ?? new Uint8Array()).toString('base64')).toBe(
         Buffer.from(signature).toString('base64'),
       );
+      expect(observedRequest.body.schema).toBe(X402_ALGORAND_SIGNING_SCHEMA);
+      expect(observedRequest.body.sig_hint).toBe('transaction-algorand');
     });
   });
 
