@@ -6,8 +6,11 @@ import { join } from 'node:path';
 
 import {
   applyGitConfigEntries,
+  gitSetupAlreadyConfiguredNotice,
   isMissingWebRtcError,
   parseGitConfigArgs,
+  readGitSetupRecord,
+  recordGitSetup,
   shouldSeedConnectionId,
 } from '../src/cli/ac2-command.js';
 
@@ -137,5 +140,33 @@ describe.runIf(hasGit)('applyGitConfigEntries', () => {
   it('fails when the target directory is not a git repository', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ac2-not-a-repo-'));
     expect(() => applyGitConfigEntries([['gpg.format', 'ssh']], { repoDir: dir })).toThrow();
+  });
+});
+
+describe('git setup marker', () => {
+  it('round-trips, accumulates targets, and keeps prior identity/pat', () => {
+    const prev = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = mkdtempSync(join(tmpdir(), 'ac2-marker-'));
+    try {
+      expect(readGitSetupRecord()).toBeUndefined();
+
+      recordGitSetup('/work/repo-a', { name: 'alice', email: 'a@ex.com', pat: 'tok' });
+      recordGitSetup('/work/repo-b', {});
+      recordGitSetup('/work/repo-a', {});
+
+      const record = readGitSetupRecord();
+      expect(record?.targets).toEqual(['/work/repo-a', '/work/repo-b']);
+      expect(record?.name).toBe('alice');
+      expect(record?.email).toBe('a@ex.com');
+      expect(record?.pat).toBe(true);
+
+      const notice = gitSetupAlreadyConfiguredNotice(record!).join('\n');
+      expect(notice).toContain('ALREADY CONFIGURED');
+      expect(notice).toContain('alice <a@ex.com>');
+      expect(notice).not.toContain('tok');
+    } finally {
+      if (prev === undefined) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = prev;
+    }
   });
 });

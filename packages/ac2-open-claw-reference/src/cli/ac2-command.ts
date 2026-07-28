@@ -1,7 +1,7 @@
 /** The `ac2` shell + slash command: `pair`, `status`, `connections`, `forget`, `github-key`, `git-config`. */
 
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -139,7 +139,8 @@ function webRtcUnavailableInstructions(): string {
  * An Algorand address *is* the account's Ed25519 key, so decoding it yields
  * the SSH signing key.
  */
-export function resolveWalletSigningPublicKey(): { address: string; publicKey: Uint8Array } | undefined {
+export function resolveWalletSigningPublicKey():
+  { address: string; publicKey: Uint8Array } | undefined {
   const active = sessionManager.getActive();
   const boundControllerDid = loadAc2State().identity?.controllerDid;
   const address = active
@@ -281,6 +282,70 @@ export function applyGitConfigEntries(
   }
 }
 
+/**
+ * Marker persisted after a successful `git-config` apply so later
+ * `github-key` / `git-config` runs can tell the agent that setup is already
+ * done and it must not loop back through the onboarding steps.
+ */
+export interface GitSetupRecord {
+  configuredAt: string;
+  /** Repo dirs (or the literal 'global') git-config has been applied to. */
+  targets: string[];
+  name?: string;
+  email?: string;
+  /** Whether push credentials (PAT) have been stored. */
+  pat?: boolean;
+}
+
+function gitSetupMarkerPath(): string {
+  return join(resolveAc2StateDir(), 'git-config.json');
+}
+
+/** Read the persisted git setup marker, or undefined when never applied. */
+export function readGitSetupRecord(): GitSetupRecord | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(gitSetupMarkerPath(), 'utf8')) as GitSetupRecord;
+    if (parsed && Array.isArray(parsed.targets)) return parsed;
+  } catch {
+    // Missing or corrupt marker — treat as not configured.
+  }
+  return undefined;
+}
+
+/** Record (or extend) the git setup marker after a successful apply. */
+export function recordGitSetup(target: string, opts: GitConfigOptions): void {
+  const prev = readGitSetupRecord();
+  const name = opts.name ?? prev?.name;
+  const email = opts.email ?? prev?.email;
+  const record: GitSetupRecord = {
+    configuredAt: new Date().toISOString(),
+    targets: [...new Set([...(prev?.targets ?? []), target])],
+    ...(name ? { name } : {}),
+    ...(email ? { email } : {}),
+    ...(opts.pat || prev?.pat ? { pat: true } : {}),
+  };
+  mkdirSync(resolveAc2StateDir(), { recursive: true, mode: 0o700 });
+  writeFileSync(gitSetupMarkerPath(), `${JSON.stringify(record, null, 2)}\n`);
+}
+
+/**
+ * Lines prepended to `github-key` output when setup has already completed —
+ * an explicit instruction so agents stop re-running the onboarding flow.
+ */
+export function gitSetupAlreadyConfiguredNotice(record: GitSetupRecord): string[] {
+  const identity = record.name
+    ? ` · identity: ${record.name}${record.email ? ` <${record.email}>` : ''}`
+    : '';
+  return [
+    `NOTE — git signing is ALREADY CONFIGURED (${record.targets.join(', ')}${identity}${record.pat ? ' · push credentials stored' : ''}).`,
+    'Agent: setup is done. Do NOT show this key again, do NOT re-ask for the',
+    'username/email/PAT, and do NOT re-run `ac2 git-config` unless the user',
+    'explicitly asks. Just run `git commit` in the configured repo — the wallet',
+    'will prompt for approval. The key below is for reference only.',
+    '',
+  ];
+}
+
 export function buildAc2Command(api: OpenClawApi): unknown {
   return {
     name: 'ac2',
@@ -362,8 +427,10 @@ export function buildAc2Command(api: OpenClawApi): unknown {
         const key = resolveWalletSigningPublicKey();
         if (!key) return { text: NO_WALLET_KEY_MESSAGE };
         const line = toAuthorizedKeyLine(key.publicKey, `ac2-${key.address.slice(0, 8)}`);
+        const record = readGitSetupRecord();
         return {
           text: [
+            ...(record ? gitSetupAlreadyConfiguredNotice(record) : []),
             `Wallet account: ${key.address}`,
             '',
             'SSH signing public key (Ed25519):',
@@ -394,8 +461,8 @@ export function buildAc2Command(api: OpenClawApi): unknown {
           `Wrote allowed signers file:  ${assets.allowedSignersPath}`,
           ...(parsed.pat
             ? [
-              `Wrote push credentials:      ${join(resolveAc2StateDir(), 'git-credentials')} (0600)`,
-            ]
+                `Wrote push credentials:      ${join(resolveAc2StateDir(), 'git-credentials')} (0600)`,
+              ]
             : []),
           `Bridge socket:               ${gitSignSocketPath()}`,
           '',
@@ -435,6 +502,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
           return { text: `git-config: failed to apply: ${detail}\n${GIT_CONFIG_USAGE}` };
         }
         const where = parsed.global ? 'global git config' : parsed.repoDir!;
+        recordGitSetup(parsed.global ? 'global' : parsed.repoDir!, parsed);
         return {
           text: [
             ...header,
@@ -444,6 +512,10 @@ export function buildAc2Command(api: OpenClawApi): unknown {
             ...(parsed.pat
               ? ['', '`git push` will authenticate over HTTPS with the stored token.']
               : []),
+            '',
+            'Setup for this target is COMPLETE. Agent: do not re-run `git-config` or',
+            '`github-key` for it again — just run `git commit` (the wallet prompts',
+            'for approval on every commit).',
             ...footer,
           ].join('\n'),
         };
@@ -622,7 +694,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
                 api,
                 'warn',
                 `[ac2] Refusing controller ${connectedAccountDid} — agent is already registered ` +
-                `to ${boundControllerDid}. Operator must clear keys (\`ac2 forget\`) to re-register.`,
+                  `to ${boundControllerDid}. Operator must clear keys (\`ac2 forget\`) to re-register.`,
               );
             } else if (bindingDecision === 'reuse' && storedIdentity) {
               ({ agentDid } = storedIdentity);
@@ -644,8 +716,8 @@ export function buildAc2Command(api: OpenClawApi): unknown {
                   api,
                   'warn',
                   `[ac2] linked account ${connectedAccountDid} differs from the granted ` +
-                  `controller ${storedIdentity.controllerDid}; keeping the granted identity ` +
-                  'to preserve conversation context.',
+                    `controller ${storedIdentity.controllerDid}; keeping the granted identity ` +
+                    'to preserve conversation context.',
                 );
               }
               // Migrate legacy plaintext material into the keystore.
@@ -686,7 +758,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
                 ) {
                   throw new BootstrapError(
                     `[ac2-open-claw] KeyResponse.from (${bootstrapped.controllerDid}) does not match ` +
-                    `the linked account (${connectedAccountDid}); refusing to grant identity.`,
+                      `the linked account (${connectedAccountDid}); refusing to grant identity.`,
                   );
                 }
                 controllerDid = connectedAccountDid ?? bootstrapped.controllerDid;
@@ -713,11 +785,11 @@ export function buildAc2Command(api: OpenClawApi): unknown {
             // Adapter to give `streamChannel` a `send` + `isOpen` surface.
             const streamSendable = streamTransport
               ? {
-                send: (payload: string) => streamTransport.send(payload),
-                get isOpen() {
-                  return streamTransport.readyState === 'open';
-                },
-              }
+                  send: (payload: string) => streamTransport.send(payload),
+                  get isOpen() {
+                    return streamTransport.readyState === 'open';
+                  },
+                }
               : undefined;
             const controlSendable = streamSendable ?? transport;
 
