@@ -3,10 +3,10 @@ name: ac2
 description: "How to use the AC2 channel to ask the user's connected wallet to sign bytes over a live WebRTC link. Use this whenever the user asks you to 'sign', 'approve', or 'authorize' something with their wallet — even if they don't say 'AC2'. The agent never holds keys; the wallet does."
 metadata:
   {
-    'openclaw':
+    "openclaw":
       {
-        'emoji': '🔐',
-        'requires': { 'config': ['plugins.entries.ac2.enabled'] },
+        "emoji": "🔐",
+        "requires": { "config": ["plugins.entries.ac2.enabled"] },
       },
   }
 ---
@@ -18,13 +18,13 @@ AC2 connects you to the **user's wallet** over a live WebRTC data channel hosted
 This is the **upstream reference** plugin. It exposes the core AC2 methods plus an x402 convenience tool that uses those same signing requests:
 
 - one channel: `ac2`
-- three tools: `ac2_capabilities`, `ac2_sign`, `ac2_x402_fetch`
+- four tools: `ac2_capabilities`, `ac2_sign`, `ac2_x402_fetch`, `ac2_git_sign`
 
 Chain-specific verifier tools (`ac2_verify_*`) and richer wallet introspection live in downstream wallet plugins. If you have them available, prefer them. If you don't, this skill is enough.
 
 ## The connection comes first
 
-`ac2_sign` and `ac2_x402_fetch` cannot pair on their own. They run through the `ac2` channel's already-paired DataChannel and reject with `{ status: "rejected", reason: "no_active_session" }` if no channel is connected. If you see that result:
+`ac2_sign`, `ac2_x402_fetch`, and `ac2_git_sign` cannot pair on their own. They run through the `ac2` channel's already-paired DataChannel and reject with `{ status: "rejected", reason: "no_active_session" }` if no channel is connected. If you see that result:
 
 1. Tell the user to open and connect their AC2 Controller / wallet on the `ac2` channel.
 2. Do **not** retry in a loop. Stop and wait for the user.
@@ -121,12 +121,34 @@ Important parameters:
 
 Treat `{ status: "rejected" }` as a normal user decision. Do not retry the same payment after a rejection.
 
+## Git commit signing over AC2
+
+The wallet's Ed25519 account key doubles as a **git/GitHub SSH signing key**. When the user asks you to "sign my commits", "make my commits verified", or to commit/push signed work to a repo, use this flow.
+
+**One-time setup (per machine / repo):**
+
+1. Run `openclaw ac2 github-key` (shell). It prints an `ssh-ed25519 …` line for the paired wallet. Ask the user to add it on GitHub under **Settings → SSH and GPG keys → New SSH key** with key type **Signing Key**. You cannot do this step for them.
+2. Ask the user (conversationally) for their **GitHub username** and **commit email** — GitHub only shows _Verified_ when the committer email matches their account. If they also want you to **push**, ask for a **fine-grained PAT scoped to just the target repo** (contents: read/write). Remind them the token is stored in a mode-0600 file on the agent host; never echo it back in chat.
+3. Apply everything in one shot:
+
+   ```bash
+   openclaw ac2 git-config <repo-dir> --name <github-username> --email <email> [--pat <token>]
+   ```
+
+   This writes the signing shim + allowed-signers file and runs all the `git config` commands in the target repo (`--global` instead of a repo dir also works). With `--pat` it also sets up an HTTPS credential store so `git push` authenticates. Run it with no repo dir to just print the commands instead.
+
+**Signing commits:** after setup, plain `git commit` (with `commit.gpgsign true`) routes automatically through the AC2 bridge — the wallet shows the user an approval like `Sign git commit: "…"` for **every commit**. Before making the **first** commit, confirm with the user that they have uploaded the key from step 1 to GitHub — make it clear that commits will be signed with **the Ed25519 key on their AC2 wallet**, and GitHub shows them as _Unverified_ until that key is registered as a signing key. You do not call any tool for this; just tell the user a wallet approval is coming before you run `git commit`, and treat a declined approval (commit fails) as a normal user decision.
+
+**`ac2_git_sign`** is the direct tool form: it signs an arbitrary git object payload (`payload_base64`) and returns the armored `SSH SIGNATURE` block plus the signer's key. Use it only when you need a detached git signature without running `git` (e.g. constructing a commit/tag by hand). Like `ac2_sign`, it rejects with `no_active_session` / `no_identity` when the channel or identity is missing — same rules apply: stop, explain, don't retry in a loop.
+
+Signing requires a **live paired session**: if `git commit` fails because the bridge is unreachable, ask the user to reconnect their wallet (`openclaw ac2 pair`), don't retry blindly.
+
 ## `sig_hint` catalog (what the core reference defines)
 
 `sig_hint` selects the curve the wallet uses. **Always set it explicitly.** Omitting it falls back to plain Ed25519 over raw bytes.
 
-| `sig_hint`      | `key_type` | Use                                            |
-| --------------- | ---------- | ---------------------------------------------- |
+| `sig_hint`      | `key_type`              | Use                                            |
+| --------------- | ----------------------- | ---------------------------------------------- |
 | `raw-ed25519`   | `account` or `identity` | Ed25519 signature over the raw payload bytes   |
 | `raw-secp256k1` | `account` or `identity` | secp256k1 signature over the raw payload bytes |
 

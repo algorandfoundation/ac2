@@ -79,7 +79,36 @@ export {
   type ChildSessionStatus,
 } from './channel/index.js';
 export { buildAc2Command } from './cli/index.js';
-export { buildSignTool, buildCapabilitiesTool, buildX402FetchTool } from './tools/index.js';
+export {
+  buildSignTool,
+  buildCapabilitiesTool,
+  buildX402FetchTool,
+  buildGitSignTool,
+} from './tools/index.js';
+export {
+  SSHSIG_NAMESPACE_GIT,
+  assembleSshSigArmor,
+  buildSshSigSignedData,
+  decodeSshSigArmor,
+  encodeSshEd25519PublicKey,
+  parseAuthorizedKeyLine,
+  toAuthorizedKeyLine,
+  verifyEd25519,
+  GIT_SIGN_SCHEMA,
+  describeGitPayload,
+  gitSignFlow,
+  parseExpectedPublicKey,
+  ensureGitSignBridge,
+  gitSignSocketPath,
+  resolveAc2StateDir,
+  stopGitSignBridge,
+  type DecodedSshSig,
+  type GitSignParams,
+  type GitSignResult,
+  type GitSignBridgeDeps,
+  type GitSignBridgeRequest,
+  type GitSignBridgeResponse,
+} from './git/index.js';
 export {
   X402_ALGORAND_SIGNING_SCHEMA,
   X402ControllerAddressError,

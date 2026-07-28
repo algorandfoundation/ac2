@@ -9,6 +9,7 @@ import { NoActiveSessionError } from '../session/manager.js';
 import { capabilitiesFlow, signFlow, type SignParams } from '../session/flows.js';
 import type { SigningRequestBody } from '@algorandfoundation/ac2-sdk/schema';
 import { normalizeX402FetchParams, x402FetchFlow } from '../x402/fetch-flow.js';
+import { gitSignFlow, type GitSignParams } from '../git/sign-flow.js';
 
 const TOOL_BODY_LIMIT_CHARS = 32_000;
 
@@ -61,8 +62,8 @@ export function buildSignTool(): AnyAgentTool {
           : {}),
         ...(typeof params.display_hint === 'string'
           ? {
-              display_hint: params.display_hint as SigningRequestBody['display_hint'],
-            }
+            display_hint: params.display_hint as SigningRequestBody['display_hint'],
+          }
           : {}),
         ...(typeof params.key_type === 'string'
           ? { key_type: params.key_type as SigningRequestBody['key_type'] }
@@ -207,6 +208,70 @@ export function buildCapabilitiesTool(): AnyAgentTool {
         content: [textResult(`${headline}\n\`\`\`json\n${body}\n\`\`\``)],
         details: result,
       };
+    },
+  };
+  return tool as unknown as AnyAgentTool;
+}
+
+export function buildGitSignTool(): AnyAgentTool {
+  const tool = {
+    name: 'ac2_git_sign',
+    label: 'AC2 · Git Sign',
+    description: findToolDescription('ac2_git_sign'),
+    parameters: findToolParametersSchema('ac2_git_sign'),
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+    ): Promise<{
+      content: Array<{ type: 'text'; text: string }>;
+      details: unknown;
+    }> {
+      const config = resolveConfig(getActiveApi() || ({} as any));
+      const gitParams: GitSignParams = {
+        payload_base64: String(params.payload_base64 ?? ''),
+        ...(typeof params.namespace === 'string' ? { namespace: params.namespace } : {}),
+        ...(typeof params.description === 'string' ? { description: params.description } : {}),
+        ...(typeof params.expected_public_key === 'string'
+          ? { expected_public_key: params.expected_public_key }
+          : {}),
+        ...(typeof params.expires_in_seconds === 'number'
+          ? { expires_in_seconds: params.expires_in_seconds }
+          : {}),
+      };
+      try {
+        const result = await gitSignFlow(gitParams, config);
+        if (result.status === 'rejected') {
+          return {
+            content: [textResult(`Git signing rejected: ${result.reason}`)],
+            details: result,
+          };
+        }
+        return {
+          content: [
+            textResult(
+              `Signed git object with key \`${result.authorized_key}\`:\n\`\`\`\n${result.armored}\`\`\``,
+            ),
+          ],
+          details: result,
+        };
+      } catch (err) {
+        if (err instanceof NoActiveSessionError) {
+          const details = { status: 'rejected', reason: err.code };
+          return {
+            content: [
+              textResult(
+                'Git signing rejected: no active AC2 channel session — open `/ac2` and pair your controller first.',
+              ),
+            ],
+            details,
+          };
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [textResult(`Git sign error: ${msg}`)],
+          details: { status: 'error', error: msg },
+        };
+      }
     },
   };
   return tool as unknown as AnyAgentTool;

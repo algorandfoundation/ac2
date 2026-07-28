@@ -8,6 +8,7 @@ import type { ChannelContext, PluginConfig } from './contracts.js';
 import { SessionManager, sessionManager } from './manager.js';
 import { bootstrapAgentIdentity } from './bootstrap.js';
 import { buildFinalizeFrame } from './flows.js';
+import { ensureGitSignBridge } from '../git/bridge.js';
 
 const DEFAULT_LIQUID_AUTH_SERVER = 'https://debug.liquidauth.com';
 
@@ -73,11 +74,11 @@ export async function runAc2Channel(
     // sub-agent completion announces) to emit thread-scoped `finalize` frames.
     const streamSendable = streamTransport
       ? {
-          send: (payload: string) => streamTransport.send(payload),
-          get isOpen() {
-            return streamTransport.readyState === 'open';
-          },
-        }
+        send: (payload: string) => streamTransport.send(payload),
+        get isOpen() {
+          return streamTransport.readyState === 'open';
+        },
+      }
       : undefined;
 
     // Agent → wallet (prefer `ac2-stream` when present).
@@ -128,6 +129,8 @@ export async function runAc2Channel(
         ...(streamSendable ? { controlTransport: streamSendable } : {}),
         ...(walletAddress !== undefined ? { walletAddress } : {}),
       });
+      // Serve git SSH-signing requests (`ac2-ssh-sign` shim) while active.
+      ensureGitSignBridge(config, { manager });
       context.logger?.info('[ac2-open-claw] channel connected; tools are live');
     } catch (err) {
       context.logger?.error(

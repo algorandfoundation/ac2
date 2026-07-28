@@ -10,7 +10,12 @@ import pluginManifest from './tools/manifest.js';
 import { PLUGIN_ID, setActiveApi, setActiveRuntime, type OpenClawApi } from './runtime.js';
 import { getToolPluginMetadata } from './session/contracts.js';
 import { sessionManager } from './session/manager.js';
-import { buildSignTool, buildCapabilitiesTool, buildX402FetchTool } from './tools/index.js';
+import {
+  buildSignTool,
+  buildCapabilitiesTool,
+  buildX402FetchTool,
+  buildGitSignTool,
+} from './tools/index.js';
 import { registerSubagentHooks } from './channel/subagent-hooks.js';
 import { cmdSetup, readChannelStatus } from './setup/config.js';
 import { listConnections } from './identity/state.js';
@@ -33,7 +38,10 @@ async function runAc2CommandHandler(
 ): Promise<{ text: string; keepAlive?: boolean }> {
   const { buildAc2Command } = await import('./cli/index.js');
   const command = buildAc2Command(api) as {
-    handler: (c: { args?: string; isCli?: boolean }) => Promise<{ text: string; keepAlive?: boolean }>;
+    handler: (c: {
+      args?: string;
+      isCli?: boolean;
+    }) => Promise<{ text: string; keepAlive?: boolean }>;
   };
   return command.handler(ctx);
 }
@@ -89,6 +97,9 @@ function runAc2SlashCommand(ctx: { args?: string }): { text: string } {
       '  openclaw ac2 connections  List known connections + agent identities.',
       '  openclaw ac2 forget       Clear the saved pairing record.',
       '  openclaw ac2 setup        Print/update channel configuration.',
+      '  openclaw ac2 github-key   Print the wallet key as a GitHub SSH signing key.',
+      '  openclaw ac2 git-config [repo-dir] [--name u] [--email e] [--pat t]',
+      '                            Wire git commit signing (and HTTPS push) through the AC2 wallet.',
     ].join('\n'),
   };
 }
@@ -208,6 +219,7 @@ function registerFull(api: OpenClawApi): void {
       api.registerTool(buildSignTool());
       api.registerTool(buildCapabilitiesTool());
       api.registerTool(buildX402FetchTool());
+      api.registerTool(buildGitSignTool());
     }
   } catch (err) {
     console.error(`[${PLUGIN_ID}] registerTool failed: ${err}`);

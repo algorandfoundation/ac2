@@ -2,8 +2,9 @@
 
 Reference [OpenClaw](https://docs.openclaw.ai/) plugin for the **AC2**
 protocol. It implements both the tool and channel interfaces — `ac2_sign`,
-`ac2_capabilities`, and `ac2_x402_fetch` tools plus the `ac2` channel — over
-Liquid Auth + WebRTC via [`@algorandfoundation/ac2-sdk`](../ac2-sdk).
+`ac2_capabilities`, `ac2_x402_fetch`, and `ac2_git_sign` tools plus the `ac2`
+channel — over Liquid Auth + WebRTC via
+[`@algorandfoundation/ac2-sdk`](../ac2-sdk).
 
 ## What AC2 contributes to OpenClaw
 
@@ -13,6 +14,7 @@ Liquid Auth + WebRTC via [`@algorandfoundation/ac2-sdk`](../ac2-sdk).
 | Tool `ac2_capabilities` | Agent DID, connected wallet address, and `sig_hint` catalog.              |
 | Tool `ac2_sign`         | Routes a `SigningRequest` and returns signature details to the agent.      |
 | Tool `ac2_x402_fetch`   | Pays x402 exact Algorand resources using wallet-approved AC2 signing.      |
+| Tool `ac2_git_sign`     | Produces a git-compatible SSHSIG signature approved by the wallet.         |
 | Setup entry             | `openclaw ac2 setup` writes the channel/tools wiring into `openclaw.json`. |
 
 **Channels own the lifecycle; tools are pure consumers.** The `ac2`
@@ -148,10 +150,75 @@ The underlying signing request still uses raw Ed25519 over Algorand
 transaction signing bytes (`TX`-prefixed bytes), with x402 payment and
 payload metadata available in the technical request details.
 
+## Git commit signing over AC2
+
+Git can sign commits with SSH keys (`gpg.format ssh`), and an SSHSIG
+signature is just a raw Ed25519 signature over a locally-constructed
+blob. Since an Algorand address *is* an Ed25519 public key, the paired
+wallet's account key doubles as a GitHub SSH signing key — no new key
+material, no protocol changes, and the private key never leaves the
+wallet.
+
+### One-time setup
+
+```bash
+openclaw ac2 github-key     # print the wallet's key as an ssh-ed25519 line
+```
+
+Add the printed line on GitHub under **Settings → SSH and GPG keys →
+New SSH key**, choosing key type **Signing Key**. Do this **before your
+first signed commit**: commits are signed with the Ed25519 key on your
+AC2 wallet, and GitHub marks them *Unverified* until that key is
+registered. Then apply the git wiring in one shot:
+
+```bash
+openclaw ac2 git-config <repo-dir> --name <github-username> --email <email> [--pat <token>]
+```
+
+This writes the signing shim + allowed-signers file and runs the
+`git config` commands in the target repo (`--global` also works;
+run with no repo dir to just print the commands):
+
+```bash
+git config gpg.format ssh
+git config user.signingkey 'key::ssh-ed25519 AAAA… ac2-<addr>'
+git config gpg.ssh.program '<state-dir>/ac2/ac2-ssh-sign'
+git config gpg.ssh.allowedSignersFile '<state-dir>/ac2/allowed_signers'
+git config commit.gpgsign true
+```
+
+`--name`/`--email` set the committer identity (GitHub shows *Verified*
+only when the email matches the account). `--pat` stores a fine-grained
+GitHub token in a mode-0600 credential file under the AC2 state dir and
+wires `credential.helper`, so `git push` over HTTPS authenticates —
+signing proves authorship, but pushing still needs its own credential.
+
+### How a commit gets signed
+
+1. `git commit` invokes the configured `gpg.ssh.program` shim exactly
+   like `ssh-keygen -Y sign`.
+2. The shim forwards the commit buffer over a mode-0600 Unix socket to
+   the **git-signing bridge**, which the `ac2` channel serves while a
+   session is active.
+3. The bridge builds the SSHSIG signed-data blob, routes a standard
+   `raw-ed25519` `SigningRequest` to the paired wallet, and the user
+   approves it (e.g. `Sign git commit: "feat: …"`).
+4. The bridge verifies the returned signature and public key (pinned to
+   the key git was configured with), assembles the armored
+   `SSH SIGNATURE` block, and the shim writes it where git expects.
+
+Signing requires an active `ac2` session (`openclaw ac2 pair`) — each
+commit is a wallet approval. `ac2_git_sign` exposes the same flow as a
+tool so the agent can sign arbitrary git objects with consent.
+
+Environment overrides: `AC2_GIT_SIGN_SOCKET` (bridge socket path) and
+`AC2_GIT_SIGN_TIMEOUT_MS` (shim approval timeout, default `180000`).
+
 ## Scope
 
 - ✅ Liquid Auth pairing, AC2 signing trio, `thid`-bound responses,
   channel-owned sessions, wallet-issued agent identity, x402 exact Algorand
-  paid fetch via wallet-approved signing.
+  paid fetch via wallet-approved signing, git/GitHub commit signing (SSHSIG)
+  via the wallet's account key.
 - ❌ Chain-specific verifiers, wallet introspection, holding user keys,
   a bundled Node WebRTC stack — these belong in downstream plugins.

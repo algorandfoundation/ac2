@@ -8,6 +8,7 @@ import { ConfigSchema, defineToolPlugin } from '../session/contracts.js';
 import { NoActiveSessionError } from '../session/manager.js';
 import { capabilitiesFlow, signFlow } from '../session/flows.js';
 import { normalizeX402FetchParams, x402FetchFlow } from '../x402/fetch-flow.js';
+import { gitSignFlow } from '../git/sign-flow.js';
 
 const plugin = defineToolPlugin({
   id: 'ac2',
@@ -74,8 +75,8 @@ const plugin = defineToolPlugin({
                 : {}),
               ...(params.display_hint !== undefined
                 ? {
-                    display_hint: params.display_hint as SigningRequestBody['display_hint'],
-                  }
+                  display_hint: params.display_hint as SigningRequestBody['display_hint'],
+                }
                 : {}),
               ...(params.key_type !== undefined
                 ? { key_type: params.key_type as SigningRequestBody['key_type'] }
@@ -195,6 +196,78 @@ const plugin = defineToolPlugin({
       async execute(params, config, context) {
         context.signal?.throwIfAborted();
         return x402FetchFlow(normalizeX402FetchParams(params), config, {}, context);
+      },
+    }),
+    tool({
+      name: 'ac2_git_sign',
+      label: 'AC2 Git Sign',
+      description:
+        'Sign a git commit or tag object over the active `ac2` channel using SSH signing (SSHSIG). ' +
+        'Pass the raw git object bytes (the commit buffer, without any gpgsig header) as base64; the ' +
+        'tool builds the SSHSIG signed-data blob, asks the paired wallet for a raw Ed25519 signature, ' +
+        "and returns the armored `SSH SIGNATURE` block plus the signer's `ssh-ed25519` public key. " +
+        'That key must be registered on GitHub as an SSH *signing* key for commits to show "Verified". ' +
+        'For normal `git commit -S` usage prefer `openclaw ac2 git-config`, which wires git to sign ' +
+        'through this plugin automatically. Requires an active `ac2` channel; otherwise rejects with ' +
+        '`no_active_session`.',
+      parameters: Type.Object({
+        payload_base64: Type.String({
+          description:
+            'Base64 of the raw git object bytes to sign (e.g. output of `git cat-file commit HEAD` ' +
+            'without a gpgsig header).',
+        }),
+        namespace: Type.Optional(
+          Type.String({
+            description: "SSHSIG namespace. git always signs under 'git' (the default).",
+          }),
+        ),
+        description: Type.Optional(
+          Type.String({
+            description:
+              'Human-readable purpose shown in the wallet. Derived from the commit subject when omitted.',
+          }),
+        ),
+        expected_public_key: Type.Optional(
+          Type.String({
+            description:
+              'Expected signer key as an `ssh-ed25519 AAAA…` line (or base64 raw 32-byte key). ' +
+              'Responses signed by any other key are rejected.',
+          }),
+        ),
+        expires_in_seconds: Type.Optional(
+          Type.Number({
+            description: 'Optional TTL for the wallet approval.',
+          }),
+        ),
+      }),
+      async execute(params, config, context) {
+        context.signal?.throwIfAborted();
+        try {
+          return await gitSignFlow(
+            {
+              payload_base64: params.payload_base64 ?? '',
+              ...(params.namespace !== undefined ? { namespace: params.namespace } : {}),
+              ...(params.description !== undefined ? { description: params.description } : {}),
+              ...(params.expected_public_key !== undefined
+                ? { expected_public_key: params.expected_public_key }
+                : {}),
+              ...(params.expires_in_seconds !== undefined
+                ? { expires_in_seconds: params.expires_in_seconds }
+                : {}),
+            },
+            config,
+            {},
+            context,
+          );
+        } catch (err) {
+          if (err instanceof NoActiveSessionError) {
+            return {
+              status: 'rejected' as const,
+              reason: err.code,
+            };
+          }
+          throw err;
+        }
       },
     }),
   ],
