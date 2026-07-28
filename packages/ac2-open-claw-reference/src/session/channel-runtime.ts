@@ -56,6 +56,13 @@ export async function runAc2Channel(
   const renderQr = deps.renderQr ?? renderPairingQr;
   const manager = deps.manager ?? sessionManager;
 
+  // Serve the git-signing bridge for the whole channel lifetime, not just
+  // while a session is active: an idle bridge answers `no_active_session`
+  // (clear, actionable) instead of leaving a dead socket that makes the
+  // `ac2-ssh-sign` shim fail with "cannot reach the bridge" after a gateway
+  // restart.
+  ensureGitSignBridge(config, { manager });
+
   const { pairing, connect } = await provider.startPairing({
     ...(context.signal !== undefined ? { signal: context.signal } : {}),
     timeoutMs: config.defaultTimeoutMs ?? 120_000,
