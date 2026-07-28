@@ -192,7 +192,7 @@ export function cmdSetup(): string {
 
   // 5. tools.alsoAllow — permit ac2_* tools
   {
-    const toolNames = ['ac2_sign', 'ac2_capabilities', 'ac2_x402_fetch'];
+    const toolNames = ['ac2_sign', 'ac2_capabilities', 'ac2_x402_fetch', 'ac2_git_sign'];
     const alsoAllow = getAtPath(config, 'tools.alsoAllow') ?? [];
     if (Array.isArray(alsoAllow)) {
       const missing = toolNames.filter((n) => !alsoAllow.includes(n));
