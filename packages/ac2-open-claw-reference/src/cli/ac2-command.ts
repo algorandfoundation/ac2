@@ -1,4 +1,6 @@
-/** The `ac2` shell + slash command: `pair`, `status`, `connections`, `forget`. */
+/** The `ac2` shell + slash command: `pair`, `status`, `connections`, `forget`, `github-key`, `git-config`. */
+
+import { join } from 'node:path';
 
 import qrcode from 'qrcode-terminal';
 import { Ac2Client } from '@algorandfoundation/ac2-sdk';
@@ -8,6 +10,20 @@ import { readChannelStatus } from '../setup/config.js';
 import { BootstrapError, bootstrapAgentIdentity } from '../session/bootstrap.js';
 import type { ChannelContext } from '../session/contracts.js';
 import { sessionManager } from '../session/manager.js';
+import { ensureGitSignBridge, gitSignSocketPath, resolveAc2StateDir } from '../git/bridge.js';
+import { toAuthorizedKeyLine } from '../git/sshsig.js';
+import {
+  GIT_CONFIG_USAGE,
+  NO_WALLET_KEY_MESSAGE,
+  applyGitConfigEntries,
+  buildGitConfigEntries,
+  gitSetupAlreadyConfiguredNotice,
+  parseGitConfigArgs,
+  readGitSetupRecord,
+  recordGitSetup,
+  resolveWalletSigningPublicKey,
+  writeGitSigningAssets,
+} from '../git/config.js';
 import {
   clearAc2State,
   ensureConversation,
@@ -117,15 +133,34 @@ function webRtcUnavailableInstructions(): string {
   ].join('\n');
 }
 
+/**
+ * Split a raw argument string into tokens, honouring single/double quotes so
+ * values like `--name "Alice Smith"` survive as one token. Agents routinely
+ * quote values; a naive whitespace split mangles them.
+ */
+export function tokenizeArgs(raw: string): string[] {
+  const tokens: string[] = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(raw)) !== null) {
+    tokens.push(match[1] ?? match[2] ?? match[3]!.replace(/^(["'])(.*)\1$/, '$2'));
+  }
+  return tokens;
+}
+
 export function buildAc2Command(api: OpenClawApi): unknown {
   return {
     name: 'ac2',
-    description: 'AC2 channel control (pair, status, forget).',
+    description:
+      'AC2 channel control: pair | status | connections | forget | github-key | ' +
+      'git-config [repo-dir] [--global] [--name <github-username>] [--email <email>] ' +
+      '[--pat <token>]. `github-key` prints the wallet SSH signing key; `git-config` ' +
+      'wires wallet-signed commits (and HTTPS push with --pat) into a repo.',
     acceptsArgs: true,
     requireAuth: false,
     async handler(ctx: any): Promise<{ text: string; keepAlive?: boolean }> {
       const args = (ctx.args ?? '').trim();
-      const tokens = args.split(/\s+/).filter(Boolean);
+      const tokens = tokenizeArgs(args);
       const sub = tokens[0] ?? 'pair';
 
       if (sub === 'status') {
@@ -192,6 +227,104 @@ export function buildAc2Command(api: OpenClawApi): unknown {
         clearAc2State();
         clearAgentIdentities();
         return { text: 'Pairing record cleared.' };
+      }
+
+      if (sub === 'github-key') {
+        const key = resolveWalletSigningPublicKey();
+        if (!key) return { text: NO_WALLET_KEY_MESSAGE };
+        const line = toAuthorizedKeyLine(key.publicKey, `ac2-${key.address.slice(0, 8)}`);
+        const record = readGitSetupRecord();
+        return {
+          text: [
+            ...(record ? gitSetupAlreadyConfiguredNotice(record) : []),
+            `Wallet account: ${key.address}`,
+            '',
+            'SSH signing public key (Ed25519):',
+            '',
+            `  ${line}`,
+            '',
+            'Add it on GitHub: Settings → SSH and GPG keys → New SSH key →',
+            'Key type: "Signing Key". Commits signed over AC2 then show as Verified',
+            'when the committer email matches your GitHub account.',
+            '',
+            'Then wire git to sign through AC2 with: openclaw ac2 git-config',
+          ].join('\n'),
+        };
+      }
+
+      if (sub === 'git-config') {
+        const parsed = parseGitConfigArgs(tokens.slice(1));
+        if ('error' in parsed) {
+          return { text: `git-config: ${parsed.error}\n${GIT_CONFIG_USAGE}` };
+        }
+        const key = resolveWalletSigningPublicKey();
+        if (!key) return { text: NO_WALLET_KEY_MESSAGE };
+        const line = toAuthorizedKeyLine(key.publicKey, `ac2-${key.address.slice(0, 8)}`);
+        const assets = writeGitSigningAssets(line);
+        const entries = buildGitConfigEntries(line, assets, parsed);
+        const header = [
+          `Wrote signing shim wrapper:  ${assets.wrapperPath}`,
+          `Wrote allowed signers file:  ${assets.allowedSignersPath}`,
+          ...(parsed.pat
+            ? [
+              `Wrote push credentials:      ${join(resolveAc2StateDir(), 'git-credentials')} (0600)`,
+            ]
+            : []),
+          `Bridge socket:               ${gitSignSocketPath()}`,
+          '',
+        ];
+        const footer = [
+          '',
+          'Before your first commit: commits are signed with the Ed25519 key on',
+          'your AC2 wallet, so add that key to GitHub first (run `openclaw ac2',
+          'github-key` to print it, then GitHub → Settings → SSH and GPG keys →',
+          'New SSH key → key type "Signing Key"). Until it is uploaded, GitHub',
+          'will show commits as Unverified.',
+          '',
+          'Signing requires an active `ac2` session (`openclaw ac2 pair`): each',
+          'commit sends an approval request to the paired wallet.',
+        ];
+
+        if (!parsed.repoDir && !parsed.global) {
+          return {
+            text: [
+              ...header,
+              'Run these in the repo you want signed:',
+              '',
+              ...entries.map(([k, v]) => `  git config ${k} '${v}'`),
+              '',
+              'Or apply everything in one shot (add --pat to enable `git push` over HTTPS):',
+              '',
+              '  openclaw ac2 git-config <repo-dir> --name <github-username> --email <email> [--pat <token>]',
+              ...footer,
+            ].join('\n'),
+          };
+        }
+
+        try {
+          applyGitConfigEntries(entries, parsed);
+        } catch (err) {
+          const detail = err instanceof Error ? err.message.trim() : String(err);
+          return { text: `git-config: failed to apply: ${detail}\n${GIT_CONFIG_USAGE}` };
+        }
+        const where = parsed.global ? 'global git config' : parsed.repoDir!;
+        recordGitSetup(parsed.global ? 'global' : parsed.repoDir!, parsed);
+        return {
+          text: [
+            ...header,
+            `Applied ${entries.length} git config setting(s) to ${where}:`,
+            '',
+            ...entries.map(([k]) => `  \u2713 ${k}`),
+            ...(parsed.pat
+              ? ['', '`git push` will authenticate over HTTPS with the stored token.']
+              : []),
+            '',
+            'Setup for this target is COMPLETE. Agent: do not re-run `git-config` or',
+            '`github-key` for it again — just run `git commit` (the wallet prompts',
+            'for approval on every commit).',
+            ...footer,
+          ].join('\n'),
+        };
       }
 
       if (sub === 'pair') {
@@ -367,7 +500,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
                 api,
                 'warn',
                 `[ac2] Refusing controller ${connectedAccountDid} — agent is already registered ` +
-                  `to ${boundControllerDid}. Operator must clear keys (\`ac2 forget\`) to re-register.`,
+                `to ${boundControllerDid}. Operator must clear keys (\`ac2 forget\`) to re-register.`,
               );
             } else if (bindingDecision === 'reuse' && storedIdentity) {
               ({ agentDid } = storedIdentity);
@@ -389,8 +522,8 @@ export function buildAc2Command(api: OpenClawApi): unknown {
                   api,
                   'warn',
                   `[ac2] linked account ${connectedAccountDid} differs from the granted ` +
-                    `controller ${storedIdentity.controllerDid}; keeping the granted identity ` +
-                    'to preserve conversation context.',
+                  `controller ${storedIdentity.controllerDid}; keeping the granted identity ` +
+                  'to preserve conversation context.',
                 );
               }
               // Migrate legacy plaintext material into the keystore.
@@ -480,6 +613,9 @@ export function buildAc2Command(api: OpenClawApi): unknown {
               ...(walletAddress ? { walletAddress } : {}),
               ...(connectionRequestId ? { requestId: connectionRequestId } : {}),
             });
+            // Serve git SSH-signing requests (`ac2-ssh-sign` shim) while a
+            // session is active. Idempotent across reconnect cycles.
+            ensureGitSignBridge(cfg);
             safeLog(
               api,
               'info',
@@ -676,7 +812,9 @@ export function buildAc2Command(api: OpenClawApi): unknown {
         };
       }
 
-      return { text: `Unknown subcommand: ${sub}. Use 'pair', 'status', or 'forget'.` };
+      return {
+        text: `Unknown subcommand: ${sub}. Use 'pair', 'status', 'connections', 'forget', 'github-key', or 'git-config'.`,
+      };
     },
   };
 }

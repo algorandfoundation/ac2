@@ -203,3 +203,9 @@ This reference plugin additionally exposes `ac2_x402_fetch` as
 `ac2-ext-x402/fetch`. It is an application/tool capability, not a new AC2 wire
 message: x402 Algorand payments still use ordinary `ac2/SigningRequest`
 messages for wallet approval.
+
+It also exposes `ac2_git_sign` (and a local git-signing bridge used by
+`git commit` via `gpg.ssh.program`) as `ac2-ext-git/sign`. This too is a
+tool capability, not a wire extension: the SSHSIG signed-data blob is built
+locally and signed with an ordinary `ac2/SigningRequest` using
+`sig_hint: raw-ed25519` over the wallet's account key.
