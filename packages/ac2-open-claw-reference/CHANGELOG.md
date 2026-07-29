@@ -1,3 +1,17 @@
+# [ac2-open-claw-reference@1.0.0-canary.23](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.22...ac2-open-claw-reference@1.0.0-canary.23) (2026-07-28)
+
+
+### Bug Fixes
+
+* use transaction-algorand sig_hint for human-readable Algorand tx… ([#38](https://github.com/algorandfoundation/ac2/issues/38)) ([c763a3c](https://github.com/algorandfoundation/ac2/commit/c763a3c0753c102d5d03c5329602504cddea43c5))
+
+# [ac2-open-claw-reference@1.0.0-canary.22](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.21...ac2-open-claw-reference@1.0.0-canary.22) (2026-07-28)
+
+
+### Bug Fixes
+
+* **openclaw:** support AC2 plugin updates ([#37](https://github.com/algorandfoundation/ac2/issues/37)) ([61a3e6f](https://github.com/algorandfoundation/ac2/commit/61a3e6fde0f5c9608887b542db0d95615bc17726))
+
 # [ac2-open-claw-reference@1.0.0-canary.21](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.20...ac2-open-claw-reference@1.0.0-canary.21) (2026-07-27)
 
 

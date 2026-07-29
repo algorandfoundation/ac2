@@ -449,19 +449,25 @@ describe('ac2 plugin', () => {
 
       const decoded = decodeSignedTransaction(signed[0]!);
       expect(decoded.txn.txId()).toBe(txn.txId());
+      expect(decoded.txn.sender.toString()).toBe(sender.toString());
+      expect(decoded.txn.genesisId).toBe('testnet-v1.0');
+      expect(Buffer.from(decoded.txn.genesisHash ?? new Uint8Array()).toString('base64')).toBe(
+        Buffer.from(txn.genesisHash ?? new Uint8Array()).toString('base64'),
+      );
+      expect(decoded.txn.assetTransfer?.assetId).toBe(10_458_941n);
+      expect(decoded.txn.assetTransfer?.amount).toBe(123n);
+      expect(decoded.txn.assetTransfer?.receiver.toString()).toBe(receiver.toString());
       expect(Buffer.from(decoded.sig ?? new Uint8Array()).toString('base64')).toBe(
         Buffer.from(signature).toString('base64'),
       );
       expect(observedRequest.body.schema).toBe(X402_ALGORAND_SIGNING_SCHEMA);
-      expect(observedRequest.body.sig_hint).toBe('raw-ed25519');
+      expect(observedRequest.body.sig_hint).toBe('transaction-algorand');
       expect(observedRequest.body.key_type).toBe('account');
       expect(observedRequest.body.payload).toBe(expectedPayload);
       expect(observedRequest.body.payload).not.toBe(rawUnsignedPayload);
       expect(observedRequest.body.description).toContain('Approve x402 payment for Weather data.');
-      expect(observedRequest.body.description).toContain('Payment: 123 of asset 10458941');
-      expect(observedRequest.body.description).toContain('Network: Algorand TestNet.');
       expect(observedRequest.body.description).toContain(
-        `${receiver.toString().slice(0, 8)}...${receiver.toString().slice(-6)}`,
+        'Resource: https://example.x402.goplausible.xyz/avm/weather · application/json',
       );
       expect(observedRequest.body.description).not.toContain(receiver.toString());
     });
@@ -520,12 +526,20 @@ describe('ac2 plugin', () => {
       expect(capabilitiesFlow({}, { manager }).session.walletAddress).toBe(sender.toString());
       const signed = await signer.signTransactions([encodeTransactionRaw(txn)], [0]);
       expect(signed[0]).toBeInstanceOf(Uint8Array);
-      expect(observedRequest.body.description).toContain(
-        `as ${sender.toString().slice(0, 8)}...${sender.toString().slice(-6)}`,
+      const decoded = decodeSignedTransaction(signed[0]!);
+      expect(decoded.txn.sender.toString()).toBe(sender.toString());
+      expect(decoded.txn.genesisId).toBe('testnet-v1.0');
+      expect(Buffer.from(decoded.txn.genesisHash ?? new Uint8Array()).toString('base64')).toBe(
+        Buffer.from(txn.genesisHash ?? new Uint8Array()).toString('base64'),
       );
-      expect(observedRequest.body.description).toContain(
-        `Sender: ${sender.toString().slice(0, 8)}...${sender.toString().slice(-6)}`,
+      expect(decoded.txn.assetTransfer?.assetId).toBe(10_458_941n);
+      expect(decoded.txn.assetTransfer?.amount).toBe(1_000n);
+      expect(decoded.txn.assetTransfer?.receiver.toString()).toBe(receiver.toString());
+      expect(Buffer.from(decoded.sig ?? new Uint8Array()).toString('base64')).toBe(
+        Buffer.from(signature).toString('base64'),
       );
+      expect(observedRequest.body.schema).toBe(X402_ALGORAND_SIGNING_SCHEMA);
+      expect(observedRequest.body.sig_hint).toBe('transaction-algorand');
     });
   });
 
