@@ -1,19 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  applyGitConfigEntries,
-  gitSetupAlreadyConfiguredNotice,
   isMissingWebRtcError,
-  parseGitConfigArgs,
-  readGitSetupRecord,
-  recordGitSetup,
   shouldSeedConnectionId,
   tokenizeArgs,
 } from '../src/cli/ac2-command.js';
+import {
+  applyGitConfigEntries,
+  gitSetupAlreadyConfiguredNotice,
+  parseGitConfigArgs,
+  readGitSetupRecord,
+  recordGitSetup,
+  writeGitSigningAssets,
+} from '../src/git/config.js';
 
 function moduleLoadError(
   code: 'ERR_MODULE_NOT_FOUND' | 'MODULE_NOT_FOUND',
@@ -167,6 +170,32 @@ describe.runIf(hasGit)('applyGitConfigEntries', () => {
   it('fails when the target directory is not a git repository', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ac2-not-a-repo-'));
     expect(() => applyGitConfigEntries([['gpg.format', 'ssh']], { repoDir: dir })).toThrow();
+  });
+});
+
+describe('writeGitSigningAssets', () => {
+  it('bakes the bridge socket path into the wrapper as an overridable default', () => {
+    const prev = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = mkdtempSync(join(tmpdir(), 'ac2-assets-'));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const keyLine = 'ssh-ed25519 AAAA test';
+      const { wrapperPath, allowedSignersPath } = writeGitSigningAssets(keyLine);
+
+      const wrapper = readFileSync(wrapperPath, 'utf8');
+      // Baked at config time so git's (possibly different) shell environment
+      // cannot resolve a divergent path — but an explicit env var still wins.
+      expect(wrapper).toContain(
+        `: "\${AC2_GIT_SIGN_SOCKET:=${join(stateDir, 'ac2', 'git-sign.sock')}}"`,
+      );
+      expect(wrapper).toContain('export AC2_GIT_SIGN_SOCKET');
+      expect(wrapper).toContain(`exec "${process.execPath}"`);
+
+      expect(readFileSync(allowedSignersPath, 'utf8')).toBe(`* namespaces="git" ${keyLine}\n`);
+    } finally {
+      if (prev === undefined) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = prev;
+    }
   });
 });
 

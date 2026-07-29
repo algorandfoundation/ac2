@@ -13,7 +13,7 @@ import {
     stopGitSignBridge,
     type GitSignBridgeResponse,
 } from '../src/git/bridge.js';
-import { runShim, parseShimArgs, shimSocketPath } from '../src/git/shim.js';
+import { runShim, parseShimArgs } from '../src/git/shim.js';
 import {
     buildSshSigSignedData,
     decodeSshSigArmor,
@@ -146,13 +146,21 @@ describe('ac2-ssh-sign shim', () => {
         expect(args).toEqual({ namespace: 'git', keyfile: '/tmp/key', payloadFile: '/tmp/buf' });
     });
 
-    it('resolves the socket path from AC2_GIT_SIGN_SOCKET first', () => {
-        expect(shimSocketPath({ AC2_GIT_SIGN_SOCKET: '/tmp/x.sock' } as NodeJS.ProcessEnv)).toBe(
-            '/tmp/x.sock',
+    it('refuses to guess the socket path when AC2_GIT_SIGN_SOCKET is missing', async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'ac2-shim-'));
+        const payloadFile = join(dir, 'commit-buffer');
+        writeFileSync(payloadFile, COMMIT);
+
+        const errors: string[] = [];
+        const code = await runShim(
+            ['-Y', 'sign', '-n', 'git', payloadFile],
+            {} as NodeJS.ProcessEnv,
+            (msg) => errors.push(msg),
         );
-        expect(shimSocketPath({ OPENCLAW_STATE_DIR: '/state' } as NodeJS.ProcessEnv)).toBe(
-            '/state/ac2/git-sign.sock',
-        );
+        expect(code).toBe(1);
+        expect(errors.join('\n')).toContain('AC2_GIT_SIGN_SOCKET');
+        expect(errors.join('\n')).toContain('openclaw ac2 git-config');
+        expect(existsSync(`${payloadFile}.sig`)).toBe(false);
     });
 
     it('writes <payload>.sig for git end-to-end through the bridge', async () => {

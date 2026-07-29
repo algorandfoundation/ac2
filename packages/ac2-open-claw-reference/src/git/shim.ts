@@ -17,8 +17,6 @@
 
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { parseAuthorizedKeyLine } from './sshsig.js';
@@ -29,17 +27,6 @@ interface ShimArgs {
     namespace: string;
     keyfile?: string;
     payloadFile?: string;
-}
-
-/** Resolve the bridge socket path (mirrors `gitSignSocketPath`, dependency-free). */
-export function shimSocketPath(env: NodeJS.ProcessEnv = process.env): string {
-    const fromEnv = env['AC2_GIT_SIGN_SOCKET']?.trim();
-    if (fromEnv) return fromEnv;
-    const stateDir =
-        env['OPENCLAW_STATE_DIR']?.trim() ||
-        env['OPENCLAW_HOME']?.trim() ||
-        join(homedir(), '.openclaw');
-    return join(stateDir, 'ac2', 'git-sign.sock');
 }
 
 /** Parse the ssh-keygen-style argv git passes. Flags we don't need are skipped. */
@@ -156,11 +143,24 @@ export async function runShim(
         }
     }
 
+    // The wrapper written by `openclaw ac2 git-config` always exports the
+    // socket path (resolved at config time, when the OPENCLAW_* env is
+    // known); re-deriving it here from the committing shell's environment
+    // is what we must NOT do — it can differ from the bridge's.
+    const socketPath = env['AC2_GIT_SIGN_SOCKET']?.trim();
+    if (!socketPath) {
+        stderr(
+            'ac2-ssh-sign: AC2_GIT_SIGN_SOCKET is not set — run this via the wrapper ' +
+            'written by `openclaw ac2 git-config` (re-run it to regenerate).',
+        );
+        return 1;
+    }
+
     const timeoutMs = Number(env['AC2_GIT_SIGN_TIMEOUT_MS'] ?? '') || DEFAULT_TIMEOUT_MS;
     let response: BridgeResponse;
     try {
         response = await requestSignature(
-            shimSocketPath(env),
+            socketPath,
             {
                 v: 1,
                 payload_base64: payload.toString('base64'),
