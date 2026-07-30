@@ -1,4 +1,9 @@
-/** Session domain: plugin contracts, the session manager, bootstrap, and flows. */
+/**
+ * Session domain: plugin contracts, the session manager, and flows.
+ *
+ * Wallet identity bootstrap now lives in `@algorandfoundation/ac2-cli`
+ * (`@algorandfoundation/ac2-cli/session/bootstrap`).
+ */
 
 export {
   defineToolPlugin,
@@ -6,7 +11,6 @@ export {
   ConfigSchema,
   type PluginConfig,
   type ToolContext,
-  type ChannelContext,
   type DefineToolPluginOptions,
   type DefinedToolPluginEntry,
   type ToolPluginExecutionContext,
@@ -22,19 +26,29 @@ export {
 export {
   controllerDidToAlgorandAddress,
   sessionAlgorandAddress,
+  walletAccountAlgorandAddress,
+  type WalletAccountFacts,
 } from './wallet-address.js';
-export {
-  BootstrapError,
-  bootstrapAgentIdentity,
-  deriveAgentDidFromKeyResponse,
-} from './bootstrap.js';
+// `signFlow`/`capabilitiesFlow` act on an in-process pairing session only; the
+// `resolve*` variants also consult the daemon that owns the wallet connection
+// and are what the tools use.
 export {
   buildFinalizeFrame,
   signFlow,
   capabilitiesFlow,
+  capabilitiesFromDaemon,
+  resolveCapabilities,
+  signViaDaemon,
+  resolveSign,
+  resolveWalletAccount,
   type SignParams,
   type SignResult,
   type SignDeps,
   type CapabilitiesResult,
+  type DaemonCapabilitiesDeps,
+  type ResolveCapabilitiesDeps,
+  type SignViaDaemonDeps,
+  type ResolveSignDeps,
+  type ResolveWalletAccountDeps,
+  type ResolvedWalletAccount,
 } from './flows.js';
-export { runAc2Channel, renderPairingQr, type ChannelDeps } from './channel-runtime.js';

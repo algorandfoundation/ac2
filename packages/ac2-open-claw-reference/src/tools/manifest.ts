@@ -6,7 +6,11 @@ import type { SigningRequestBody } from '@algorandfoundation/ac2-sdk/schema';
 // transport-free so `entry.ts` can read it during cold start.
 import { ConfigSchema, defineToolPlugin } from '../session/contracts.js';
 import { NoActiveSessionError } from '../session/manager.js';
-import { capabilitiesFlow, signFlow } from '../session/flows.js';
+// Daemon-aware resolvers, NOT the local-only `signFlow`/`capabilitiesFlow`:
+// the daemon owns the wallet connection, so a tool that only consults this
+// process's pairing session reports "not connected" whenever it runs inside
+// the agent/gateway process (i.e. always, in practice).
+import { resolveCapabilities, resolveSign } from '../session/flows.js';
 import { normalizeX402FetchParams, x402FetchFlow } from '../x402/fetch-flow.js';
 
 const plugin = defineToolPlugin({
@@ -64,7 +68,7 @@ const plugin = defineToolPlugin({
       async execute(params, config, context) {
         context.signal?.throwIfAborted();
         try {
-          return await signFlow(
+          return await resolveSign(
             {
               description: params.description ?? '',
               payload_base64: params.payload_base64 ?? '',
@@ -113,7 +117,7 @@ const plugin = defineToolPlugin({
         ),
       }),
       async execute(_params, config, _context) {
-        return capabilitiesFlow(config);
+        return await resolveCapabilities(config);
       },
     }),
     tool({

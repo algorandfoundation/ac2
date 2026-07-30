@@ -22,6 +22,9 @@ catalogs:
       specifier: ~5.8.3
       version: 5.8.3
 
+overrides:
+  '@algorandfoundation/keystore-core': file:packages/ac2-cli/vendor/algorandfoundation-keystore-core-1.0.0-canary.16.tgz
+
 patchedDependencies:
   '@semantic-release/npm@13.1.5':
     hash: f8fb36b515bbe8990c2498aa928100d1676d2af288ea16a4656a8827c9458e76
@@ -72,47 +75,69 @@ importers:
         specifier: 'catalog:'
         version: 5.8.3
 
-  packages/ac2-open-claw-reference:
+  packages/ac2-cli:
     dependencies:
       '@algorandfoundation/ac2-sdk':
-        specifier: 1.0.0-canary.1
-        version: 1.0.0-canary.1
-      '@algorandfoundation/algokit-utils':
-        specifier: 10.0.0-beta.4
-        version: 10.0.0-beta.4
-      '@algorandfoundation/keystore':
-        specifier: 1.0.0-canary.16
-        version: 1.0.0-canary.16(@tanstack/store@0.9.3)(before-after-hook@4.0.0)
-      '@algorandfoundation/liquid-client':
-        specifier: 1.0.0-canary.8
-        version: 1.0.0-canary.8(socket.io-client@4.8.3)
+        specifier: workspace:*
+        version: link:../ac2-sdk
+      '@algorandfoundation/keystore-node':
+        specifier: file:vendor/algorandfoundation-keystore-node-1.0.0-canary.16.tgz
+        version: file:packages/ac2-cli/vendor/algorandfoundation-keystore-node-1.0.0-canary.16.tgz(@tanstack/store@0.9.3)(before-after-hook@4.0.0)
       '@napi-rs/keyring':
         specifier: ^1.3.0
         version: 1.3.0
-      '@roamhq/wrtc':
-        specifier: ^0.10.0
-        version: 0.10.0
-      '@sinclair/typebox':
-        specifier: ^0.32.0
-        version: 0.32.35
       '@tanstack/store':
         specifier: ^0.9.1
         version: 0.9.3
-      '@x402/avm':
-        specifier: ^2.11.0
-        version: 2.17.0
-      '@x402/core':
-        specifier: ^2.11.0
-        version: 2.17.0
-      '@x402/fetch':
-        specifier: ^2.11.0
-        version: 2.17.0
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0
-      socket.io-client:
-        specifier: ^4.7.5
-        version: 4.8.3
+    devDependencies:
+      '@algorandfoundation/package-releaser':
+        specifier: workspace:*
+        version: link:../../build
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.20
+      '@types/qrcode-terminal':
+        specifier: ^0.12.2
+        version: 0.12.2
+      esbuild:
+        specifier: ^0.25.12
+        version: 0.25.12
+      typescript:
+        specifier: ~5.8.3
+        version: 5.8.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.6(@types/node@22.19.20)(jiti@2.7.0)(yaml@2.9.0)
+
+  packages/ac2-open-claw-reference:
+    dependencies:
+      '@algorandfoundation/ac2-cli':
+        specifier: workspace:*
+        version: link:../ac2-cli
+      '@algorandfoundation/ac2-sdk':
+        specifier: workspace:*
+        version: link:../ac2-sdk
+      '@algorandfoundation/algokit-utils':
+        specifier: 10.0.0-beta.4
+        version: 10.0.0-beta.4
+      '@sinclair/typebox':
+        specifier: ^0.32.0
+        version: 0.32.35
+      '@x402/avm':
+        specifier: ^2.20.0
+        version: 2.20.0
+      '@x402/core':
+        specifier: ^2.20.0
+        version: 2.20.0
+      '@x402/fetch':
+        specifier: ^2.20.0
+        version: 2.20.0
+      qrcode-terminal:
+        specifier: ^0.12.0
+        version: 0.12.0
     devDependencies:
       '@algorandfoundation/package-releaser':
         specifier: workspace:*
@@ -157,6 +182,16 @@ importers:
       vitest:
         specifier: ^3.2.0
         version: 3.2.6(@types/node@22.19.20)(jiti@2.7.0)(yaml@2.9.0)
+    optionalDependencies:
+      '@algorandfoundation/liquid-client':
+        specifier: 1.0.0-canary.8
+        version: 1.0.0-canary.8(socket.io-client@4.8.3)
+      '@roamhq/wrtc':
+        specifier: ^0.10.0
+        version: 0.10.0
+      socket.io-client:
+        specifier: ^4.7.5
+        version: 4.8.3
 
 packages:
 
@@ -177,9 +212,6 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
-  '@algorandfoundation/ac2-sdk@1.0.0-canary.1':
-    resolution: {integrity: sha512-OYP/TpCWTLpcjWtG9+RLxMhCKFb7mQwmF2KgI/Kv/7F5vILZoSoE8jAnrbkRfjo4zylvhmI7bb4G92AGzlZM1A==}
-
   '@algorandfoundation/algokit-utils@10.0.0-alpha.46':
     resolution: {integrity: sha512-Lx56ET6RmrDCFGwx6qyIr7YRX3Q3MyKgqkNeumLkFHXVkqMnXnK1aLeEbV59EOK8UHQ5UPJofSj1zvRMm9Du7w==}
     engines: {node: '>=20.0'}
@@ -191,12 +223,32 @@ packages:
   '@algorandfoundation/dp256@1.1.0':
     resolution: {integrity: sha512-s+ZQG3WK6eWskfmjh0bbMImyO+SIR297s+7vQoercbM0hYvilzTBT/rEcvs4ZQxU6TxkTXLq4BRj1USjGFpsCA==}
 
-  '@algorandfoundation/keystore@1.0.0-canary.16':
-    resolution: {integrity: sha512-nqimJI+L0InFRvtgy6x/kn/nvl5u2Cqa8J7hDC0j6xa8qnQepPcqv/ONtAPkp5y3i3AKB6XKZfDo9LO29n06OQ==}
+  '@algorandfoundation/keystore-core@file:packages/ac2-cli/vendor/algorandfoundation-keystore-core-1.0.0-canary.16.tgz':
+    resolution: {integrity: sha512-BWYBuBSyEJcXvcgrt8d96aCBqa9fM4QDzUUPtPvGmO3M5b35CFd4dWfdzRrROh/AGodgp83l+41gJBSwFuE+Pw==, tarball: file:packages/ac2-cli/vendor/algorandfoundation-keystore-core-1.0.0-canary.16.tgz}
+    version: 1.0.0-canary.16
+    peerDependencies:
+      '@algorandfoundation/dp256': ^1.1.0
+      '@algorandfoundation/wallet-provider': ^1.0.0-canary.5
+      '@algorandfoundation/xhd-wallet-api': ^2.0.0-canary.1
+      '@tanstack/store': ^0.9.0
+      before-after-hook: ^4.0.0
+      falcon-1024: ^0.2.0
+    peerDependenciesMeta:
+      '@algorandfoundation/dp256':
+        optional: true
+      '@algorandfoundation/xhd-wallet-api':
+        optional: true
+      falcon-1024:
+        optional: true
+
+  '@algorandfoundation/keystore-node@file:packages/ac2-cli/vendor/algorandfoundation-keystore-node-1.0.0-canary.16.tgz':
+    resolution: {integrity: sha512-AqFAZM4iYsrVMHrerV/0WRqAWh6UWU1diC/UX3qZ+4eEHNpOY4KDd3PydVBHiTHU2YZ35qUjjevOsSNdiJlCmg==, tarball: file:packages/ac2-cli/vendor/algorandfoundation-keystore-node-1.0.0-canary.16.tgz}
+    version: 1.0.0-canary.16
+    hasBin: true
     peerDependencies:
       '@algorandfoundation/log-store': 1.0.0-canary.3
-      '@tanstack/store': 0.9.3
-      before-after-hook: 4.0.0
+      '@tanstack/store': ^0.9.0
+      before-after-hook: ^4.0.0
     peerDependenciesMeta:
       '@algorandfoundation/log-store':
         optional: true
@@ -769,10 +821,6 @@ packages:
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
 
-  '@noble/hashes@2.0.1':
-    resolution: {integrity: sha512-XlOlEbQcE9fmuXxrVTXCTlG2nlRXa9Rj3rr5Ue/+tX+nmkgbX720YHh0VR3hBF9xDvwnb8D2shVGOwNx+ulArw==}
-    engines: {node: '>= 20.19.0'}
-
   '@noble/hashes@2.2.0':
     resolution: {integrity: sha512-IYqDGiTXab6FniAgnSdZwgWbomxpy9FtYvLKs7wCUs2a8RkITG+DFGO1DM9cr+E3/RgADRpFjrKVaJ1z6sjtEg==}
     engines: {node: '>= 20.19.0'}
@@ -1051,9 +1099,6 @@ packages:
   '@scure/base@1.2.6':
     resolution: {integrity: sha512-g/nm5FgUa//MCj1gV09zTJTaM6KBAHqLN907YVQqf7zC49+DcO4B1so4ZX07Ef10Twr6nuqYEH9GEggFXA4Fmg==}
 
-  '@scure/base@2.0.0':
-    resolution: {integrity: sha512-3E1kpuZginKkek01ovG8krQ0Z44E3DHPjc5S2rjJw9lZn3KSQOs8S7wqikF/AH7iRanHypj85uGyxk0XAyC37w==}
-
   '@scure/base@2.2.0':
     resolution: {integrity: sha512-b8XEupJibegiXV+tDUseI8oLQc8ei3d/4Jkb2RpbHh3MfE054ov3uIz2dhFkB3FI8iwYkEh0gGCApkrYggkPNg==}
 
@@ -1215,14 +1260,14 @@ packages:
   '@vitest/utils@3.2.6':
     resolution: {integrity: sha512-lI23nIs4bnT3T8NIoh+vFaz5s2/DdP0Jgt2jxwgWljvwn82cLJtyi/If+fjFyoLMGIOz0U/fKvWE0d4jsNQEfg==}
 
-  '@x402/avm@2.17.0':
-    resolution: {integrity: sha512-NSsnVOVGT89ufsqllEJX5fLosW5nVUec+Y4VA4H5qtwjdxAHVdEE/xS5Vmg7FzKBsIwUB9pLLqncewXTX5rkPg==}
+  '@x402/avm@2.20.0':
+    resolution: {integrity: sha512-mHqkAB0Pw2OFzC13XYDb6GLXndxqStNc18IZ/WzdP2jrgLXoeGqF88KE52yhGRlcL5jQbD+ylqpPtNWMJy/hHQ==}
 
-  '@x402/core@2.17.0':
-    resolution: {integrity: sha512-BBooe9Kewl5KLaKadElFwhZzZ+n/X/m2djzGtc7OY51D8fk2vHTVvDZtBFEJYdJxtQoUZMKX73hew0ss81FENQ==}
+  '@x402/core@2.20.0':
+    resolution: {integrity: sha512-BaPPVTZ4LAeYKB0yRMOnuzDGoratyLeYobBMH/leFmRe+al94RQnw/uwuw9Rgsupsywz6JQdHzhm4LsE4snuDg==}
 
-  '@x402/fetch@2.17.0':
-    resolution: {integrity: sha512-iy6ar1JTgs4gzdlc2q2Z7nuL5keBkQhoD4v5niVlTwLoivVvHnAA0p/wK5WTWRrJ1b+el8pthkjFS0Jc3nMIIg==}
+  '@x402/fetch@2.20.0':
+    resolution: {integrity: sha512-DmlLLZnBbsl4Qq3Gbg5nTCFLIf5S2ZTBMmz0qSe9Ys7+/FzJCwe36vZ7tNR4Vo5sxRQvlCfGQfWwHsCogOLr7Q==}
 
   abort-controller@3.0.0:
     resolution: {integrity: sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==}
@@ -1767,6 +1812,10 @@ packages:
 
   extend@3.0.2:
     resolution: {integrity: sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==}
+
+  falcon-1024@0.2.0:
+    resolution: {integrity: sha512-zKBiKGbAVmROFJNjy1iZ009V9wclL9lZkRAP7l7cfsHkZg14jyWgJk1XtAnmn2sxaKv2hsRTEVuTot/CSoQnSw==}
+    engines: {node: '>=18'}
 
   fast-deep-equal@3.1.3:
     resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
@@ -3531,10 +3580,6 @@ snapshots:
     dependencies:
       zod: 4.4.3
 
-  '@algorandfoundation/ac2-sdk@1.0.0-canary.1':
-    dependencies:
-      ajv: 8.20.0
-
   '@algorandfoundation/algokit-utils@10.0.0-alpha.46':
     dependencies:
       '@algorandfoundation/xhd-wallet-api': 2.0.0-canary.1
@@ -3570,16 +3615,31 @@ snapshots:
       '@noble/hashes': 1.8.0
       '@scure/bip39': 1.6.0
 
-  '@algorandfoundation/keystore@1.0.0-canary.16(@tanstack/store@0.9.3)(before-after-hook@4.0.0)':
+  '@algorandfoundation/keystore-core@file:packages/ac2-cli/vendor/algorandfoundation-keystore-core-1.0.0-canary.16.tgz(@algorandfoundation/dp256@1.1.0)(@algorandfoundation/wallet-provider@1.0.0-canary.5)(@algorandfoundation/xhd-wallet-api@2.0.0-canary.1)(@tanstack/store@0.9.3)(before-after-hook@4.0.0)(falcon-1024@0.2.0)':
     dependencies:
-      '@algorandfoundation/dp256': 1.1.0
       '@algorandfoundation/wallet-provider': 1.0.0-canary.5
-      '@algorandfoundation/xhd-wallet-api': 2.0.0-canary.1
-      '@noble/hashes': 2.0.1
-      '@scure/base': 2.0.0
+      '@noble/hashes': 2.2.0
       '@scure/bip39': 1.6.0
       '@tanstack/store': 0.9.3
       before-after-hook: 4.0.0
+    optionalDependencies:
+      '@algorandfoundation/dp256': 1.1.0
+      '@algorandfoundation/xhd-wallet-api': 2.0.0-canary.1
+      falcon-1024: 0.2.0
+
+  '@algorandfoundation/keystore-node@file:packages/ac2-cli/vendor/algorandfoundation-keystore-node-1.0.0-canary.16.tgz(@tanstack/store@0.9.3)(before-after-hook@4.0.0)':
+    dependencies:
+      '@algorandfoundation/dp256': 1.1.0
+      '@algorandfoundation/keystore-core': file:packages/ac2-cli/vendor/algorandfoundation-keystore-core-1.0.0-canary.16.tgz(@algorandfoundation/dp256@1.1.0)(@algorandfoundation/wallet-provider@1.0.0-canary.5)(@algorandfoundation/xhd-wallet-api@2.0.0-canary.1)(@tanstack/store@0.9.3)(before-after-hook@4.0.0)(falcon-1024@0.2.0)
+      '@algorandfoundation/wallet-provider': 1.0.0-canary.5
+      '@algorandfoundation/xhd-wallet-api': 2.0.0-canary.1
+      '@scure/base': 2.2.0
+      '@scure/bip39': 1.6.0
+      '@tanstack/store': 0.9.3
+      before-after-hook: 4.0.0
+      falcon-1024: 0.2.0
+    optionalDependencies:
+      '@napi-rs/keyring': 1.3.0
 
   '@algorandfoundation/liquid-client@1.0.0-canary.8(socket.io-client@4.8.3)':
     dependencies:
@@ -3588,6 +3648,7 @@ snapshots:
       uuid: 10.0.0
     optionalDependencies:
       socket.io-client: 4.8.3
+    optional: true
 
   '@algorandfoundation/wallet-provider@1.0.0-canary.5': {}
 
@@ -3973,8 +4034,6 @@ snapshots:
 
   '@noble/hashes@1.8.0': {}
 
-  '@noble/hashes@2.0.1': {}
-
   '@noble/hashes@2.2.0': {}
 
   '@octokit/auth-token@6.0.0': {}
@@ -4123,6 +4182,7 @@ snapshots:
       '@roamhq/wrtc-linux-x64': 0.10.0
       '@roamhq/wrtc-win32-x64': 0.10.0
       domexception: 4.0.0
+    optional: true
 
   '@rollup/rollup-android-arm-eabi@4.61.1':
     optional: true
@@ -4200,8 +4260,6 @@ snapshots:
     optional: true
 
   '@scure/base@1.2.6': {}
-
-  '@scure/base@2.0.0': {}
 
   '@scure/base@2.2.0': {}
 
@@ -4344,7 +4402,8 @@ snapshots:
 
   '@sindresorhus/merge-streams@4.0.0': {}
 
-  '@socket.io/component-emitter@3.1.2': {}
+  '@socket.io/component-emitter@3.1.2':
+    optional: true
 
   '@stablelib/base64@1.0.1': {}
 
@@ -4426,18 +4485,18 @@ snapshots:
       loupe: 3.2.1
       tinyrainbow: 2.0.0
 
-  '@x402/avm@2.17.0':
+  '@x402/avm@2.20.0':
     dependencies:
       '@algorandfoundation/algokit-utils': 10.0.0-alpha.46
-      '@x402/core': 2.17.0
+      '@x402/core': 2.20.0
 
-  '@x402/core@2.17.0':
+  '@x402/core@2.20.0':
     dependencies:
       zod: 3.25.76
 
-  '@x402/fetch@2.17.0':
+  '@x402/fetch@2.20.0':
     dependencies:
-      '@x402/core': 2.17.0
+      '@x402/core': 2.20.0
 
   abort-controller@3.0.0:
     dependencies:
@@ -4838,8 +4897,10 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
+    optional: true
 
-  engine.io-parser@5.2.3: {}
+  engine.io-parser@5.2.3:
+    optional: true
 
   entities@4.5.0: {}
 
@@ -4942,7 +5003,8 @@ snapshots:
 
   event-target-shim@5.0.1: {}
 
-  eventemitter3@5.0.4: {}
+  eventemitter3@5.0.4:
+    optional: true
 
   eventsource-parser@3.1.0: {}
 
@@ -5030,6 +5092,8 @@ snapshots:
       - supports-color
 
   extend@3.0.2: {}
+
+  falcon-1024@0.2.0: {}
 
   fast-deep-equal@3.1.3: {}
 
@@ -6190,6 +6254,7 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
+    optional: true
 
   socket.io-parser@4.2.6:
     dependencies:
@@ -6197,6 +6262,7 @@ snapshots:
       debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
+    optional: true
 
   source-map-js@1.2.1: {}
 
@@ -6480,7 +6546,8 @@ snapshots:
 
   util-deprecate@1.0.2: {}
 
-  uuid@10.0.0: {}
+  uuid@10.0.0:
+    optional: true
 
   validate-npm-package-license@3.0.4:
     dependencies:
@@ -6626,11 +6693,13 @@ snapshots:
 
   wrappy@1.0.2: {}
 
-  ws@8.20.1: {}
+  ws@8.20.1:
+    optional: true
 
   ws@8.21.0: {}
 
-  xmlhttprequest-ssl@2.1.2: {}
+  xmlhttprequest-ssl@2.1.2:
+    optional: true
 
   xtend@4.0.2: {}
 

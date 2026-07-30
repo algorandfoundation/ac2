@@ -189,6 +189,36 @@ export class Ac2Client {
   }
 
   /**
+   * Generic single-use request/response primitive.
+   *
+   * Send an already-built AC2 request `message` and settle on the first
+   * inbound message whose `thid === message.id` AND whose `type` is one of
+   * `responseTypes`. This is the public form of the exact primitive that
+   * `requestSignature` / `requestKey` are thin wrappers over.
+   *
+   * It exists for callers that must relay an ARBITRARY AC2 request verb
+   * without hard-coding each one — notably the daemon's connection broker,
+   * which brokers whatever request a local agent hands it (a `SigningRequest`
+   * today, a `KeyRequest`/attestation tomorrow) over the single wallet
+   * transport it owns. Such callers build the envelope + body themselves and
+   * declare which response `type`s settle the round-trip, so the client needs
+   * no per-verb knowledge.
+   *
+   * Single-use is the only mode (see {@link awaitThreadResponse}); rejects on
+   * timeout or transport close.
+   */
+  async request<TRes extends AC2BaseMessage = AC2BaseMessage>(
+    message: AC2BaseMessage,
+    opts: { responseTypes: readonly string[]; timeoutMs?: number },
+  ): Promise<TRes> {
+    const waitOpts: { responseTypes: readonly string[]; timeoutMs?: number } = {
+      responseTypes: opts.responseTypes,
+    };
+    if (opts.timeoutMs !== undefined) waitOpts.timeoutMs = opts.timeoutMs;
+    return this.awaitThreadResponse<TRes>(message, waitOpts);
+  }
+
+  /**
    * Register a responder for inbound `ac2/SigningRequest` messages —
    * the controller / wallet side of the Signature Request pattern.
    *

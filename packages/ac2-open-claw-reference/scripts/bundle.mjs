@@ -7,7 +7,7 @@
  *
  *     src/entry.ts                  -> dist/entry.js
  *     src/channel/routing.ts        -> dist/channel.routing.js
- *     src/keystore/storage/state.ts -> dist/keystore.storage.state.js
+ *     src/session/channel-runtime.ts -> dist/session.channel-runtime.js
  *
  * No dependencies are vendored. Every non-relative import (third-party
  * packages, Node built-ins, host SDKs, native add-ons) is kept external, so
@@ -144,6 +144,10 @@ function flattenDeclarations() {
 
   // Compute the original `dist` source root for d.ts (mirrors `src/`).
   // For each nested d.ts, derive flat name as if it lived under `src/`.
+  // Track every path this loop writes so the "already-flat" pass below never
+  // re-processes a file that was JUST flattened here (that double-rewrite is
+  // what caused imports like `./identity.js` to become `./identity.identity.js`).
+  const justFlattened = new Set();
   for (const dts of dtsFiles) {
     const rel = relative(distDir, dts).replace(/\\/g, '/');
     if (!rel.includes('/')) continue; // already flat (e.g. dist/entry.d.ts)
@@ -163,6 +167,7 @@ function flattenDeclarations() {
     );
     writeFileSync(flatPath, rewritten);
     unlinkSync(dts);
+    justFlattened.add(flatPath);
 
     // Rename associated declaration map if present.
     const dtsMap = `${dts}.map`;
@@ -173,6 +178,7 @@ function flattenDeclarations() {
 
   // Rewrite already-flat d.ts files (top-level ones like entry.d.ts) too.
   for (const dts of walk(distDir, (f) => f.endsWith('.d.ts'))) {
+    if (justFlattened.has(dts)) continue;
     const rel = relative(distDir, dts).replace(/\\/g, '/');
     if (rel.includes('/')) continue;
     const base = rel.replace(/\.d\.ts$/i, '');

@@ -31,16 +31,6 @@ export interface ToolContext {
   logger?: { info: (msg: string) => void; error: (msg: string) => void };
 }
 
-/** Channel-lifecycle seam consumed by `runAc2Channel`. */
-export interface ChannelContext {
-  signal?: AbortSignal;
-  logger?: { info: (msg: string) => void; error: (msg: string) => void };
-  /** Called by the channel when a user message is received from the wallet. */
-  receive: (text: string) => Promise<void>;
-  /** Register a handler for when the agent produces output. */
-  onOutput: (handler: (text: string) => Promise<void>) => void;
-}
-
 /** Plugin config schema (`PluginConfig`). */
 export const ConfigSchema = Type.Object({
   liquidAuthServer: Type.Optional(
