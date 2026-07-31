@@ -242,6 +242,7 @@ Streaming (raw bytes over a side channel correlated by `thid`) is intentionally 
 ## Documentation
 
 - [EXTENDING.md](./EXTENDING.md): package layout, subpath exports, custom transports, custom message types, signaling providers.
+- [`@algorandfoundation/ac2-cli`](../ac2-cli/README.md): the AC2 service that owns a wallet connection for you, with its [architecture](../ac2-cli/ARCHITECTURE.md) and [control-socket protocol](../ac2-cli/PROTOCOL.md).
 - [CONTRIBUTING.md](../CONTRIBUTING.md): repository structure, build, test, and release workflow.
 
 ## License

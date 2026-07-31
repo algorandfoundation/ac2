@@ -30,6 +30,7 @@
     "openclaw.plugin.json",
     "skills",
     "README.md",
+    "ARCHITECTURE.md",
     "LICENSE"
   ],
   "type": "module",

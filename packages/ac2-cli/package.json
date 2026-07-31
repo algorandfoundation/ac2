@@ -36,7 +36,9 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "ARCHITECTURE.md",
+    "PROTOCOL.md"
   ],
   "scripts": {
     "build": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts",

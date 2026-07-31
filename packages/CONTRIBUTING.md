@@ -37,7 +37,9 @@ ac2/
     │   │   ├── identity/           Identity/keystore/state persistence.
     │   │   └── session/            Wallet identity bootstrap.
     │   ├── tests/
-    │   └── README.md
+    │   ├── README.md               Install + day-to-day usage.
+    │   ├── ARCHITECTURE.md         Service model, identity, keystore, runtime adapters.
+    │   └── PROTOCOL.md             Control-socket API (methods, events, agent.request).
     └── ac2-open-claw-reference/    Reference OpenClaw plugin
                                     (@algorandfoundation/ac2-open-claw-reference).
         ├── src/
@@ -58,7 +60,8 @@ ac2/
         │                           (src/foo/bar.ts → dist/foo.bar.js, deps stay external).
         ├── tests/
         ├── openclaw.plugin.json    OpenClaw plugin manifest.
-        └── README.md
+        ├── README.md               Install + day-to-day usage.
+        └── ARCHITECTURE.md         Plugin/service/gateway split, identity, x402.
 ```
 
 Additional packages (signaling providers, integrations) live under `packages/` and follow the same conventions.
