@@ -69,10 +69,10 @@ Once installed, the agent gets three tools and one channel:
 
 | Tool or channel | What it gives the agent |
 | --- | --- |
-| `ac2_capabilities` | Whether a wallet is connected, its address, and what it can sign. |
-| `ac2_sign` | Ask the wallet to sign a payload; the user approves on their phone. |
-| `ac2_x402_fetch` | Fetch an HTTP resource that charges with x402 on Algorand, paying with wallet approval. |
-| Channel `ac2` | The wallet becomes a chat channel: you message your agent from your phone. |
+| `ac2_capabilities` | Agent DID, connected wallet address and signing-hint catalog, read from the service. |
+| `ac2_sign` | Brokers a signing request through the service and returns the signature details. |
+| `ac2_x402_fetch` | Pays x402 Algorand resources; payer address and every signature come from the service. |
+| Channel `ac2` | A delivery route, so the host can push messages toward the wallet. |
 
 ### Paid fetches
 
