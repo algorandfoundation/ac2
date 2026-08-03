@@ -3,11 +3,18 @@
  * pair-manager — tiny HTTP service in front of `openclaw ac2 pair`.
  *
  * Responsibilities:
- *   - spawn `openclaw ac2 pair` on demand and keep the process (and thus the
- *     AC2 session it hosts) alive for a fixed TTL (default 15 minutes)
+ *   - spawn `openclaw ac2 pair` on demand. The wallet connection itself is
+ *     owned by the AC2 service (ac2-service container); the pair process is a
+ *     thin client of its control socket that streams the QR invitation.
  *   - parse the pairing payload from stdout ("Pairing URL: <payload>") and
  *     serve it as a scannable QR code on a token-protected web page
  *   - expose start / status / forget endpoints
+ *
+ * The TTL bounds the pairing *page session* (how long the QR stays offered
+ * and the pair client process alive). A TTL of 0 disables expiry entirely:
+ * the session runs until "Forget pairing". Note the AC2 service keeps its
+ * pairing cycle armed independently, so an already-paired wallet can always
+ * re-link — expiring the page session only stops offering the QR here.
  *
  * No npm dependencies: Node built-ins only. QR rendering happens client-side.
  *
@@ -15,7 +22,7 @@
  *   PAIR_TOKEN            required. shared secret; page/API need ?token=...
  *   PAIR_PORT             listen port                     (default 8377)
  *   PAIR_BIND             listen address                  (default 0.0.0.0)
- *   PAIR_SESSION_TTL_MS   session lifetime                (default 900000 = 15 min)
+ *   PAIR_SESSION_TTL_MS   session lifetime; 0 = no expiry (default 900000 = 15 min)
  *   OPENCLAW_ENTRY        openclaw entry point            (default /app/dist/index.js)
  *   PAIR_SHOW_LOGS        expose child process log tail   (default false)
  */
@@ -32,6 +39,8 @@ const PAIR_TOKEN = process.env.PAIR_TOKEN || '';
 const PAIR_PORT = Number(process.env.PAIR_PORT || 8377);
 const PAIR_BIND = process.env.PAIR_BIND || '0.0.0.0';
 const SESSION_TTL_MS = Number(process.env.PAIR_SESSION_TTL_MS || 15 * 60 * 1000);
+// 0 (or negative) disables the TTL: the session never expires on its own.
+const SESSION_EXPIRES = SESSION_TTL_MS > 0;
 const OPENCLAW_ENTRY = process.env.OPENCLAW_ENTRY || '/app/dist/index.js';
 const PAIR_SHOW_LOGS = process.env.PAIR_SHOW_LOGS === 'true';
 const LOG_TAIL_MAX = 200;
@@ -85,7 +94,10 @@ function parseOutput(chunk) {
   }
 
   // Opportunistic pairing detection (log line may or may not reach stdout).
-  if (/paired and active/i.test(text)) {
+  // "paired and active" is logged by the plugin when a wallet connects;
+  // "active wallet connection" is printed when `pair` finds the AC2 service
+  // already connected and exits early (the service owns the session).
+  if (/paired and active|active wallet connection/i.test(text)) {
     session.paired = true;
     log('channel reported paired and active');
   }
@@ -125,9 +137,9 @@ function startSession() {
   session.lastError = null;
   session.logTail = [];
   session.startedAt = Date.now();
-  session.expiresAt = session.startedAt + SESSION_TTL_MS;
+  session.expiresAt = SESSION_EXPIRES ? session.startedAt + SESSION_TTL_MS : null;
 
-  log(`starting: node ${OPENCLAW_ENTRY} ac2 pair (ttl ${SESSION_TTL_MS} ms)`);
+  log(`starting: node ${OPENCLAW_ENTRY} ac2 pair (ttl ${SESSION_EXPIRES ? `${SESSION_TTL_MS} ms` : 'disabled — runs until forgotten'})`);
   const child = spawn('node', [OPENCLAW_ENTRY, 'ac2', 'pair'], {
     cwd: path.dirname(OPENCLAW_ENTRY),
     env: process.env,
@@ -158,12 +170,14 @@ function startSession() {
     log(session.lastError);
   });
 
-  session.ttlTimer = setTimeout(() => {
-    log('session TTL reached — terminating pairing process');
-    session.state = 'expired';
-    killChild();
-  }, SESSION_TTL_MS);
-  session.ttlTimer.unref();
+  if (SESSION_EXPIRES) {
+    session.ttlTimer = setTimeout(() => {
+      log('session TTL reached — terminating pairing process');
+      session.state = 'expired';
+      killChild();
+    }, SESSION_TTL_MS);
+    session.ttlTimer.unref();
+  }
 }
 
 function runOneShot(args) {
@@ -277,7 +291,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PAIR_PORT, PAIR_BIND, () => {
-  log(`listening on http://${PAIR_BIND}:${PAIR_PORT} (ttl ${SESSION_TTL_MS} ms)`);
+  log(`listening on http://${PAIR_BIND}:${PAIR_PORT} (ttl ${SESSION_EXPIRES ? `${SESSION_TTL_MS} ms` : 'disabled'})`);
 });
 
 process.on('SIGTERM', () => { killChild(); process.exit(0); });

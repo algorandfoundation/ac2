@@ -1,0 +1,5 @@
+**/node_modules
+**/.git
+packages/ac2-open-claw-server/.env
+packages/ac2-open-claw-server/.session-backup
+packages/ac2-open-claw-server/ac2-plugin.tgz
