@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# One-shot setup on the Ubuntu server. Run from the repo root:
+# One-shot setup for the AC2 pairing stack. Works on any Docker-capable Linux
+# host (or locally for testing). Run from this directory:
 #   ./scripts/setup.sh
 #
 # Steps:

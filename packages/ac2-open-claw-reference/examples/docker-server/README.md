@@ -1,6 +1,6 @@
 # OpenClaw + AC2 pairing server
 
-A runnable example — not part of the published plugin package — showing how to deploy this plugin behind a publicly accessible OpenClaw instance on Ubuntu. Publicly accessible OpenClaw instance with the Algorand Foundation **AC2** stack: the [AC2 service](../../../ac2-cli/README.md) (`ac2-cli`) owns the wallet connection, and the [AC2 reference plugin](../../README.md) wires it into the OpenClaw agent. A user opens a token-protected web page, presses "Start pairing session", and scans the QR code (produced by `openclaw ac2 pair`) with their AC2 Controller / wallet. The pairing session stays alive for 15 minutes (configurable; `0` = forever), then auto-expires.
+A runnable example — not part of the published plugin package — showing how to deploy this plugin behind a publicly accessible OpenClaw instance, using the Algorand Foundation **AC2** stack: the [AC2 service](../../../ac2-cli/README.md) (`ac2-cli`) owns the wallet connection, and the [AC2 reference plugin](../../README.md) wires it into the OpenClaw agent. Any host that runs Docker works (see [Prerequisites](#prerequisites)). A user opens a token-protected web page, presses "Start pairing session", and scans the QR code (produced by `openclaw ac2 pair`) with their AC2 Controller / wallet. By default the pairing session auto-expires after 15 minutes; set `PAIR_SESSION_TTL_MS=0` to disable expiry and keep it alive until "Forget pairing".
 
 ## Architecture
 
@@ -41,8 +41,8 @@ Notes on why it's built this way:
 
 ## Prerequisites
 
-- Ubuntu server (22.04+/26.x LTS) with a public IPv4
-- Docker Engine + Compose v2 (`curl -fsSL https://get.docker.com | sh`)
+- Docker Engine + Compose v2, and `bash`/`sh` to run the setup scripts — any Docker-compatible host works (`curl -fsSL https://get.docker.com | sh` is one way to install it)
+- A public IPv4, if deploying it publicly (see [Cloudflare setup](#cloudflare-setup)) — not required for local/private use
 - pnpm + Node.js 22+ (to build the AC2 packages from monorepo source)
 - ≥ 1 GB RAM
 - An API key for your model provider (asked during onboarding)
@@ -90,7 +90,7 @@ http://localhost:8377/?token=<PAIR_TOKEN>
   # remote: ssh -L 8377:localhost:8377 <user>@<server>
 ```
 
-If `DOMAIN` is set, open the firewall for Caddy (the pair-manager port itself is never published to the host):
+If `DOMAIN` is set, open the firewall for Caddy (the pair-manager port itself is never published to the host). Example for Debian/Ubuntu's `ufw`; use your distro's firewall tool (`firewalld`, `nft`, …) or your cloud provider's security group otherwise:
 
 ```bash
 sudo ufw allow 80/tcp
@@ -99,7 +99,7 @@ sudo ufw allow 443/tcp
 
 ## Using the pairing page
 
-Open the URL, press **Start pairing session**. Within a few seconds the QR appears (the page polls and re-renders automatically — the service re-issues a fresh QR if a pairing attempt times out). Scan it with the AC2 Controller/wallet. The countdown shows time until auto-expiry (default 15 min, `PAIR_SESSION_TTL_MS` in `.env`; with `0` the page shows "Session stays active until you forget it" instead).
+Open the URL, press **Start pairing session**. Within a few seconds the QR appears (the page polls and re-renders automatically — the service re-issues a fresh QR if a pairing attempt times out). Scan it with the AC2 Controller/wallet. By default (`PAIR_SESSION_TTL_MS=900000` = 15 min) the page shows a countdown to auto-expiry; with `PAIR_SESSION_TTL_MS=0` there is no expiry, so it shows "Session stays active until you forget it" instead.
 
 Buttons: **Start pairing session** launches/relaunches `openclaw ac2 pair` (which reports the live session if a wallet is already connected — the service owns the connection, so this is always safe); **Forget pairing** kills the page session and runs `openclaw ac2 forget` (clears the service's connection state and stored agent identities) for a fresh instance.
 
