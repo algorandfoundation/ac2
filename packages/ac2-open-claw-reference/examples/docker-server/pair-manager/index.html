@@ -86,11 +86,16 @@
         break;
       case 'waiting': {
         renderQr(current.qrPayload);
-        const remaining = current.expiresAt - (Date.now() - drift);
+        // expiresAt is null when the TTL is disabled (PAIR_SESSION_TTL_MS=0):
+        // the session runs until "Forget pairing".
+        const ttlText = current.expiresAt
+          ? 'Session expires in <span class="countdown">'
+            + fmtRemaining(current.expiresAt - (Date.now() - drift)) + '</span>'
+          : 'Session stays active until you forget it.';
         st.innerHTML = (current.paired
           ? '✅ Paired — channel active. '
           : 'Scan the QR code with your AC2 Controller / wallet. ')
-          + 'Session expires in <span class="countdown">' + fmtRemaining(remaining) + '</span>';
+          + ttlText;
         break;
       }
       case 'expired':

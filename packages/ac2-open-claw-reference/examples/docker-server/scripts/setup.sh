@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# One-shot setup on the Ubuntu server. Run from the repo root:
+# One-shot setup for the AC2 pairing stack. Works on any Docker-capable Linux
+# host (or locally for testing). Run from this directory:
 #   ./scripts/setup.sh
 #
 # Steps:
 #   1. generate .env (tokens) if missing
-#   2. build the image (openclaw + AC2 plugin + @napi-rs/keyring rebuild)
+#   2. build the image (openclaw + self-contained AC2 plugin incl. ac2-cli service)
 #   3. run OpenClaw onboarding (interactive: provider/API key)
 #   4. set gateway config + verify plugin wiring
 #   5. start the stack
@@ -35,11 +36,11 @@ fi
 set -a; source .env; set +a
 
 # --- 2. build ---------------------------------------------------------------
-echo "==> Building AC2 plugin from monorepo source"
+echo "==> Building AC2 packages (sdk, cli, plugin) from monorepo source"
 chmod +x scripts/build-plugin.sh
 ./scripts/build-plugin.sh
 
-echo "==> Building image (installs the local AC2 plugin + rebuilds @napi-rs/keyring)"
+echo "==> Building image (packs the self-contained AC2 plugin — ac2-cli service included — and installs it)"
 docker compose build openclaw-gateway
 
 # Existing deployments keep ~/.openclaw on the named volume, which shadows
@@ -136,6 +137,12 @@ else
   docker compose up -d
 fi
 
+if [[ "${PAIR_SESSION_TTL_MS:-900000}" -le 0 ]]; then
+  TTL_NOTE=" Sessions never expire (PAIR_SESSION_TTL_MS=0) — end them with 'Forget pairing'."
+else
+  TTL_NOTE=" Sessions auto-expire after $(( ${PAIR_SESSION_TTL_MS:-900000} / 60000 )) minutes."
+fi
+
 echo
 echo "============================================================"
 if [[ -n "${DOMAIN:-}" ]]; then
@@ -143,7 +150,7 @@ if [[ -n "${DOMAIN:-}" ]]; then
   echo "   https://${DOMAIN}/?token=${PAIR_TOKEN}"
   echo
   echo " Open it, press 'Start pairing session', scan the QR."
-  echo " Sessions auto-expire after $(( ${PAIR_SESSION_TTL_MS:-900000} / 60000 )) minutes."
+  echo "${TTL_NOTE}"
   echo
   echo " Firewall reminder (ufw):"
   echo "   sudo ufw allow 80/tcp"
@@ -155,7 +162,7 @@ else
   echo "   http://localhost:8377/?token=${PAIR_TOKEN}"
   echo
   echo " Open it, press 'Start pairing session', scan the QR."
-  echo " Sessions auto-expire after $(( ${PAIR_SESSION_TTL_MS:-900000} / 60000 )) minutes."
+  echo "${TTL_NOTE}"
   echo
   echo " For remote access, SSH-tunnel the port first:"
   echo "   ssh -L 8377:localhost:8377 <user>@<server>"

@@ -2,7 +2,14 @@
 #
 # Services:
 #   openclaw-gateway — the OpenClaw gateway (NOT published publicly; loopback only)
-#   pair-manager     — token-protected QR page driving `openclaw ac2 pair`
+#   ac2-service      — the AC2 daemon (`ac2 service start --foreground`): owns
+#                      the wallet connection (pairing, WebRTC, identity keystore,
+#                      reconnect) and drives the agent over the gateway via the
+#                      built-in `openclaw-gateway` runtime adapter. Shares the
+#                      gateway's network namespace; its control socket lives on
+#                      the ac2_home volume so the other containers can dial it.
+#   pair-manager     — token-protected QR page driving `openclaw ac2 pair`,
+#                      which is a thin client of ac2-service over that socket
 #                      (shares the gateway's network namespace; reachable
 #                      internally at openclaw-gateway:8377 and on the host
 #                      at 127.0.0.1:8377)
@@ -18,10 +25,10 @@
 services:
   openclaw-gateway:
     build:
-      # Context is the monorepo root so the Dockerfile can read the plugin
-      # version directly from packages/ac2-open-claw-reference/package.json.
-      context: ../..
-      dockerfile: packages/ac2-open-claw-server/Dockerfile
+      # Context is the monorepo root: the Dockerfile assembles the AC2 plugin
+      # (and the ac2-cli service bundled inside it) from the monorepo source.
+      context: ../../../..
+      dockerfile: packages/ac2-open-claw-reference/examples/docker-server/Dockerfile
       args:
         OPENCLAW_IMAGE: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
     image: openclaw-ac2:local
@@ -36,6 +43,9 @@ services:
       GOOGLE_MODEL: ${GOOGLE_MODEL:-}
     volumes:
       - openclaw_data:/home/node/.openclaw
+      # The AC2 plugin's tools (ac2_sign, ac2_capabilities, ac2_x402_fetch) run
+      # inside the gateway process and dial the AC2 service's control socket.
+      - ac2_home:/home/node/.ac2
     expose:
       # Pair page (served by pair-manager in this netns) — reached via caddy,
       # not published to the host.
@@ -65,19 +75,60 @@ services:
     mem_limit: 2g
     cpus: "2.0"
 
-  pair-manager:
+  ac2-service:
     image: openclaw-ac2:local
-    entrypoint: ["/bin/sh", "/app/pair-manager/entry.sh"]
+    entrypoint: ["/bin/sh", "/app/ac2-service/entry.sh"]
     restart: unless-stopped
     depends_on:
       openclaw-gateway:
         condition: service_healthy
-    # Share the gateway's network namespace: `openclaw ac2 pair` can reach the
-    # gateway on 127.0.0.1, and the pair page is reachable by other containers
-    # at openclaw-gateway:8377 (caddy proxies to it; not published to the host).
+    # Share the gateway's network namespace so the `openclaw-gateway` runtime
+    # adapter reaches the gateway on 127.0.0.1:18789.
     network_mode: "service:openclaw-gateway"
     environment:
       HOME: /home/node
+      AC2_HOME: /home/node/.ac2
+      # The daemon drives OpenClaw agent turns itself, over the gateway WS/RPC.
+      AC2_RUNTIME: openclaw-gateway
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:?set in .env}
+      AC2_LIQUID_AUTH_SERVER: ${AC2_LIQUID_AUTH_SERVER:-}
+    volumes:
+      # Persisted connections, identities, and openclaw.json (gateway discovery).
+      - openclaw_data:/home/node/.openclaw
+      # Control socket + pidfile, shared with the gateway and pair-manager.
+      - ac2_home:/home/node/.ac2
+    tmpfs:
+      - /tmp:size=128m
+    healthcheck:
+      # The daemon is healthy when its control socket accepts connections.
+      test: ["CMD", "node", "-e", "const s=require('net').connect(process.env.AC2_HOME+'/ac2d.sock');s.on('connect',()=>process.exit(0));s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),3000)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # --- hardening ---
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: "1.0"
+
+  pair-manager:
+    image: openclaw-ac2:local
+    command: ["node", "/app/pair-manager/server.js"]
+    restart: unless-stopped
+    depends_on:
+      ac2-service:
+        condition: service_healthy
+    # Share the gateway's network namespace: the pair page is reachable by
+    # other containers at openclaw-gateway:8377 (caddy proxies to it; not
+    # published to the host).
+    network_mode: "service:openclaw-gateway"
+    environment:
+      HOME: /home/node
+      AC2_HOME: /home/node/.ac2
       OPENCLAW_ENTRY: /app/dist/index.js
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:?set in .env}
       AC2_LIQUID_AUTH_SERVER: ${AC2_LIQUID_AUTH_SERVER:-}
@@ -87,6 +138,8 @@ services:
       PAIR_SESSION_TTL_MS: ${PAIR_SESSION_TTL_MS:-900000}
     volumes:
       - openclaw_data:/home/node/.openclaw
+      # Control socket of ac2-service — `openclaw ac2 pair` dials it.
+      - ac2_home:/home/node/.ac2
     tmpfs:
       - /tmp:size=128m
     healthcheck:
@@ -133,9 +186,14 @@ services:
 
 volumes:
   # Named volume: initialized on first run from the image's /home/node/.openclaw,
-  # which already contains the installed AC2 plugin (with the @napi-rs/keyring
-  # native addon rebuilt) and the plugin/channel wiring in openclaw.json.
+  # which already contains the installed AC2 plugin (self-contained, with the
+  # ac2-cli service and its native addons bundled) and the plugin/channel
+  # wiring in openclaw.json. Also holds the AC2 service's persisted state
+  # (connections, identities — AC2_STATE_DIR defaults to ~/.openclaw).
   openclaw_data:
+  # AC2 service runtime dir (~/.ac2): control socket + pidfile, shared between
+  # ac2-service (hosts it), the gateway (plugin tools) and pair-manager.
+  ac2_home:
   # Persists Caddy's self-signed cert/key and internal CA so they survive
   # container restarts/rebuilds.
   caddy_data:

@@ -1,0 +1,5 @@
+**/node_modules
+**/.git
+packages/ac2-open-claw-reference/examples/docker-server/.env
+packages/ac2-open-claw-reference/examples/docker-server/.session-backup
+packages/ac2-open-claw-reference/examples/docker-server/ac2-plugin.tgz
