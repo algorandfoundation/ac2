@@ -8,7 +8,6 @@ import type { ChannelContext, PluginConfig } from './contracts.js';
 import { SessionManager, sessionManager } from './manager.js';
 import { bootstrapAgentIdentity } from './bootstrap.js';
 import { buildFinalizeFrame } from './flows.js';
-import { ensureGitSignBridge } from '../git/bridge.js';
 
 const DEFAULT_LIQUID_AUTH_SERVER = 'https://debug.liquidauth.com';
 
@@ -55,13 +54,6 @@ export async function runAc2Channel(
     new (await import('../providers/liquid-auth.js')).LiquidAuthChannelProvider({ origin });
   const renderQr = deps.renderQr ?? renderPairingQr;
   const manager = deps.manager ?? sessionManager;
-
-  // Serve the git-signing bridge for the whole channel lifetime, not just
-  // while a session is active: an idle bridge answers `no_active_session`
-  // (clear, actionable) instead of leaving a dead socket that makes the
-  // `ac2-ssh-sign` shim fail with "cannot reach the bridge" after a gateway
-  // restart.
-  ensureGitSignBridge(config, { manager });
 
   const { pairing, connect } = await provider.startPairing({
     ...(context.signal !== undefined ? { signal: context.signal } : {}),
@@ -136,8 +128,6 @@ export async function runAc2Channel(
         ...(streamSendable ? { controlTransport: streamSendable } : {}),
         ...(walletAddress !== undefined ? { walletAddress } : {}),
       });
-      // Serve git SSH-signing requests (`ac2-ssh-sign` shim) while active.
-      ensureGitSignBridge(config, { manager });
       context.logger?.info('[ac2-open-claw] channel connected; tools are live');
     } catch (err) {
       context.logger?.error(

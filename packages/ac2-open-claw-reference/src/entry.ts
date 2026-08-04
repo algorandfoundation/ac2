@@ -99,7 +99,9 @@ function runAc2SlashCommand(ctx: { args?: string }): { text: string } {
       '  openclaw ac2 setup        Print/update channel configuration.',
       '  openclaw ac2 github-key   Print the wallet key as a GitHub SSH signing key.',
       '  openclaw ac2 git-config [repo-dir] [--name u] [--email e] [--pat t]',
-      '                            Wire git commit signing (and HTTPS push) through the AC2 wallet.',
+      "                            Set the repo's committer identity (and HTTPS push credentials).",
+      '  openclaw ac2 git-resign <repo-dir> [--ref r] [--base r]',
+      '                            Sign commits in place via the AC2 wallet before pushing.',
     ].join('\n'),
   };
 }

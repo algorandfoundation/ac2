@@ -184,22 +184,10 @@ Add the printed line on GitHub under **Settings → SSH and GPG keys →
 New SSH key**, choosing key type **Signing Key**. Do this **before your
 first signed commit**: commits are signed with the Ed25519 key on your
 AC2 wallet, and GitHub marks them *Unverified* until that key is
-registered. Then apply the git wiring in one shot:
+registered. Then set the repo's committer identity:
 
 ```bash
 openclaw ac2 git-config <repo-dir> --name <github-username> --email <email> [--pat <token>]
-```
-
-This writes the signing shim + allowed-signers file and runs the
-`git config` commands in the target repo (`--global` also works;
-run with no repo dir to just print the commands):
-
-```bash
-git config gpg.format ssh
-git config user.signingkey 'key::ssh-ed25519 AAAA… ac2-<addr>'
-git config gpg.ssh.program '<state-dir>/ac2/ac2-ssh-sign'
-git config gpg.ssh.allowedSignersFile '<state-dir>/ac2/allowed_signers'
-git config commit.gpgsign true
 ```
 
 `--name`/`--email` set the committer identity (GitHub shows *Verified*
@@ -207,27 +195,35 @@ only when the email matches the account). `--pat` stores a fine-grained
 GitHub token in a mode-0600 credential file under the AC2 state dir and
 wires `credential.helper`, so `git push` over HTTPS authenticates —
 signing proves authorship, but pushing still needs its own credential.
+No git signing settings are configured — signing happens after the
+commit, below.
 
 ### How a commit gets signed
 
-1. `git commit` invokes the configured `gpg.ssh.program` shim exactly
-   like `ssh-keygen -Y sign`.
-2. The shim forwards the commit buffer over a mode-0600 Unix socket to
-   the **git-signing bridge**, which the `ac2` channel serves while a
-   session is active.
-3. The bridge builds the SSHSIG signed-data blob, routes a standard
-   `raw-ed25519` `SigningRequest` to the paired wallet, and the user
+Commits are created unsigned and signed **in place** before push:
+
+```bash
+git commit -m "..."
+openclaw ac2 git-resign <repo-dir>   # or --base origin/<branch> for a chain
+git push
+```
+
+1. `git-resign` reads the exact commit payload with
+   `git cat-file commit` — for an unsigned commit this is byte-for-byte
+   the SSHSIG signing input.
+2. It builds the SSHSIG signed-data blob and routes a standard
+   `raw-ed25519` `SigningRequest` to the paired wallet; the user
    approves it (e.g. `Sign git commit: "feat: …"`).
-4. The bridge verifies the returned signature and public key (pinned to
-   the key git was configured with), assembles the armored
-   `SSH SIGNATURE` block, and the shim writes it where git expects.
+3. It verifies the returned signature, inserts the armored
+   `SSH SIGNATURE` block as the commit's `gpgsig` header, writes the new
+   object with `git hash-object`, and moves the ref with a
+   compare-and-swap `git update-ref`. The commit hash changes; with
+   `--base`, a whole chain is re-signed oldest-first with parent hashes
+   rewritten along the way.
 
 Signing requires an active `ac2` session (`openclaw ac2 pair`) — each
 commit is a wallet approval. `ac2_git_sign` exposes the same flow as a
 tool so the agent can sign arbitrary git objects with consent.
-
-Environment overrides: `AC2_GIT_SIGN_SOCKET` (bridge socket path) and
-`AC2_GIT_SIGN_TIMEOUT_MS` (shim approval timeout, default `180000`).
 
 ## Scope
 

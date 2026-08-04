@@ -207,8 +207,8 @@ const plugin = defineToolPlugin({
         'tool builds the SSHSIG signed-data blob, asks the paired wallet for a raw Ed25519 signature, ' +
         "and returns the armored `SSH SIGNATURE` block plus the signer's `ssh-ed25519` public key. " +
         'That key must be registered on GitHub as an SSH *signing* key for commits to show "Verified". ' +
-        'For normal `git commit -S` usage prefer `openclaw ac2 git-config`, which wires git to sign ' +
-        'through this plugin automatically. Requires an active `ac2` channel; otherwise rejects with ' +
+        'For signing ordinary commits prefer `openclaw ac2 git-resign <repo-dir>`, which signs commits ' +
+        'in place after `git commit`. Requires an active `ac2` channel; otherwise rejects with ' +
         '`no_active_session`.',
       parameters: Type.Object({
         payload_base64: Type.String({

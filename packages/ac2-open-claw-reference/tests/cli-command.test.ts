@@ -11,11 +11,11 @@ import {
 } from '../src/cli/ac2-command.js';
 import {
   applyGitConfigEntries,
+  buildGitConfigEntries,
   gitSetupAlreadyConfiguredNotice,
   parseGitConfigArgs,
   readGitSetupRecord,
   recordGitSetup,
-  writeGitSigningAssets,
 } from '../src/git/config.js';
 
 function moduleLoadError(
@@ -153,8 +153,7 @@ describe.runIf(hasGit)('applyGitConfigEntries', () => {
 
     applyGitConfigEntries(
       [
-        ['gpg.format', 'ssh'],
-        ['user.signingkey', 'key::ssh-ed25519 AAAA test'],
+        ['user.name', 'alice'],
         ['user.email', 'a@ex.com'],
       ],
       { repoDir },
@@ -162,40 +161,40 @@ describe.runIf(hasGit)('applyGitConfigEntries', () => {
 
     const readBack = (key: string): string =>
       spawnSync('git', ['-C', repoDir, 'config', key], { encoding: 'utf8' }).stdout.trim();
-    expect(readBack('gpg.format')).toBe('ssh');
-    expect(readBack('user.signingkey')).toBe('key::ssh-ed25519 AAAA test');
+    expect(readBack('user.name')).toBe('alice');
     expect(readBack('user.email')).toBe('a@ex.com');
   });
 
   it('fails when the target directory is not a git repository', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ac2-not-a-repo-'));
-    expect(() => applyGitConfigEntries([['gpg.format', 'ssh']], { repoDir: dir })).toThrow();
+    expect(() => applyGitConfigEntries([['user.name', 'alice']], { repoDir: dir })).toThrow();
   });
 });
 
-describe('writeGitSigningAssets', () => {
-  it('bakes the bridge socket path into the wrapper as an overridable default', () => {
+describe('buildGitConfigEntries', () => {
+  it('builds identity entries and a credential helper for the PAT', () => {
     const prev = process.env.OPENCLAW_STATE_DIR;
-    const stateDir = mkdtempSync(join(tmpdir(), 'ac2-assets-'));
+    const stateDir = mkdtempSync(join(tmpdir(), 'ac2-entries-'));
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
-      const keyLine = 'ssh-ed25519 AAAA test';
-      const { wrapperPath, allowedSignersPath } = writeGitSigningAssets(keyLine);
+      const entries = buildGitConfigEntries({ name: 'alice', email: 'a@ex.com', pat: 'tok' });
+      expect(entries.map(([k]) => k)).toEqual(['user.name', 'user.email', 'credential.helper']);
+      // No signing entries: commits are signed in place by `ac2 git-resign`.
+      expect(entries.map(([k]) => k)).not.toContain('gpg.format');
+      expect(entries.map(([k]) => k)).not.toContain('commit.gpgsign');
 
-      const wrapper = readFileSync(wrapperPath, 'utf8');
-      // Baked at config time so git's (possibly different) shell environment
-      // cannot resolve a divergent path — but an explicit env var still wins.
-      expect(wrapper).toContain(
-        `: "\${AC2_GIT_SIGN_SOCKET:=${join(stateDir, 'ac2', 'git-sign.sock')}}"`,
-      );
-      expect(wrapper).toContain('export AC2_GIT_SIGN_SOCKET');
-      expect(wrapper).toContain(`exec "${process.execPath}"`);
-
-      expect(readFileSync(allowedSignersPath, 'utf8')).toBe(`* namespaces="git" ${keyLine}\n`);
+      // The token lives only in the 0600 credential file, never in the entries.
+      expect(JSON.stringify(entries)).not.toContain('tok');
+      const credentialsPath = join(stateDir, 'ac2', 'git-credentials');
+      expect(readFileSync(credentialsPath, 'utf8')).toBe('https://alice:tok@github.com\n');
     } finally {
       if (prev === undefined) delete process.env.OPENCLAW_STATE_DIR;
       else process.env.OPENCLAW_STATE_DIR = prev;
     }
+  });
+
+  it('builds nothing when no identity or PAT is given', () => {
+    expect(buildGitConfigEntries({})).toEqual([]);
   });
 });
 

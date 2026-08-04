@@ -1,4 +1,4 @@
-/** Git SSH-signing (SSHSIG) domain barrel. The `ac2-ssh-sign` shim is standalone in `./shim.js`. */
+/** Git SSH-signing (SSHSIG) domain barrel. */
 
 export {
   SSHSIG_NAMESPACE_GIT,
@@ -20,11 +20,11 @@ export {
   type GitSignResult,
 } from './sign-flow.js';
 export {
-  ensureGitSignBridge,
-  gitSignSocketPath,
-  resolveAc2StateDir,
-  stopGitSignBridge,
-  type GitSignBridgeDeps,
-  type GitSignBridgeRequest,
-  type GitSignBridgeResponse,
-} from './bridge.js';
+  insertGpgsigHeader,
+  resignCommits,
+  rewriteParentHeaders,
+  stripGpgsigHeader,
+  type GitResignOptions,
+  type GitResignResult,
+} from './resign.js';
+export { resolveAc2StateDir } from './config.js';

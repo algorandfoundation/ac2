@@ -1,4 +1,9 @@
-/** The `ac2` shell + slash command: `pair`, `status`, `connections`, `forget`, `github-key`, `git-config`. */
+/** The `ac2` shell + slash command: `pair`, `status`, `connections`, `forget`, `github-key`, `git-config`, `git-resign`. */
+
+const GIT_RESIGN_USAGE =
+  'Usage: ac2 git-resign <repo-dir> [--ref <ref>] [--base <ref>]\n' +
+  'Signs the tip commit of <ref> (default HEAD) in place via the paired wallet.\n' +
+  'With --base, re-signs every commit in <base>..<ref>, rewriting the chain.';
 
 import { join } from 'node:path';
 
@@ -10,7 +15,7 @@ import { readChannelStatus } from '../setup/config.js';
 import { BootstrapError, bootstrapAgentIdentity } from '../session/bootstrap.js';
 import type { ChannelContext } from '../session/contracts.js';
 import { sessionManager } from '../session/manager.js';
-import { ensureGitSignBridge, gitSignSocketPath, resolveAc2StateDir } from '../git/bridge.js';
+import { resignCommits } from '../git/resign.js';
 import { toAuthorizedKeyLine } from '../git/sshsig.js';
 import {
   GIT_CONFIG_USAGE,
@@ -21,8 +26,8 @@ import {
   parseGitConfigArgs,
   readGitSetupRecord,
   recordGitSetup,
+  resolveAc2StateDir,
   resolveWalletSigningPublicKey,
-  writeGitSigningAssets,
 } from '../git/config.js';
 import {
   clearAc2State,
@@ -154,8 +159,10 @@ export function buildAc2Command(api: OpenClawApi): unknown {
     description:
       'AC2 channel control: pair | status | connections | forget | github-key | ' +
       'git-config [repo-dir] [--global] [--name <github-username>] [--email <email>] ' +
-      '[--pat <token>]. `github-key` prints the wallet SSH signing key; `git-config` ' +
-      'wires wallet-signed commits (and HTTPS push with --pat) into a repo.',
+      '[--pat <token>] | git-resign <repo-dir> [--ref <ref>] [--base <ref>]. ' +
+      '`github-key` prints the wallet SSH signing key; `git-config` sets the ' +
+      "repo's committer identity (and HTTPS push with --pat); `git-resign` " +
+      'signs commits in place via the paired wallet before push.',
     acceptsArgs: true,
     requireAuth: false,
     async handler(ctx: any): Promise<{ text: string; keepAlive?: boolean }> {
@@ -247,7 +254,8 @@ export function buildAc2Command(api: OpenClawApi): unknown {
             'Key type: "Signing Key". Commits signed over AC2 then show as Verified',
             'when the committer email matches your GitHub account.',
             '',
-            'Then wire git to sign through AC2 with: openclaw ac2 git-config',
+            'Then set the repo identity (openclaw ac2 git-config <repo-dir> --name …',
+            '--email …) and sign commits before pushing with: openclaw ac2 git-resign',
           ].join('\n'),
         };
       }
@@ -257,39 +265,34 @@ export function buildAc2Command(api: OpenClawApi): unknown {
         if ('error' in parsed) {
           return { text: `git-config: ${parsed.error}\n${GIT_CONFIG_USAGE}` };
         }
-        const key = resolveWalletSigningPublicKey();
-        if (!key) return { text: NO_WALLET_KEY_MESSAGE };
-        const line = toAuthorizedKeyLine(key.publicKey, `ac2-${key.address.slice(0, 8)}`);
-        const assets = writeGitSigningAssets(line);
-        const entries = buildGitConfigEntries(line, assets, parsed);
-        const header = [
-          `Wrote signing shim wrapper:  ${assets.wrapperPath}`,
-          `Wrote allowed signers file:  ${assets.allowedSignersPath}`,
-          ...(parsed.pat
-            ? [
-              `Wrote push credentials:      ${join(resolveAc2StateDir(), 'git-credentials')} (0600)`,
-            ]
-            : []),
-          `Bridge socket:               ${gitSignSocketPath()}`,
-          '',
-        ];
+        const entries = buildGitConfigEntries(parsed);
+        if (entries.length === 0) {
+          return {
+            text: `git-config: nothing to apply — pass --name/--email (and --pat to push).\n${GIT_CONFIG_USAGE}`,
+          };
+        }
+        const header = parsed.pat
+          ? [`Wrote push credentials: ${join(resolveAc2StateDir(), 'git-credentials')} (0600)`, '']
+          : [];
         const footer = [
           '',
-          'Before your first commit: commits are signed with the Ed25519 key on',
-          'your AC2 wallet, so add that key to GitHub first (run `openclaw ac2',
-          'github-key` to print it, then GitHub → Settings → SSH and GPG keys →',
-          'New SSH key → key type "Signing Key"). Until it is uploaded, GitHub',
-          'will show commits as Unverified.',
+          'Commits are signed in place by the AC2 wallet AFTER committing:',
           '',
-          'Signing requires an active `ac2` session (`openclaw ac2 pair`): each',
-          'commit sends an approval request to the paired wallet.',
+          '  git commit …',
+          '  openclaw ac2 git-resign <repo-dir>   # wallet approval per commit',
+          '  git push',
+          '',
+          'Never push without re-signing first. Add the wallet key to GitHub once',
+          '(`openclaw ac2 github-key` prints it; Settings → SSH and GPG keys → New',
+          'SSH key → type "Signing Key") or commits show as Unverified. Signing',
+          'requires an active `ac2` session (`openclaw ac2 pair`).',
         ];
 
         if (!parsed.repoDir && !parsed.global) {
           return {
             text: [
               ...header,
-              'Run these in the repo you want signed:',
+              'Run these in the target repo:',
               '',
               ...entries.map(([k, v]) => `  git config ${k} '${v}'`),
               '',
@@ -320,9 +323,55 @@ export function buildAc2Command(api: OpenClawApi): unknown {
               : []),
             '',
             'Setup for this target is COMPLETE. Agent: do not re-run `git-config` or',
-            '`github-key` for it again — just run `git commit` (the wallet prompts',
-            'for approval on every commit).',
+            '`github-key` for it again.',
             ...footer,
+          ].join('\n'),
+        };
+      }
+
+      if (sub === 'git-resign') {
+        // Sign-after-commit: signs the tip (or a range) of an existing repo
+        // in place via the active session — no git signing config involved.
+        const rest = tokens.slice(1);
+        let repoDir: string | undefined;
+        let ref: string | undefined;
+        let base: string | undefined;
+        for (let i = 0; i < rest.length; i++) {
+          const token = rest[i]!;
+          if (token === '--ref') ref = rest[++i];
+          else if (token === '--base') base = rest[++i];
+          else if (!token.startsWith('--') && repoDir === undefined) repoDir = token;
+          else return { text: `git-resign: unexpected argument '${token}'\n${GIT_RESIGN_USAGE}` };
+        }
+        if (!repoDir) return { text: `git-resign: missing <repo-dir>\n${GIT_RESIGN_USAGE}` };
+
+        const cfg = resolveConfig(api);
+        const result = await resignCommits(
+          { repoDir, ...(ref !== undefined ? { ref } : {}), ...(base !== undefined ? { base } : {}) },
+          cfg,
+        );
+        if (result.status === 'rejected') {
+          if (result.reason === 'no_active_session') {
+            return {
+              text:
+                'git-resign: no active AC2 wallet session — pair the wallet first ' +
+                '(`openclaw ac2 pair`), then retry.',
+            };
+          }
+          if (result.reason === 'already_signed') {
+            return { text: 'git-resign: every commit in range is already signed — nothing to do.' };
+          }
+          return { text: `git-resign: ${result.reason}` };
+        }
+        return {
+          text: [
+            `Re-signed ${result.commits.length} commit(s) on ${result.ref}:`,
+            '',
+            ...result.commits.map(
+              (c) => `  ${c.oldSha.slice(0, 8)} → ${c.newSha.slice(0, 8)}  ${c.subject}`,
+            ),
+            '',
+            `Ref moved: ${result.oldTip.slice(0, 8)} → ${result.newTip.slice(0, 8)}. Push to publish.`,
           ].join('\n'),
         };
       }
@@ -613,9 +662,6 @@ export function buildAc2Command(api: OpenClawApi): unknown {
               ...(walletAddress ? { walletAddress } : {}),
               ...(connectionRequestId ? { requestId: connectionRequestId } : {}),
             });
-            // Serve git SSH-signing requests (`ac2-ssh-sign` shim) while a
-            // session is active. Idempotent across reconnect cycles.
-            ensureGitSignBridge(cfg);
             safeLog(
               api,
               'info',
@@ -813,7 +859,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
       }
 
       return {
-        text: `Unknown subcommand: ${sub}. Use 'pair', 'status', 'connections', 'forget', 'github-key', or 'git-config'.`,
+        text: `Unknown subcommand: ${sub}. Use 'pair', 'status', 'connections', 'forget', 'github-key', 'git-config', or 'git-resign'.`,
       };
     },
   };
