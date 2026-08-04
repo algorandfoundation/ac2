@@ -1,6 +1,6 @@
 # OpenClaw + AC2 pairing server
 
-Publicly accessible OpenClaw instance on Ubuntu with the Algorand Foundation **AC2** stack: the [AC2 service](../ac2-cli/README.md) (`ac2-cli`) owns the wallet connection, and the [AC2 reference plugin](../ac2-open-claw-reference/README.md) wires it into the OpenClaw agent. A user opens a token-protected web page, presses "Start pairing session", and scans the QR code (produced by `openclaw ac2 pair`) with their AC2 Controller / wallet. The pairing session stays alive for 15 minutes (configurable; `0` = forever), then auto-expires.
+A runnable example — not part of the published plugin package — showing how to deploy this plugin behind a publicly accessible OpenClaw instance on Ubuntu. Publicly accessible OpenClaw instance with the Algorand Foundation **AC2** stack: the [AC2 service](../../../ac2-cli/README.md) (`ac2-cli`) owns the wallet connection, and the [AC2 reference plugin](../../README.md) wires it into the OpenClaw agent. A user opens a token-protected web page, presses "Start pairing session", and scans the QR code (produced by `openclaw ac2 pair`) with their AC2 Controller / wallet. The pairing session stays alive for 15 minutes (configurable; `0` = forever), then auto-expires.
 
 ## Architecture
 
@@ -58,7 +58,7 @@ Notes on why it's built this way:
 
 ```bash
 # on the server
-git clone <this repo> ac2 && cd ac2/packages/ac2-open-claw-server
+git clone <this repo> ac2 && cd ac2/packages/ac2-open-claw-reference/examples/docker-server
 chmod +x scripts/setup.sh scripts/build-plugin.sh ac2-service/entry.sh
 ```
 

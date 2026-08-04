@@ -9,9 +9,9 @@
 # `scripts/setup.sh` calls it automatically.
 set -euo pipefail
 
-# Repo layout: packages/ac2-open-claw-server/scripts/build-plugin.sh
+# Repo layout: packages/ac2-open-claw-reference/examples/docker-server/scripts/build-plugin.sh
 SERVER_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-REPO_ROOT="$(cd "$SERVER_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SERVER_DIR/../../../.." && pwd)"
 
 command -v pnpm >/dev/null || { echo "pnpm is required to build the AC2 packages"; exit 1; }
 

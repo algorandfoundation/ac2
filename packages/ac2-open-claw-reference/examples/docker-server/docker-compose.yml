@@ -27,8 +27,8 @@ services:
     build:
       # Context is the monorepo root: the Dockerfile assembles the AC2 plugin
       # (and the ac2-cli service bundled inside it) from the monorepo source.
-      context: ../..
-      dockerfile: packages/ac2-open-claw-server/Dockerfile
+      context: ../../../..
+      dockerfile: packages/ac2-open-claw-reference/examples/docker-server/Dockerfile
       args:
         OPENCLAW_IMAGE: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
     image: openclaw-ac2:local

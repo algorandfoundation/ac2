@@ -48,7 +48,7 @@ COPY --chown=node:node packages/ac2-open-claw-reference packages/ac2-open-claw-r
 # `pnpm pack` can only rewrite `workspace:*` specifiers against an installed
 # node_modules; rewrite these throwaway builder copies instead (drop devDeps,
 # pin workspace refs to their concrete versions) so no `pnpm install` is needed.
-COPY --chown=node:node packages/ac2-open-claw-server/scripts/prepare-builder-manifests.mjs /build/prepare-builder-manifests.mjs
+COPY --chown=node:node packages/ac2-open-claw-reference/examples/docker-server/scripts/prepare-builder-manifests.mjs /build/prepare-builder-manifests.mjs
 RUN node /build/prepare-builder-manifests.mjs /build
 
 # Produces a tarball with a fully materialised node_modules (npm install runs
@@ -74,7 +74,7 @@ COPY --from=plugin-builder --chown=node:node /build/ac2-plugin.tgz /app/ac2-plug
 
 # `ac2` on PATH → the ac2-cli bundled inside the installed plugin, so the
 # service container and operators use the exact same build the plugin uses.
-COPY packages/ac2-open-claw-server/scripts/ac2-wrapper.sh /usr/local/bin/ac2
+COPY packages/ac2-open-claw-reference/examples/docker-server/scripts/ac2-wrapper.sh /usr/local/bin/ac2
 RUN chmod 755 /usr/local/bin/ac2
 
 USER node
@@ -100,7 +100,7 @@ RUN node /app/dist/index.js plugins enable ac2 \
     && node /app/dist/index.js ac2 setup
 
 # 4) AC2 service entrypoint + pair-manager HTTP service.
-COPY --chown=node:node packages/ac2-open-claw-server/ac2-service /app/ac2-service
-COPY --chown=node:node packages/ac2-open-claw-server/pair-manager /app/pair-manager
+COPY --chown=node:node packages/ac2-open-claw-reference/examples/docker-server/ac2-service /app/ac2-service
+COPY --chown=node:node packages/ac2-open-claw-reference/examples/docker-server/pair-manager /app/pair-manager
 
 EXPOSE 18789 8377
