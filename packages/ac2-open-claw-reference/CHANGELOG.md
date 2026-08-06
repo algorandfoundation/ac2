@@ -1,3 +1,11 @@
+# [ac2-open-claw-reference@1.0.0-canary.26](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.25...ac2-open-claw-reference@1.0.0-canary.26) (2026-08-06)
+
+
+### Bug Fixes
+
+* darwin keyring, cli-entrypoint and windows fixes ([a460b8e](https://github.com/algorandfoundation/ac2/commit/a460b8edf0aab69174e6dd354a59b1a5237b0ed4))
+* macOS names for background service and liveness check from daemon ([4690181](https://github.com/algorandfoundation/ac2/commit/46901819ef3d3f71feb963b0b15a2a70cec0b0d5))
+
 # [ac2-open-claw-reference@1.0.0-canary.25](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.24...ac2-open-claw-reference@1.0.0-canary.25) (2026-08-06)
 
 
