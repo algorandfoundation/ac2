@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.25](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.24...ac2-open-claw-reference@1.0.0-canary.25) (2026-08-06)
+
+
+### Bug Fixes
+
+* resolve keystore packages from the npm registry ([4af3953](https://github.com/algorandfoundation/ac2/commit/4af395394b16549401169cd8da69bb2ce8da8e82))
+
 # [ac2-open-claw-reference@1.0.0-canary.24](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.23...ac2-open-claw-reference@1.0.0-canary.24) (2026-08-06)
 
 
