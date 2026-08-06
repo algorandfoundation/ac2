@@ -116,6 +116,18 @@ const AC2_DEFAULT_PAIRING_TIMEOUT_MS = 120_000;
  * human takes to scan/approve — that phase has no ceiling of its own.
  */
 const AC2_DEFAULT_SIGNAL_DEAD_TIMEOUT_MS = 45_000;
+/**
+ * Once the wallet's `offer-description` has actually been RECEIVED, the rest
+ * of the handshake (answer + ICE + data-channel open) is machine-paced — no
+ * human is involved any more — so it must complete within this window or the
+ * negotiation is declared stalled and re-armed. Without this, answering a
+ * stale offer (one whose wallet-side peer has already been torn down, e.g.
+ * after the wallet switched networks mid-session) wedged `connect()` forever:
+ * the SDK's offer listener is one-shot, so every fresh offer from the
+ * wallet's retry loop was silently dropped while `peer()` waited on a data
+ * channel that could never open.
+ */
+const AC2_DEFAULT_NEGOTIATION_STALL_TIMEOUT_MS = 30_000;
 const AC2_CONTROL_LABEL = 'ac2-v1' as const;
 const AC2_STREAM_LABEL = 'ac2-stream' as const;
 /** Dedicated liveness channel — keeps keepalive off the control plane. */
@@ -392,6 +404,99 @@ export function withSignalingHealthGuard<T>(
     sock.on('disconnect', onDisconnect);
     sock.on('connect', onReconnect);
     opts.signal?.addEventListener('abort', onAbort);
+
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(err);
+      },
+    );
+  });
+}
+
+/** Raised when a received offer's handshake never produces a data channel. */
+export class NegotiationStallError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NegotiationStallError';
+  }
+}
+
+/**
+ * Race the pairing-handshake promise against a deadline that arms only once
+ * the wallet's `offer-description` has actually been RECEIVED (the client
+ * emits `offer-description` at that moment). Before the offer arrives there
+ * is no ceiling at all — that phase legitimately waits on the human scanning
+ * the QR / reopening their wallet, exactly like `withSignalingHealthGuard`.
+ * After it, the answer/ICE/data-channel steps are machine-paced and should
+ * complete in seconds, so a `stallTimeoutMs` overrun means the answered offer
+ * is dead.
+ *
+ * Why this must exist: the SDK's `signal('offer')` waits with a one-shot
+ * `socket.once('offer-description')`. If the first offer heard is stale (its
+ * wallet-side peer was already torn down — e.g. the wallet switched networks
+ * and its cancelled attempt's traffic was flushed on socket reconnect), the
+ * agent answers it and then `peer()` waits forever for a data channel while
+ * every fresh offer from the wallet's retry loop is silently dropped. Nothing
+ * else recovers this: the signaling socket stays healthy (so the health guard
+ * never fires), the heartbeat isn't running yet, and presence teardown stands
+ * down while `negotiating`. On stall, invokes `onFailure` (tear down the dead
+ * peer) and rejects, so the caller's re-pair loop re-arms `connect()` with a
+ * fresh offer listener on the same socket.
+ */
+export function withNegotiationStallGuard<T>(
+  promise: Promise<T>,
+  client: {
+    on: (event: string, listener: (...args: any[]) => void) => void;
+    off?: (event: string, listener: (...args: any[]) => void) => void;
+  },
+  opts: { stallTimeoutMs: number; onFailure?: () => void },
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let stallTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = (): void => {
+      if (stallTimer !== undefined) {
+        clearTimeout(stallTimer);
+        stallTimer = undefined;
+      }
+      client.off?.('offer-description', onOfferReceived);
+    };
+
+    function onOfferReceived(): void {
+      // Arm once, on the FIRST received offer; later emissions (offer
+      // resends) must not push the deadline out.
+      if (settled || stallTimer !== undefined) return;
+      stallTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        try {
+          opts.onFailure?.();
+        } catch {
+          // Teardown is best-effort; still reject the caller.
+        }
+        reject(
+          new NegotiationStallError(
+            `[ac2-open-claw] offer answered but no data channel opened within ${opts.stallTimeoutMs}ms — ` +
+              're-arming to await a fresh offer',
+          ),
+        );
+      }, opts.stallTimeoutMs);
+      // Don't keep the event loop alive just for the stall deadline.
+      (stallTimer as { unref?: () => void }).unref?.();
+    }
+
+    client.on('offer-description', onOfferReceived);
 
     promise.then(
       (value) => {
@@ -1071,8 +1176,28 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         // tear this down — not the human simply taking their time. A genuine
         // failure here means the socket itself is unusable, so fully tear it
         // down (the caller then builds a fresh pairing handle).
+        //
+        // The inner stall guard is the one bounded phase: once an offer has
+        // actually been RECEIVED, the rest of the handshake is machine-paced,
+        // so a data channel must open within the stall window. Answering a
+        // stale offer (the wallet tore that peer down — e.g. a mid-session
+        // network switch) otherwise wedges this `peer()` forever: its offer
+        // listener is one-shot, so the wallet's fresh retries are dropped, the
+        // socket stays healthy (health guard never fires), and presence
+        // teardown stands down while `negotiating`. On stall, tear down ONLY
+        // the p2p peer and rethrow — the re-pair loop re-arms `connect()` on
+        // this same socket and answers the wallet's next offer.
         const primary: any = await withSignalingHealthGuard(
-          client.peer(requestId, 'offer', AC2_ICE_CONFIG, { dataChannels }),
+          withNegotiationStallGuard(
+            client.peer(requestId, 'offer', AC2_ICE_CONFIG, { dataChannels }),
+            client as any,
+            {
+              stallTimeoutMs: AC2_DEFAULT_NEGOTIATION_STALL_TIMEOUT_MS,
+              onFailure: () => {
+                teardownPeer();
+              },
+            },
+          ),
           socket,
           {
             deadSocketTimeoutMs: AC2_DEFAULT_SIGNAL_DEAD_TIMEOUT_MS,
