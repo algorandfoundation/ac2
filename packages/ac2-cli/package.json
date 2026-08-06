@@ -50,7 +50,7 @@
   },
   "dependencies": {
     "@algorandfoundation/ac2-sdk": "workspace:*",
-    "@algorandfoundation/keystore-node": "file:vendor/algorandfoundation-keystore-node-1.0.0-canary.16.tgz",
+    "@algorandfoundation/keystore-node": "1.0.0-canary.1",
     "@napi-rs/keyring": "^1.3.0",
     "@tanstack/store": "^0.9.1",
     "qrcode-terminal": "^0.12.0"

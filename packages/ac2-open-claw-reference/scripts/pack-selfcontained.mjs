@@ -10,9 +10,7 @@
  *     package, not inlined),
  *   - `@algorandfoundation/ac2-sdk`  — the local build carries `./runtime` and
  *     `./providers/*` export subpaths that the published canary does not, so
- *     it must be the LOCAL build, never fetched,
- *   - `@algorandfoundation/keystore-node` / `keystore-core` — vendored tarballs
- *     (canary.16), unpublished.
+ *     it must be the LOCAL build, never fetched.
  *
  * OpenClaw installs a plugin tarball by copying it to a staging dir (a shipped
  * `node_modules/` is PRESERVED verbatim) and then running
@@ -29,13 +27,11 @@
  *
  * What this script does
  * ---------------------
- *  1. `npm pack` the local `ac2-sdk` and `ac2-cli` into vendor tarballs, and
- *     copy ac2-cli's vendored `keystore-node`/`keystore-core` tarballs.
+ *  1. `npm pack` the local `ac2-sdk` and `ac2-cli` into vendor tarballs.
  *  2. Assemble a staging dir: the plugin's built `dist/`, `openclaw.plugin.json`,
  *     `skills/`, `README.md`, `LICENSE`, and a rewritten `package.json` whose
- *     unpublished deps are `file:vendor/*.tgz` (with `keystore-node`/
- *     `keystore-core` promoted to top-level file: deps so nested requirements
- *     resolve by hoisting), and whose `openclaw` manifest block is preserved.
+ *     unpublished deps are `file:vendor/*.tgz`, and whose `openclaw` manifest
+ *     block is preserved.
  *  3. Run a NORMAL `npm install` (scripts ENABLED) in the staging dir so the
  *     full tree — including the wrtc/keyring native binaries — is materialised.
  *     THIS step needs network; the produced tarball does not.
@@ -77,7 +73,6 @@ const pluginRoot = resolve(here, '..');
 const packagesDir = resolve(pluginRoot, '..');
 const cliRoot = resolve(packagesDir, 'ac2-cli');
 const sdkRoot = resolve(packagesDir, 'ac2-sdk');
-const cliVendorDir = resolve(cliRoot, 'vendor');
 
 const argv = process.argv.slice(2);
 const outIdx = argv.indexOf('--out');
@@ -159,18 +154,6 @@ try {
   const sdkTgz = pnpmPackInto(sdkRoot, stageVendor);
   const cliTgz = pnpmPackInto(cliRoot, stageVendor);
 
-  // ac2-cli's vendored keystore tarballs (unpublished; npm ignores the pnpm
-  // workspace override that supplies keystore-core, so we vendor it too).
-  const keystoreTarballs = readdirSync(cliVendorDir).filter((f) => f.endsWith('.tgz'));
-  const findKs = (needle) => {
-    const f = keystoreTarballs.find((n) => n.includes(needle));
-    if (!f) throw new Error(`could not find ${needle} tarball in ${cliVendorDir}`);
-    cpSync(join(cliVendorDir, f), join(stageVendor, f));
-    return f;
-  };
-  const keystoreNodeTgz = findKs('keystore-node');
-  const keystoreCoreTgz = findKs('keystore-core');
-
   // ── 2. Assemble the staging package contents. ─────────────────────────────
   console.log('[selfcontained] assembling staging package…');
   for (const entry of ['dist', 'openclaw.plugin.json', 'skills', 'README.md', 'LICENSE']) {
@@ -187,11 +170,6 @@ try {
   const dependencies = {
     '@algorandfoundation/ac2-cli': `file:vendor/${basename(cliTgz)}`,
     '@algorandfoundation/ac2-sdk': `file:vendor/${basename(sdkTgz)}`,
-    // Promote keystore packages to top-level file: deps so keystore-node's
-    // requirement on keystore-core resolves by hoisting (npm does not honour
-    // the pnpm workspace override).
-    '@algorandfoundation/keystore-node': `file:vendor/${keystoreNodeTgz}`,
-    '@algorandfoundation/keystore-core': `file:vendor/${keystoreCoreTgz}`,
     ...publishedRuntimeDeps,
     // Direct transitive deps listed so they survive the host's prune (a
     // bundledDependency should also appear in dependencies).
