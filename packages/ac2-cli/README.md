@@ -39,7 +39,7 @@ macOS, Linux and Windows are all supported, with these differences:
 | --- | --- | --- | --- |
 | Control channel | Unix socket in `AC2_HOME` | Unix socket in `AC2_HOME` | named pipe (`\\.\pipe\ac2-daemon`, suffixed per custom `AC2_HOME`) |
 | Key storage | dedicated AC2 keychain (see Troubleshooting) | Secret Service (`gnome-keyring`, …) | Credential Manager |
-| `ac2 service install` | launchd agent | systemd user unit | not available — use `ac2 service start`, which survives the terminal |
+| `ac2 service install` | launchd agent (runs `AC2.app`, so macOS names it "AC2") | systemd user unit | not available — use `ac2 service start`, which survives the terminal |
 
 ## Quick start
 
@@ -68,7 +68,7 @@ new scan required.
 | `ac2 service attach` | Follow the live log. Ctrl+C detaches and leaves the service running. |
 | `ac2 service logs [-n 50]` | Print the last N log lines. |
 | `ac2 service install` | Install an OS supervision unit (systemd user service, or launchd agent on macOS) so the service starts with your session. |
-| `ac2 service uninstall` | Remove that unit. |
+| `ac2 service uninstall` | Remove that unit (and, on macOS, the launcher it generated). |
 
 `attach` and `logs` give you the "reattach to a running session" feel of `screen`
 without the service ever depending on a terminal.
@@ -112,7 +112,16 @@ Everything has a working default. Set these only if you need to.
 | `OPENCLAW_GATEWAY_URL` / `_PORT` / `_TOKEN` | Gateway connection for the `openclaw-gateway` adapter. Discovered from `openclaw.json` when unset. |
 
 Set them in the environment of the process that runs the service, for example
-before `ac2 service start`, or in the unit written by `ac2 service install`.
+before `ac2 service start`.
+
+`ac2 service install` **captures** them: a supervised service inherits nothing
+from your shell, so every variable above that is set at install time is written
+into the unit (and echoed back as `environment captured: …`). Change one and
+re-run `ac2 service install`. The unit is written mode `0600`, because it can
+contain `OPENCLAW_GATEWAY_TOKEN` or a token inside `AC2_RUNTIME_CONFIG`.
+
+On macOS the install also generates `$AC2_HOME/AC2.app`: a launcher whose only
+job is to start the service under the name **AC2**. See Troubleshooting below.
 
 ## Troubleshooting
 
@@ -135,6 +144,40 @@ earlier: the command detected "was I run directly?" by comparing paths in a way
 that never matched the `node_modules/.bin/ac2` symlink npm, pnpm and `npx`
 install (and never matched on Windows at all), so it exited silently with status
 0. Upgrade — `npm install -g @algorandfoundation/ac2-cli@next`.
+
+**A supervised service ignores `AC2_STATE_DIR`.** Fixed: the units written by
+`ac2 service install` used to forward `AC2_HOME` only, so the state directory
+(keystore, identities, connections) silently fell back to `~/.openclaw`. Re-run
+`ac2 service install` with your variables exported and restart the service; the
+install now prints which variables it captured.
+
+**`ac2 status` says the daemon is not running while it clearly is.** Also fixed:
+status used to consult only the pidfile, which just the daemon started by `ac2
+service start` writes — one supervised by launchd/systemd writes none. Liveness
+now comes from the live control socket, with the pidfile as fallback, and
+`ac2 service start` reports an already-running service instead of spawning a
+second one.
+
+**macOS asks whether "node" may run in the background.** That prompt (and the
+entry in System Settings → General → Login Items & Extensions) *is* the AC2
+service: macOS names a background item after the program its launchd job runs,
+which used to be the bare `node` binary. `ac2 service install` now generates a
+small launcher, `$AC2_HOME/AC2.app`, and points the job at it, so the item shows
+up as **AC2** instead. The launcher only `exec`s the same `node … service run`
+command, is ad-hoc code signed as `com.algorandfoundation.ac2`, and is deleted by
+`ac2 service uninstall`.
+
+macOS remembers the old entry, so to relabel an existing install:
+
+```sh
+launchctl unload ~/Library/LaunchAgents/com.algorandfoundation.ac2.plist
+ac2 service uninstall
+ac2 service install
+launchctl load ~/Library/LaunchAgents/com.algorandfoundation.ac2.plist
+```
+
+Do not delete `AC2.app` on its own — the service will not start until you re-run
+`ac2 service install`.
 
 **Keychain errors on Linux.** The service stores secrets in the Secret Service
 API, which needs a running keyring daemon (for example `gnome-keyring`) and an

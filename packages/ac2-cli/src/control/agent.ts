@@ -20,7 +20,8 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { daemonProcessStatus, startDetached } from '../daemon/manager.js';
+import { startDetached } from '../daemon/manager.js';
+import { daemonLiveness } from '../daemon/liveness.js';
 import {
   ControlRequestError,
   connectControl,
@@ -79,18 +80,27 @@ export interface EnsureDaemonRunningOptions {
 
 /**
  * Ensure a daemon is reachable over its control socket, auto-starting a
- * detached one when {@link daemonProcessStatus} reports it isn't running.
+ * detached one when {@link daemonLiveness} reports it isn't running.
  *
  * This is the logic that used to live privately in `src/cli.ts`; it is
  * exported here so agent hosts (which are not the `ac2` CLI) can reuse it
  * instead of shelling out to the CLI or duplicating the spawn/poll loop.
+ *
+ * Liveness is decided by the control socket first: a daemon under OS
+ * supervision writes no pidfile, and a pidfile-only check used to spawn a
+ * redundant second daemon on top of a perfectly healthy supervised one.
  */
 export async function ensureDaemonRunning(options: EnsureDaemonRunningOptions = {}): Promise<void> {
   const env = options.env ?? process.env;
   const timeoutMs = options.timeoutMs ?? 5000;
 
-  const proc = await daemonProcessStatus({ env });
-  if (!proc.running) {
+  const liveness = await daemonLiveness({
+    env,
+    timeoutMs: 300,
+    ...(options.socketPath !== undefined ? { socketPath: options.socketPath } : {}),
+  });
+  if (liveness.source === 'control-socket') return;
+  if (!liveness.running) {
     await startDetached({
       command: process.execPath,
       args: [resolveOwnCliPath(), 'service', 'run'],

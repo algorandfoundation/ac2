@@ -11,12 +11,12 @@ import { ensureDaemonRunning } from './control/agent.js';
 import { resolveControlSocketPath } from './control/protocol.js';
 import type { DaemonStatus } from './control/protocol.js';
 import {
-  daemonProcessStatus,
   followLogFile,
   startDetached,
   stopDaemonProcess,
   tailLogFile,
 } from './daemon/manager.js';
+import { daemonLiveness } from './daemon/liveness.js';
 import { installServiceUnit, uninstallServiceUnit } from './daemon/service-units.js';
 import { runDaemon } from './daemon/run.js';
 import { parseCliArgs, type CliFlags } from './cli-args.js';
@@ -77,6 +77,13 @@ function serviceRunOptions(flags: CliFlags): {
 
 /** Hidden `service run`: the foreground daemon body, used by the detached child + OS units. */
 async function serviceRun(flags: CliFlags): Promise<number> {
+  // Without this the daemon shows up as a bare `node` in `ps`/Activity Monitor,
+  // which is exactly the anonymity the launchd launcher bundle exists to avoid.
+  try {
+    process.title = 'ac2d';
+  } catch {
+    // Setting the process title is cosmetic; never fail the daemon over it.
+  }
   const daemon = await runDaemon(serviceRunOptions(flags));
   await daemon.closed;
   return 0;
@@ -95,6 +102,14 @@ async function serviceStart(flags: CliFlags): Promise<number> {
     const daemon = await runDaemon(serviceRunOptions(flags));
     console.log(`ac2 daemon listening on ${daemon.socketPath} (pid ${process.pid})`);
     await daemon.closed;
+    return 0;
+  }
+  // An OS-supervised daemon writes no pidfile, so `startDetached`'s own check
+  // would not see it and would spawn a second daemon that just fails to bind.
+  const liveness = await daemonLiveness();
+  if (liveness.running) {
+    console.log(`daemon is already running (pid ${liveness.pid})`);
+    console.log(`socket: ${resolveControlSocketPath()}`);
     return 0;
   }
   try {
@@ -157,22 +172,18 @@ function formatStatusLines(status: DaemonStatus): string[] {
 }
 
 async function serviceStatus(): Promise<number> {
-  const proc = await daemonProcessStatus();
-  if (!proc.running) {
+  // Liveness comes from the control socket first: a daemon under OS supervision
+  // (launchd/systemd) writes no pidfile, and used to be reported as not running.
+  const liveness = await daemonLiveness();
+  if (!liveness.running) {
     console.log('daemon is not running');
     return 1;
   }
-  console.log(`daemon is running (pid ${proc.pid})`);
-  try {
-    const client = await connectControl({ timeoutMs: 1000 });
-    try {
-      const status = await client.request('daemon.status', {});
-      for (const line of formatStatusLines(status)) console.log(line);
-    } finally {
-      client.close();
-    }
-  } catch (err) {
-    console.log(`(control socket unreachable: ${(err as Error).message})`);
+  console.log(`daemon is running (pid ${liveness.pid})`);
+  if (liveness.status) {
+    for (const line of formatStatusLines(liveness.status)) console.log(line);
+  } else {
+    console.log(`(control socket unreachable: ${liveness.socketError ?? 'unknown error'})`);
   }
   return 0;
 }
@@ -207,6 +218,22 @@ async function serviceInstall(flags: CliFlags): Promise<number> {
   try {
     const result = await installServiceUnit({ execStart });
     console.log(`installed ${result.kind} unit at ${result.path}`);
+    // The unit is the daemon's whole environment, so show what was captured —
+    // anything not listed here reverts to its default in the supervised daemon.
+    const forwarded = Object.keys(result.environment);
+    console.log(
+      forwarded.length === 0
+        ? 'environment: none captured (the daemon will use every default)'
+        : `environment captured: ${forwarded.join(', ')}`,
+    );
+    if (result.launcher) {
+      // Explain the extra artifact before the user finds it in their AC2 home,
+      // and why it exists: macOS names the background item after this program.
+      console.log(
+        `launcher: ${result.launcher.bundlePath}${result.launcher.signed ? ' (ad-hoc signed)' : ''}`,
+      );
+      console.log('macOS will list this background item as "AC2"');
+    }
     for (const instruction of result.instructions) console.log(`  ${instruction}`);
     return 0;
   } catch (err) {
@@ -217,6 +244,7 @@ async function serviceInstall(flags: CliFlags): Promise<number> {
 
 async function serviceUninstall(): Promise<number> {
   const result = await uninstallServiceUnit();
+  if (result.launcherPath !== undefined) console.log(`removed ${result.launcherPath}`);
   if (result.removed) {
     console.log(`removed ${result.path}`);
     return 0;

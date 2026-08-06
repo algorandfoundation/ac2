@@ -40,11 +40,32 @@ export {
   type DaemonManagerOptions,
 } from './daemon/manager.js';
 export {
+  daemonLiveness,
+  type DaemonLiveness,
+  type DaemonLivenessOptions,
+  type DaemonLivenessSource,
+} from './daemon/liveness.js';
+export {
+  collectForwardedEnv,
   installServiceUnit,
   renderLaunchdPlist,
   renderSystemdUnit,
   resolveServiceUnitTarget,
   uninstallServiceUnit,
+  FORWARDED_ENV_VARS,
+  SECRET_ENV_VARS,
   type LaunchdOptions,
   type SystemdOptions,
 } from './daemon/service-units.js';
+export {
+  removeDarwinAppBundle,
+  renderDarwinAppInfoPlist,
+  renderDarwinLauncherScript,
+  writeDarwinAppBundle,
+  DARWIN_APP_BUNDLE_ID,
+  DARWIN_APP_BUNDLE_NAME,
+  DARWIN_APP_DISPLAY_NAME,
+  DARWIN_APP_EXECUTABLE_NAME,
+  type DarwinAppBundleOptions,
+  type DarwinAppBundleResult,
+} from './daemon/darwin-app-bundle.js';
