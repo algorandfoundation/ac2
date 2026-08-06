@@ -30,6 +30,7 @@
     "openclaw.plugin.json",
     "skills",
     "README.md",
+    "ARCHITECTURE.md",
     "LICENSE"
   ],
   "type": "module",
@@ -48,29 +49,25 @@
   },
   "scripts": {
     "build": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts",
+    "dist:pack:selfcontained": "node scripts/pack-selfcontained.mjs",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "release": "package-releaser",
     "release:dry-run": "package-releaser --dry-run",
-    "install:plugin": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts && TGZ=\"$(node scripts/pack-plugin.mjs --pack-destination /tmp | tail -n1)\" && openclaw plugins install \"file:$TGZ\" --dangerously-force-unsafe-install --force && npm rebuild --prefix \"${OPENCLAW_HOME:-$HOME/.openclaw}/extensions/ac2\" @napi-rs/keyring && openclaw plugins enable ac2",
+    "install:plugin": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts && TGZ=\"$(node scripts/pack-plugin.mjs --pack-destination /tmp | tail -n1)\" && openclaw plugins install \"file:$TGZ\" --dangerously-force-unsafe-install --force && openclaw plugins enable ac2",
     "uninstall:plugin": "openclaw plugins uninstall ac2"
   },
   "release": null,
   "dependencies": {
-    "@algorandfoundation/ac2-sdk": "1.0.0-canary.1",
+    "@algorandfoundation/ac2-cli": "workspace:*",
+    "@algorandfoundation/ac2-sdk": "workspace:*",
     "@algorandfoundation/algokit-utils": "10.0.0-beta.4",
-    "@algorandfoundation/keystore": "1.0.0-canary.16",
-    "@algorandfoundation/liquid-client": "1.0.0-canary.8",
-    "@napi-rs/keyring": "^1.3.0",
-    "@roamhq/wrtc": "^0.10.0",
     "@sinclair/typebox": "^0.32.0",
-    "@tanstack/store": "^0.9.1",
-    "@x402/avm": "^2.11.0",
-    "@x402/core": "^2.11.0",
-    "@x402/fetch": "^2.11.0",
-    "qrcode-terminal": "^0.12.0",
-    "socket.io-client": "^4.7.5"
+    "@x402/avm": "^2.20.0",
+    "@x402/core": "^2.20.0",
+    "@x402/fetch": "^2.20.0",
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
     "@algorandfoundation/package-releaser": "workspace:*",

@@ -6,7 +6,7 @@ import { getActiveApi, resolveConfig, textResult } from '../runtime.js';
 import pluginManifest from './manifest.js';
 import { getToolPluginMetadata } from '../session/contracts.js';
 import { NoActiveSessionError } from '../session/manager.js';
-import { capabilitiesFlow, signFlow, type SignParams } from '../session/flows.js';
+import { resolveCapabilities, resolveSign, type SignParams } from '../session/flows.js';
 import type { SigningRequestBody } from '@algorandfoundation/ac2-sdk/schema';
 import { normalizeX402FetchParams, x402FetchFlow } from '../x402/fetch-flow.js';
 
@@ -72,7 +72,11 @@ export function buildSignTool(): AnyAgentTool {
           : {}),
       };
       try {
-        const result = await signFlow(signParams, config);
+        // Route through the daemon (the owner of the wallet connection) when
+        // this process has no local pairing session — which is the norm in the
+        // agent/gateway process where tools run. Otherwise signing would always
+        // fail with "no active session" even though a wallet is connected.
+        const result = await resolveSign(signParams, config);
         if (result.status === 'rejected') {
           return {
             content: [textResult(`Signing rejected: ${result.reason}`)],
@@ -89,7 +93,7 @@ export function buildSignTool(): AnyAgentTool {
           return {
             content: [
               textResult(
-                'Signing rejected: no active AC2 channel session — open `/ac2` and pair your controller first.',
+                'Signing rejected: no AC2 wallet connection — run `openclaw ac2 pair` and connect your wallet first.',
               ),
             ],
             details,
@@ -197,11 +201,15 @@ export function buildCapabilitiesTool(): AnyAgentTool {
       details: unknown;
     }> {
       const config = resolveConfig(getActiveApi() || ({} as any));
-      const result = capabilitiesFlow(config);
+      // Ask the daemon (the actual owner of the wallet connection) rather than
+      // only this process's pairing session, which is normally empty in the
+      // agent/gateway process where tools run — otherwise a live wallet always
+      // looks "not connected" here.
+      const result = await resolveCapabilities(config);
       const headline =
         result.status === 'ok'
           ? 'AC2 session is connected.'
-          : 'AC2 session is not connected — pair via `/ac2`.';
+          : 'AC2 session is not connected — pair via `openclaw ac2 pair`.';
       const body = JSON.stringify(result, null, 2);
       return {
         content: [textResult(`${headline}\n\`\`\`json\n${body}\n\`\`\``)],

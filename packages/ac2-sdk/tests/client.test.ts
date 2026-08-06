@@ -100,6 +100,56 @@ describe('Ac2Client request/response primitive', () => {
     expect(response.body.status).toBe('approved');
   });
 
+  it('request (generic primitive) settles on any declared response type, paired by thid', async () => {
+    const [a, b] = createInMemoryTransportPair();
+    const agent = new Ac2Client(a);
+
+    // The peer answers with a SigningResponse, but the caller reaches it
+    // through the verb-agnostic `request` primitive (as the daemon broker
+    // does) rather than `requestSignature`.
+    b.onMessage((msg) => {
+      const response = createSigningResponse(
+        { id: 'resp-g', from: 'did:key:user', to: ['did:key:agent'], created_time: NOW, thid: msg.id },
+        { signature: 'c2ln', public_key: 'cGs=' },
+      );
+      b.send(JSON.stringify(response));
+    });
+
+    const requestMessage = {
+      id: 'gen-req-1',
+      type: 'ac2/SigningRequest',
+      from: 'did:key:agent',
+      to: ['did:key:user'],
+      created_time: NOW,
+      body: { description: 'sign', encoding: 'base64', payload: 'dGVzdA==' },
+    };
+    const reply = await agent.request(requestMessage, {
+      responseTypes: ['ac2/SigningResponse', 'ac2/SigningRejected'],
+    });
+
+    expect(reply.type).toBe('ac2/SigningResponse');
+    expect(reply.thid).toBe('gen-req-1');
+  });
+
+  it('request rejects on timeout when no matching response arrives', async () => {
+    const [a] = createInMemoryTransportPair();
+    const agent = new Ac2Client(a);
+
+    await expect(
+      agent.request(
+        {
+          id: 'gen-req-timeout',
+          type: 'ac2/SigningRequest',
+          from: 'did:key:agent',
+          to: ['did:key:user'],
+          created_time: NOW,
+          body: { description: 'sign', encoding: 'base64', payload: 'dGVzdA==' },
+        },
+        { responseTypes: ['ac2/SigningResponse'], timeoutMs: 20 },
+      ),
+    ).rejects.toThrow(/timed out/);
+  });
+
   it('does not settle a waiter when an unrelated type arrives on the same thid', async () => {
     const [a, b] = createInMemoryTransportPair();
     const seen: string[] = [];

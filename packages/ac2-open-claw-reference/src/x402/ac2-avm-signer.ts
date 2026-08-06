@@ -12,13 +12,13 @@ import type { ClientAvmSigner } from '@x402/avm';
 import type { PaymentRequirements, ResourceInfo } from '@x402/core/types';
 
 import type { PluginConfig, ToolContext } from '../session/contracts.js';
-import { signFlow, type SignDeps } from '../session/flows.js';
 import {
-  NoActiveSessionError,
-  sessionManager,
-  type SessionManager,
-} from '../session/manager.js';
-import { sessionAlgorandAddress } from '../session/wallet-address.js';
+  resolveSign,
+  resolveWalletAccount,
+  type ResolveSignDeps,
+} from '../session/flows.js';
+import { NoActiveSessionError } from '../session/manager.js';
+import { walletAccountAlgorandAddress } from '../session/wallet-address.js';
 
 export { controllerDidToAlgorandAddress } from '../session/wallet-address.js';
 
@@ -32,7 +32,13 @@ export interface X402PaymentContext {
 
 export interface Ac2AvmSignerOptions {
   readonly config: PluginConfig;
-  readonly deps?: SignDeps;
+  /**
+   * Seams for the connection lookup and the signing round-trip. Both accept a
+   * local session manager (an in-process `ac2 pair` session) AND a
+   * daemon control-socket `connect`, because the daemon — not this process —
+   * normally owns the wallet connection.
+   */
+  readonly deps?: ResolveSignDeps;
   readonly context?: ToolContext;
   readonly getPaymentContext?: () => X402PaymentContext | undefined;
 }
@@ -53,9 +59,6 @@ export class X402ControllerAddressError extends Error {
   }
 }
 
-function managerFromDeps(deps?: SignDeps): SessionManager {
-  return deps?.manager ?? sessionManager;
-}
 
 function decodeUnsignedTransaction(txnBytes: Uint8Array, index: number): Transaction {
   try {
@@ -105,11 +108,28 @@ function assertSignature(bytes: Uint8Array, index: number): void {
   }
 }
 
-export function createAc2AvmSigner(options: Ac2AvmSignerOptions): ClientAvmSigner {
-  const manager = managerFromDeps(options.deps);
-  const active = manager.requireActive();
-  const address = sessionAlgorandAddress(active);
-  if (!address) throw new X402ControllerAddressError(active.controllerDid);
+/**
+ * Build an x402 AVM signer backed by the connected AC2 wallet.
+ *
+ * ASYNC BY NECESSITY: both halves of this signer now resolve through whichever
+ * process owns the connection — the payer address comes from
+ * {@link resolveWalletAccount} and each signature from {@link resolveSign},
+ * which broker over the daemon control socket when this process has no local
+ * pairing session (the norm in the agent/gateway process where tools run).
+ * Previously both read `sessionManager.requireActive()` synchronously, so x402
+ * payments always failed with `no_active_session` even with a live wallet.
+ */
+export async function createAc2AvmSigner(
+  options: Ac2AvmSignerOptions,
+): Promise<ClientAvmSigner> {
+  const account = await resolveWalletAccount(options.config, options.deps ?? {});
+  if (!account) {
+    throw new NoActiveSessionError(
+      'No AC2 wallet connection. Ask the user to run `openclaw ac2 pair` and connect their wallet first.',
+    );
+  }
+  const address = walletAccountAlgorandAddress(account);
+  if (!address) throw new X402ControllerAddressError(account.controllerDid);
 
   return {
     address,
@@ -142,7 +162,7 @@ export function createAc2AvmSigner(options: Ac2AvmSignerOptions): ClientAvmSigne
 
         const signingBytes = bytesForSigning.transaction(txn);
         const paymentContext = options.getPaymentContext?.();
-        const result = await signFlow(
+        const result = await resolveSign(
           {
             description: buildSigningDescription({
               ...(paymentContext !== undefined ? { paymentContext } : {}),
@@ -154,8 +174,8 @@ export function createAc2AvmSigner(options: Ac2AvmSignerOptions): ClientAvmSigne
             key_type: 'account',
           },
           options.config,
-          options.deps,
-          options.context,
+          options.deps ?? {},
+          options.context ?? {},
         );
 
         if (result.status === 'rejected') {
