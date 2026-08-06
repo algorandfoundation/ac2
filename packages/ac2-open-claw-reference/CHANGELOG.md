@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.24](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.23...ac2-open-claw-reference@1.0.0-canary.24) (2026-08-06)
+
+
+### Features
+
+* ac2-cli and agent runtime isolation ([98ac62f](https://github.com/algorandfoundation/ac2/commit/98ac62f05080d227ff36aad01c41f1b04bd01cac))
+
 # [ac2-open-claw-reference@1.0.0-canary.23](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.22...ac2-open-claw-reference@1.0.0-canary.23) (2026-07-28)
 
 
