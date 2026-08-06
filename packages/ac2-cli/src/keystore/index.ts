@@ -6,6 +6,7 @@
 
 export * from './constants.js';
 export * from './create.js';
+export * from './darwin-keyring.js';
 export * from './errors.js';
 export * from './material.js';
 export * from './migrate.js';

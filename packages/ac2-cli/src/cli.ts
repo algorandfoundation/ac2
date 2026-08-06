@@ -20,6 +20,7 @@ import {
 import { installServiceUnit, uninstallServiceUnit } from './daemon/service-units.js';
 import { runDaemon } from './daemon/run.js';
 import { parseCliArgs, type CliFlags } from './cli-args.js';
+import { isDirectInvocation } from './cli-entry.js';
 
 const HELP_TEXT = `Usage: ac2 <command> [options]
 
@@ -390,12 +391,7 @@ export async function runCli(argv: string[]): Promise<number> {
   }
 }
 
-const invokedDirectly = (): boolean => {
-  const entry = process.argv[1];
-  return entry !== undefined && import.meta.url === `file://${entry}`;
-};
-
-if (invokedDirectly()) {
+if (isDirectInvocation(import.meta.url)) {
   runCli(process.argv.slice(2)).then((code) => {
     process.exitCode = code;
   });

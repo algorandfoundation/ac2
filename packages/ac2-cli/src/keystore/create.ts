@@ -11,6 +11,7 @@
 
 import { createNodeKeyStore, type KeyStoreState } from '@algorandfoundation/keystore-node';
 import { Store } from '@tanstack/store';
+import { createDefaultDarwinKeyring } from './darwin-keyring.js';
 import { migrateLegacyKeystore } from './migrate.js';
 import { resolveKeychainService, resolveKeystoreStateDir, resolveMetadataPath } from './paths.js';
 import type { Ac2KeyStore, Ac2KeyStoreOptions } from './types.js';
@@ -27,10 +28,15 @@ export function createAc2KeyStore(options: Ac2KeyStoreOptions = {}): Ac2KeyStore
   const store = options.store ?? new Store<KeyStoreState>({ keys: [], status: 'idle' });
   const log = options.log ?? ((): void => {});
 
+  // On macOS the default is a dedicated, self-unlocked AC2 keychain: the login
+  // keychain is locked in the headless contexts the daemon runs in (launchd,
+  // SSH) and every access there fails with "User interaction is not allowed".
+  const keyring = options.keyring ?? createDefaultDarwinKeyring({ stateDir, service, log });
+
   const keystore = createNodeKeyStore({
     store,
     service,
-    ...(options.keyring ? { keyring: options.keyring } : {}),
+    ...(keyring ? { keyring } : {}),
     ...(options.metadata ? { metadata: options.metadata } : { metadataPath }),
   });
 

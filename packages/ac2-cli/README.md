@@ -22,8 +22,24 @@ npm install -g openclaw @algorandfoundation/ac2-cli
 While AC2 is in pre-release, add the canary tag: `npm install -g
 @algorandfoundation/ac2-cli@next`.
 
+To try it without installing anything:
+
+```sh
+npx @algorandfoundation/ac2-cli@next --help
+```
+
 Requirements: Node.js 22 or newer, and an OS keychain (macOS Keychain, Linux
 Secret Service such as `gnome-keyring`, or Windows Credential Manager).
+
+### Platform support
+
+macOS, Linux and Windows are all supported, with these differences:
+
+| | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| Control channel | Unix socket in `AC2_HOME` | Unix socket in `AC2_HOME` | named pipe (`\\.\pipe\ac2-daemon`, suffixed per custom `AC2_HOME`) |
+| Key storage | dedicated AC2 keychain (see Troubleshooting) | Secret Service (`gnome-keyring`, …) | Credential Manager |
+| `ac2 service install` | launchd agent | systemd user unit | not available — use `ac2 service start`, which survives the terminal |
 
 ## Quick start
 
@@ -85,13 +101,14 @@ Everything has a working default. Set these only if you need to.
 | --- | --- |
 | `AC2_HOME` | Runtime directory for the socket, log and pidfile (default `~/.ac2`). |
 | `AC2_STATE_DIR` | Where connections, identities and keystore metadata are persisted (default `~/.openclaw`). |
-| `AC2_DAEMON_SOCKET` | Control socket path, or Windows named pipe. |
+| `AC2_DAEMON_SOCKET` | Control socket path, or Windows named pipe. Defaults to `$AC2_HOME/ac2d.sock`, and on Windows to `\\.\pipe\ac2-daemon` (plus a digest of `AC2_HOME` when that is set, so profiles never share a pipe). |
 | `AC2_LIQUID_AUTH_SERVER` | Liquid Auth signaling server URL. |
 | `AC2_DEFAULT_AGENT` | Agent id inbound wallet traffic goes to (default `openclaw`). |
 | `AC2_HEARTBEAT_TIMEOUT_MS` | How long a silent wallet channel may stay open. |
 | `AC2_RUNTIME` | Which runtime adapter drives the agent: `socket` (default), `openclaw-gateway`, or an npm package name. |
 | `AC2_RUNTIME_CONFIG` | JSON config handed to that adapter. |
 | `AC2_WAIT_FOR_RUNTIME` | Set to `0` to await a wallet even when no agent runtime is alive. |
+| `AC2_KEYRING` | macOS only. Set to `login` to store keys in the login keychain instead of the dedicated AC2 keychain (see Troubleshooting). |
 | `OPENCLAW_GATEWAY_URL` / `_PORT` / `_TOKEN` | Gateway connection for the `openclaw-gateway` adapter. Discovered from `openclaw.json` when unset. |
 
 Set them in the environment of the process that runs the service, for example
@@ -113,9 +130,24 @@ before pairing a different wallet.
 the Liquid Auth signaling server, so both the phone and this machine need to reach
 it.
 
+**`ac2` prints nothing at all after installing.** A bug in `1.0.0-canary.2` and
+earlier: the command detected "was I run directly?" by comparing paths in a way
+that never matched the `node_modules/.bin/ac2` symlink npm, pnpm and `npx`
+install (and never matched on Windows at all), so it exited silently with status
+0. Upgrade — `npm install -g @algorandfoundation/ac2-cli@next`.
+
 **Keychain errors on Linux.** The service stores secrets in the Secret Service
 API, which needs a running keyring daemon (for example `gnome-keyring`) and an
 unlocked login keyring.
+
+**`User interaction is not allowed` on macOS.** The login keychain is locked for
+background processes (launchd, SSH, before login), so macOS cannot prompt to
+unlock it. The service therefore keeps its keys in a **dedicated keychain** in
+the state directory (`ac2-keystore.keychain-db`, password in the `0600` file
+`ac2-keystore.keychain-key` next to it) that it creates and unlocks itself — no
+prompt, works headless. Entries stored in the login keychain by older versions
+are migrated over on first read. Set `AC2_KEYRING=login` to opt back into the
+login keychain.
 
 ## Learn more
 

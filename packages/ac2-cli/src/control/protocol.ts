@@ -19,6 +19,7 @@
  * (default: {@link DEFAULT_TARGET_AGENT}).
  */
 
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -40,11 +41,25 @@ export function resolveAc2Home(env: NodeJS.ProcessEnv = process.env): string {
 /**
  * Control socket path. Override with `AC2_DAEMON_SOCKET`. On Windows a named
  * pipe is used because Unix domain socket paths are not portable there.
+ *
+ * A named pipe has no directory to live in, so the *profile* has to be encoded
+ * in its name: with a custom `AC2_HOME` the pipe is suffixed with a digest of
+ * that home, mirroring the per-home socket file on POSIX (otherwise two AC2
+ * profiles on one Windows box would fight over a single pipe). The default home
+ * keeps the historical, unsuffixed name.
  */
-export function resolveControlSocketPath(env: NodeJS.ProcessEnv = process.env): string {
+export function resolveControlSocketPath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
   const override = env.AC2_DAEMON_SOCKET?.trim();
   if (override && override.length > 0) return override;
-  if (process.platform === 'win32') return '\\\\.\\pipe\\ac2-daemon';
+  if (platform === 'win32') {
+    const home = env.AC2_HOME?.trim();
+    if (!home) return '\\\\.\\pipe\\ac2-daemon';
+    const digest = createHash('sha256').update(home).digest('hex').slice(0, 12);
+    return `\\\\.\\pipe\\ac2-daemon-${digest}`;
+  }
   return join(resolveAc2Home(env), 'ac2d.sock');
 }
 
