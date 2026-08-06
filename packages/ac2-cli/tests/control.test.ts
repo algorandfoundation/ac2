@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import {
   connectControl,
   createControlServer,
+  resolveControlSocketPath,
   type ControlClient,
   type ControlEventName,
   type ControlServer,
@@ -129,5 +130,42 @@ describe('ControlSocket', () => {
       handler: () => ({}),
     });
     await expect(second.listen()).rejects.toThrow(/daemon already running/);
+  });
+});
+
+describe('resolveControlSocketPath', () => {
+  const WIN_PIPE = '\\\\.\\pipe\\ac2-daemon';
+
+  it('uses a socket file inside AC2_HOME on Linux and macOS', () => {
+    for (const platform of ['linux', 'darwin'] as const) {
+      expect(resolveControlSocketPath({ AC2_HOME: '/srv/ac2' }, platform)).toBe(
+        join('/srv/ac2', 'ac2d.sock'),
+      );
+    }
+  });
+
+  it('uses the historical named pipe on Windows with the default home', () => {
+    expect(resolveControlSocketPath({}, 'win32')).toBe(WIN_PIPE);
+  });
+
+  it('gives every custom AC2_HOME its own Windows pipe', () => {
+    const first = resolveControlSocketPath({ AC2_HOME: 'C:\\ac2\\profile-a' }, 'win32');
+    const second = resolveControlSocketPath({ AC2_HOME: 'C:\\ac2\\profile-b' }, 'win32');
+    expect(first.startsWith(`${WIN_PIPE}-`)).toBe(true);
+    expect(first.slice(WIN_PIPE.length + 1)).toMatch(/^[0-9a-f]{12}$/);
+    expect(second).not.toBe(first);
+    // Stable across calls, so client and daemon always agree.
+    expect(resolveControlSocketPath({ AC2_HOME: 'C:\\ac2\\profile-a' }, 'win32')).toBe(first);
+  });
+
+  it('always honours an explicit AC2_DAEMON_SOCKET override', () => {
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      expect(
+        resolveControlSocketPath(
+          { AC2_DAEMON_SOCKET: '  \\\\.\\pipe\\custom  ', AC2_HOME: '/srv/ac2' },
+          platform,
+        ),
+      ).toBe('\\\\.\\pipe\\custom');
+    }
   });
 });

@@ -58,6 +58,14 @@ The service has no storage engine of its own.
 - **Secret material** is kept in the OS keychain (Keychain on macOS, Secret
   Service on Linux, Credential Manager on Windows), under a service name derived
   from the state directory, so separate AC2 homes never collide.
+- **On macOS the service uses a dedicated keychain** (`ac2-keystore.keychain-db`
+  in the state directory, password in the `0600` file `ac2-keystore.keychain-key`
+  next to it) that it creates and unlocks itself. The login keychain is locked
+  for background processes (launchd, SSH, before login) and fails with
+  `errSecInteractionNotAllowed` there; the dedicated keychain needs no user
+  interaction, so pairing works headless. Entries older versions wrote to the
+  login keychain are migrated on first read; `AC2_KEYRING=login` opts back into
+  the login keychain.
 - **Metadata** (key ids, public keys, algorithms) lives in one sealed blob,
   `ac2-keystore-metadata.bin`, beside the persisted connection records.
 - **Identity keys are non-extractable.** The service signs through the keystore

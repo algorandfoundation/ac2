@@ -40,6 +40,8 @@ export async function startDetached(
     detached: true,
     stdio: ['ignore', logFd.fd, logFd.fd],
     env,
+    // Windows would otherwise flash (and keep) a console window for the daemon.
+    windowsHide: true,
   });
 
   const pid = child.pid;

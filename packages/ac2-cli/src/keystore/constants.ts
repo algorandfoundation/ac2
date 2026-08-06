@@ -11,6 +11,12 @@ export const KEYCHAIN_SERVICE_PREFIX = 'ac2-keystore';
 /** File name of the upstream keystore's AES-GCM sealed metadata blob. */
 export const METADATA_FILE = 'ac2-keystore-metadata.bin';
 
+/** File name of the dedicated macOS keychain (see `darwin-keyring.ts`). */
+export const KEYCHAIN_FILE = 'ac2-keystore.keychain-db';
+
+/** File name of the `0600` file holding the dedicated keychain's password. */
+export const KEYCHAIN_KEY_FILE = 'ac2-keystore.keychain-key';
+
 /** Keystore id of the daemon's own, self-generated service identity. */
 export const SERVICE_KEY_ID = 'ac2-service';
 

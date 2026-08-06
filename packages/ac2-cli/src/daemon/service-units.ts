@@ -133,7 +133,12 @@ export async function installServiceUnit(opts: {
   const target = resolveServiceUnitTarget(platform, env, homeDir);
 
   if (target.kind === 'unsupported') {
-    throw new Error(`OS supervision is not supported on platform: ${platform}`);
+    // Windows has no user-level unit format the CLI can write; the detached
+    // daemon (`ac2 service start`) is the supported way to run it there.
+    throw new Error(
+      `OS supervision is not supported on platform: ${platform}. ` +
+        'Use `ac2 service start` to run the daemon detached instead.',
+    );
   }
 
   await mkdir(dirname(target.path), { recursive: true });
