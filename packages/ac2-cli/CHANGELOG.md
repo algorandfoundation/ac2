@@ -1,3 +1,10 @@
+# [ac2-cli@1.0.0-canary.2](https://github.com/algorandfoundation/ac2/compare/ac2-cli@1.0.0-canary.1...ac2-cli@1.0.0-canary.2) (2026-08-06)
+
+
+### Bug Fixes
+
+* resolve keystore packages from the npm registry ([4af3953](https://github.com/algorandfoundation/ac2/commit/4af395394b16549401169cd8da69bb2ce8da8e82))
+
 # ac2-cli@1.0.0-canary.1 (2026-08-06)
 
 
