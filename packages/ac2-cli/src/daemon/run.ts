@@ -11,6 +11,7 @@ import type { Ac2RuntimeAdapter, Ac2RuntimeInbound } from '@algorandfoundation/a
 import { createConnectionBroker, type ConnectionBroker } from './broker.js';
 import { DEFAULT_RUNTIME_ADAPTER, loadRuntimeAdapter } from '../runtime/loader.js';
 import type { SocketRuntimeHost } from '../runtime/socket-adapter.js';
+import type { KeystoreRuntimeHost } from '../runtime/keystore-host.js';
 import {
   createControlServer,
   type ControlClientConnection,
@@ -29,6 +30,7 @@ import {
   type AgentRequestParams,
 } from '../control/protocol.js';
 import { clearAgentIdentities, setAc2KeyStore } from '../identity/keystore.js';
+import { createServiceKeystoreAccess } from '../identity/service-key.js';
 import {
   clearAc2State,
   getConnection,
@@ -434,11 +436,16 @@ export async function runDaemon(options: DaemonRunOptions = {}): Promise<Running
   // adapter reads `deliverInboundToAgentSocket` (a `SocketRuntimeHost`-only
   // capability); a third-party adapter loaded via `loadRuntimeAdapter` sees
   // this as a plain `Ac2RuntimeHost` and never notices the extra field.
-  const runtimeHost: SocketRuntimeHost = {
+  const runtimeHost: SocketRuntimeHost & KeystoreRuntimeHost = {
     agent: defaultAgent,
     get serviceDid() {
       return broker.serviceDid();
     },
+    // Lets a BUILT-IN adapter sign as the daemon's service identity — the
+    // `openclaw-gateway` adapter authenticates to the OpenClaw Gateway with
+    // it. Never handed to a loaded third-party adapter (see
+    // `runtime/keystore-host.ts`).
+    serviceKeystore: createServiceKeystoreAccess(identityKeystore),
     log,
     reportRuntimeReady(): void {
       // The active adapter's runtime is alive (e.g. the gateway handshake

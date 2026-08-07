@@ -49,7 +49,14 @@ import type {
   Ac2RuntimeInbound,
 } from '@algorandfoundation/ac2-sdk/runtime';
 import { createWebSocketConnection, type GatewayConnection } from './connection.js';
-import { createGatewayClient, type GatewayClient } from './client.js';
+import { createGatewayClient, GATEWAY_ROLE, type GatewayClient } from './client.js';
+import { isKeystoreRuntimeHost } from '../keystore-host.js';
+import {
+  createServiceKeyDeviceIdentity,
+  deviceIdFromPublicKeyRaw,
+  gatewayDeviceTokenSecretId,
+  type GatewayDeviceIdentity,
+} from './device-identity.js';
 import {
   resolveGatewayConfig,
   type OpenClawConfigFileReader,
@@ -759,6 +766,36 @@ export function createOpenClawGatewayAdapter(
       ? (config['__connectionFactory'] as (url: string) => GatewayConnection)
       : createWebSocketConnection;
 
+  /**
+   * The daemon-internal keystore capability (`serviceKeystore`), present on
+   * the host `daemon/run.ts` builds for its BUILT-IN adapters. Absent only
+   * when this adapter is constructed outside that wiring (unit tests) — in
+   * which case it connects without a device identity.
+   */
+  const serviceKeystore = isKeystoreRuntimeHost(host) ? host.serviceKeystore : undefined;
+
+  /**
+   * The identity this daemon authenticates to the Gateway with: its own
+   * service key (`ac2-service`), used as a signer. The Gateway only binds
+   * requested operator scopes to a signed device identity — without one the
+   * handshake still succeeds but comes back with no scopes at all, so every
+   * RPC fails `missing scope: …` (see `device-identity.ts`). A keystore that
+   * cannot sign is NOT fatal: the adapter still connects (some deployments
+   * accept unbound operator sessions) and `client.ts` reports the scope
+   * shortfall if it turns out not to be one of them.
+   */
+  const deviceIdentity: GatewayDeviceIdentity | undefined = serviceKeystore
+    ? createServiceKeyDeviceIdentity(serviceKeystore)
+    : undefined;
+
+  /**
+   * Device token issued to this identity on an earlier connect, read once at
+   * {@link Ac2RuntimeAdapter.start} from the keystore's secret store and
+   * refreshed whenever the Gateway (re)issues one. It keeps this daemon
+   * authenticated even when no shared gateway token is configured.
+   */
+  let deviceToken: string | undefined;
+
   let client: GatewayClient | null = null;
   let stopped = false;
   let reconnectAttempt = 0;
@@ -1143,6 +1180,20 @@ export function createOpenClawGatewayAdapter(
       connection,
       log: host.log,
       ...(cfg.token !== undefined ? { token: cfg.token } : {}),
+      ...(deviceIdentity ? { deviceIdentity } : {}),
+      ...(deviceToken !== undefined ? { deviceToken } : {}),
+      onDeviceToken: (token): void => {
+        if (token === deviceToken) return;
+        deviceToken = token;
+        // Sealed at rest by the keystore, like every other AC2 credential.
+        void serviceKeystore
+          ?.writeSecret(gatewayDeviceTokenSecretId(GATEWAY_ROLE), token)
+          .catch((err: unknown) => {
+            host.log(
+              `[ac2][openclaw-gateway] could not persist the gateway device token: ${(err as Error).message}`,
+            );
+          });
+      },
     });
     client = gatewayClient;
 
@@ -1178,7 +1229,11 @@ export function createOpenClawGatewayAdapter(
     gatewayClient.ready
       .then(() => {
         reconnectAttempt = 0;
-        host.log('[ac2][openclaw-gateway] gateway connected');
+        host.log(
+          `[ac2][openclaw-gateway] gateway connected (scopes: ${
+            gatewayClient.grantedScopes.join(', ') || 'not reported'
+          })`,
+        );
         // The agent runtime this adapter fronts is now ALIVE. Tell the
         // daemon so it can start awaiting a wallet (it deliberately does not
         // until at least one runtime is up — see `Ac2RuntimeHost.reportRuntimeReady`
@@ -1312,7 +1367,26 @@ export function createOpenClawGatewayAdapter(
     // handshake completes (see `connect()` above).
     managesOwnReadiness: true,
 
-    start(): void {
+    async start(): Promise<void> {
+      // Both of these read the keystore, so they cannot happen at construction
+      // time. Neither is required to connect: a failure just means the
+      // handshake goes out unsigned / without a replayed device token, which
+      // `client.ts` reports precisely if the gateway then withholds scopes.
+      if (serviceKeystore) {
+        try {
+          const publicKeyRaw = await serviceKeystore.servicePublicKey();
+          host.log(
+            '[ac2][openclaw-gateway] authenticating as the AC2 service key, gateway device ' +
+              `${deviceIdFromPublicKeyRaw(publicKeyRaw).slice(0, 16)}…`,
+          );
+        } catch (err) {
+          host.log(
+            `[ac2][openclaw-gateway] the AC2 service key is unavailable (${(err as Error).message}); ` +
+              'connecting without a device identity — the gateway may refuse to grant operator scopes.',
+          );
+        }
+        deviceToken = await serviceKeystore.readSecret(gatewayDeviceTokenSecretId(GATEWAY_ROLE));
+      }
       connect();
     },
 

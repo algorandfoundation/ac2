@@ -5,13 +5,23 @@
  * process — see `tests/helpers/gateway-connection.ts`.
  */
 
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterAll, afterEach, beforeAll, beforeEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtempSync } from 'node:fs';
+import { createPublicKey, verify } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Ac2RuntimeHost, Ac2RuntimeInbound } from '@algorandfoundation/ac2-sdk/runtime';
 import { InMemoryChannelProvider } from '@algorandfoundation/ac2-sdk/providers/in-memory';
-import { createGatewayClient } from '../src/runtime/gateway/client.js';
+import { createGatewayClient, missingScopes } from '../src/runtime/gateway/client.js';
+import {
+  buildDeviceAuthPayloadV3,
+  createServiceKeyDeviceIdentity,
+  deviceIdFromPublicKeyRaw,
+  type GatewayDeviceIdentity,
+} from '../src/runtime/gateway/device-identity.js';
+import { createServiceKeystoreAccess } from '../src/identity/service-key.js';
+import { publicKeyToDidKey } from '../src/identity/did.js';
 import { createOpenClawGatewayAdapter, mapHistoryMessages } from '../src/runtime/gateway/adapter.js';
 import { resolveGatewayConfig } from '../src/runtime/gateway/config.js';
 import { AC2_STREAM_CONTROL_PREFIX } from '../src/runtime/gateway/wallet-frames.js';
@@ -22,6 +32,25 @@ import { FakeGatewayConnection, waitFor } from './helpers/gateway-connection.js'
 import { createKeyStoreFixture } from './helpers/keystore.js';
 
 const ORIGIN = 'https://debug.liquidauth.com';
+
+/**
+ * Daemon state (keystore metadata included) is written under the state dir, so
+ * the whole file runs against a throwaway one — no test may ever touch the
+ * developer's real `~/.openclaw`.
+ */
+const TEST_STATE_DIR = mkdtempSync(join(tmpdir(), 'ac2-gateway-test-state-'));
+let previousTestStateDir: string | undefined;
+
+beforeAll(() => {
+  previousTestStateDir = process.env['AC2_STATE_DIR'];
+  process.env['AC2_STATE_DIR'] = TEST_STATE_DIR;
+});
+
+afterAll(async () => {
+  if (previousTestStateDir === undefined) delete process.env['AC2_STATE_DIR'];
+  else process.env['AC2_STATE_DIR'] = previousTestStateDir;
+  await rm(TEST_STATE_DIR, { recursive: true, force: true });
+});
 
 /** Parse an `ac2-stream` control frame back into its JSON body. */
 function parseStreamFrame(raw: string): Record<string, unknown> {
@@ -71,7 +100,7 @@ describe('Gateway RPC client (client.ts)', () => {
     expect((params['client'] as Record<string, unknown>)['mode']).toBe('cli');
     expect(params).not.toHaveProperty('auth');
 
-    connection.emitHelloOk();
+    await connection.emitHelloOk();
     await expect(client.ready).resolves.toBeUndefined();
   });
 
@@ -81,6 +110,172 @@ describe('Gateway RPC client (client.ts)', () => {
     connection.triggerOpen();
     const params = connection.sent[0]?.params as Record<string, unknown>;
     expect(params['auth']).toEqual({ token: 'secret-token' });
+  });
+
+  // The gateway only BINDS the requested scopes to a signed device identity;
+  // an unsigned connect is accepted and then stripped of them, which is what
+  // produced `missing scope: operator.read` on every later RPC. So with an
+  // identity configured the connect must wait for the challenge nonce and
+  // answer it with a signature the gateway can verify.
+  describe('device identity handshake', () => {
+    /**
+     * The identity is the daemon's own service key, reached through the same
+     * keystore capability `daemon/run.ts` hands its built-in adapters. Backed
+     * by the REAL keystore engine over in-memory seams, so these exercise the
+     * actual (async, non-extractable) signing path.
+     */
+    function identityFor(): {
+      identity: GatewayDeviceIdentity;
+      publicKeyRaw: () => Promise<Uint8Array>;
+    } {
+      const keystore = createServiceKeystoreAccess(createKeyStoreFixture().create());
+      return {
+        identity: createServiceKeyDeviceIdentity(keystore),
+        publicKeyRaw: () => keystore.servicePublicKey(),
+      };
+    }
+
+    it('holds the connect back until connect.challenge, then signs the nonce', async () => {
+      const { identity: deviceIdentity, publicKeyRaw } = identityFor();
+      const connection = new FakeGatewayConnection();
+      const client = createGatewayClient({
+        connection,
+        log: () => {},
+        token: 'secret-token',
+        deviceIdentity,
+      });
+
+      connection.triggerOpen();
+      // Nothing may go out before the nonce exists — the signature covers it.
+      expect(connection.sent).toHaveLength(0);
+
+      connection.emitEvent('connect.challenge', { nonce: 'nonce-123', ts: 1 });
+      // Signing goes through the keystore, so the frame lands asynchronously.
+      await waitFor(() => connection.sent.length === 1);
+
+      const publicKey = await publicKeyRaw();
+      const deviceId = deviceIdFromPublicKeyRaw(publicKey);
+      const params = connection.sent[0]?.params as Record<string, unknown>;
+      const device = params['device'] as Record<string, unknown>;
+      expect(device['id']).toBe(deviceId);
+      expect(device['publicKey']).toBe(Buffer.from(publicKey).toString('base64url'));
+      expect(device['nonce']).toBe('nonce-123');
+
+      // Verify the signature exactly as the gateway does: rebuild the v3
+      // payload from the frame and check it against the raw public key.
+      const payload = buildDeviceAuthPayloadV3({
+        deviceId,
+        clientId: 'cli',
+        clientMode: 'cli',
+        role: 'operator',
+        scopes: params['scopes'] as string[],
+        signedAtMs: device['signedAt'] as number,
+        token: 'secret-token',
+        nonce: 'nonce-123',
+        platform: process.platform,
+      });
+      const verified = verify(
+        null,
+        Buffer.from(payload, 'utf8'),
+        createPublicKey({
+          key: Buffer.concat([
+            Buffer.from('302a300506032b6570032100', 'hex'),
+            Buffer.from(publicKey),
+          ]),
+          format: 'der',
+          type: 'spki',
+        }),
+        Buffer.from(device['signature'] as string, 'base64url'),
+      );
+      expect(verified).toBe(true);
+
+      connection.respondOk('connect', {
+        type: 'hello-ok',
+        protocol: 4,
+        auth: { role: 'operator', scopes: ['operator.read', 'operator.write'] },
+      });
+      await expect(client.ready).resolves.toBeUndefined();
+      expect(client.grantedScopes).toEqual(['operator.read', 'operator.write']);
+    });
+
+    // The regression itself: `ok:true` with no usable scopes is a FAILED
+    // handshake, not a connected gateway whose every call happens to 403.
+    it('rejects ready when hello-ok grants no usable scopes', async () => {
+      const connection = new FakeGatewayConnection();
+      const client = createGatewayClient({ connection, log: () => {}, token: 'secret-token' });
+      connection.triggerOpen();
+      await connection.emitHelloOk({ role: 'operator', scopes: [] });
+      await expect(client.ready).rejects.toThrow(/operator\.read, operator\.write is required/);
+    });
+
+    it('rejects ready when only some required scopes are granted', async () => {
+      const connection = new FakeGatewayConnection();
+      const client = createGatewayClient({ connection, log: () => {} });
+      connection.triggerOpen();
+      await connection.emitHelloOk({ role: 'operator', scopes: ['operator.read'] });
+      await expect(client.ready).rejects.toThrow(/operator\.write is required/);
+    });
+
+    it('accepts operator.admin as covering every required scope', async () => {
+      const connection = new FakeGatewayConnection();
+      const client = createGatewayClient({ connection, log: () => {} });
+      connection.triggerOpen();
+      await connection.emitHelloOk({ role: 'operator', scopes: ['operator.admin'] });
+      await expect(client.ready).resolves.toBeUndefined();
+    });
+
+    it('reports an issued device token and replays it as auth.deviceToken', async () => {
+      const { identity: deviceIdentity } = identityFor();
+      const issued: Array<{ token: string; scopes: string[] | undefined }> = [];
+
+      const first = new FakeGatewayConnection();
+      const firstClient = createGatewayClient({
+        connection: first,
+        log: () => {},
+        deviceIdentity,
+        onDeviceToken: (token, scopes) => issued.push({ token, scopes }),
+      });
+      first.triggerOpen();
+      await first.emitHelloOk({ scopes: ['operator.read', 'operator.write'], deviceToken: 'dt-1' });
+      await expect(firstClient.ready).resolves.toBeUndefined();
+      expect(issued).toEqual([{ token: 'dt-1', scopes: ['operator.read', 'operator.write'] }]);
+
+      const second = new FakeGatewayConnection();
+      createGatewayClient({ connection: second, log: () => {}, deviceIdentity, deviceToken: 'dt-1' });
+      second.triggerOpen();
+      second.emitEvent('connect.challenge', { nonce: 'n2' });
+      await waitFor(() => second.sent.length === 1);
+      const params = second.sent[0]?.params as Record<string, unknown>;
+      expect(params['auth']).toEqual({ deviceToken: 'dt-1' });
+    });
+
+    it('falls back to an unsigned connect when the gateway never challenges', async () => {
+      vi.useFakeTimers();
+      try {
+        const connection = new FakeGatewayConnection();
+        createGatewayClient({
+          connection,
+          log: () => {},
+          deviceIdentity: identityFor().identity,
+        });
+        connection.triggerOpen();
+        expect(connection.sent).toHaveLength(0);
+        vi.advanceTimersByTime(2000);
+        expect(connection.sent).toHaveLength(1);
+        expect(connection.sent[0]?.params).not.toHaveProperty('device');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe('missingScopes', () => {
+    it('treats operator.admin as a superset and operator.write as covering reads', () => {
+      expect(missingScopes(['operator.admin'], ['operator.read', 'operator.write'])).toEqual([]);
+      expect(missingScopes(['operator.write'], ['operator.read'])).toEqual([]);
+      expect(missingScopes(['operator.read'], ['operator.write'])).toEqual(['operator.write']);
+      expect(missingScopes([], ['operator.read'])).toEqual(['operator.read']);
+    });
   });
 
   // Regression for the live-validation finding: the real Gateway does NOT send
@@ -119,7 +314,7 @@ describe('Gateway RPC client (client.ts)', () => {
     const connection = new FakeGatewayConnection();
     const client = createGatewayClient({ connection, log: () => {} });
     connection.triggerOpen();
-    connection.emitHelloOk();
+    await connection.emitHelloOk();
     await client.ready;
 
     const promise = client.request('example.method', { a: 1 });
@@ -132,7 +327,7 @@ describe('Gateway RPC client (client.ts)', () => {
     const connection = new FakeGatewayConnection();
     const client = createGatewayClient({ connection, log: () => {} });
     connection.triggerOpen();
-    connection.emitHelloOk();
+    await connection.emitHelloOk();
     await client.ready;
 
     const promise = client.request('example.method', {});
@@ -145,7 +340,7 @@ describe('Gateway RPC client (client.ts)', () => {
     const connection = new FakeGatewayConnection();
     const client = createGatewayClient({ connection, log: () => {} });
     connection.triggerOpen();
-    connection.emitHelloOk();
+    await connection.emitHelloOk();
     await client.ready;
 
     await expect(client.request('example.slow', {}, 20)).rejects.toThrow(/timed out/);
@@ -155,7 +350,7 @@ describe('Gateway RPC client (client.ts)', () => {
     const connection = new FakeGatewayConnection();
     const client = createGatewayClient({ connection, log: () => {} });
     connection.triggerOpen();
-    connection.emitHelloOk();
+    await connection.emitHelloOk();
     await client.ready;
 
     const received: Array<{ event: string; payload: unknown }> = [];
@@ -302,6 +497,22 @@ describe('resolveGatewayConfig (config.ts)', () => {
       expect(cfg.url).toBe('ws://127.0.0.1:4242');
     });
 
+    // Token auth is the gateway's DEFAULT: a config that only sets
+    // `gateway.auth.token` (no `mode`) is still token-guarded, and skipping
+    // the token there left the daemon connecting unauthenticated — which the
+    // gateway answers by granting it no operator scopes at all.
+    it('lifts the token when gateway.auth.mode is absent (token is the default mode)', () => {
+      const noMode = JSON.stringify({ gateway: { port: 4242, auth: { token: 'default-mode-token' } } });
+      const cfg = resolveGatewayConfig({}, {}, () => {}, () => noMode);
+      expect(cfg.token).toBe('default-mode-token');
+    });
+
+    it('falls back to gateway.remote.token when gateway.auth.token is unset', () => {
+      const remoteOnly = JSON.stringify({ gateway: { port: 4242, remote: { token: 'remote-token' } } });
+      const cfg = resolveGatewayConfig({}, {}, () => {}, () => remoteOnly);
+      expect(cfg.token).toBe('remote-token');
+    });
+
     it('degrades gracefully when openclaw.json is absent or malformed', () => {
       const absent = resolveGatewayConfig({}, {}, () => {}, () => undefined);
       expect(absent.token).toBeUndefined();
@@ -341,7 +552,7 @@ describe('createOpenClawGatewayAdapter (adapter.ts)', () => {
     });
     await adapter.start?.();
     connection.triggerOpen();
-    connection.emitHelloOk();
+    await connection.emitHelloOk();
     await waitFor(() => logs.some((line) => line.includes('gateway connected')));
     return { host, sends, logs, connection, adapter };
   }
@@ -657,7 +868,7 @@ describe('createOpenClawGatewayAdapter (adapter.ts)', () => {
     });
     await adapter.start?.();
     connection.triggerOpen();
-    connection.emitHelloOk();
+    await connection.emitHelloOk();
     await waitFor(() => logs.some((line) => line.includes('gateway connected')));
 
     const handled = adapter.handleInbound(inboundMessage('hi'));
@@ -1389,8 +1600,47 @@ describe('daemon integration: openclaw-gateway selection surfaces in daemon.stat
     // Complete the handshake → the adapter reports ready → the daemon stops
     // waiting and arms pairing/resume.
     connection.triggerOpen();
-    connection.emitHelloOk();
+    await connection.emitHelloOk();
     await waitFor(() => built.status().waitingForRuntime === false);
+  });
+
+  // The point of the whole device-identity path: the daemon authenticates to
+  // the gateway as ITSELF — the same `ac2-service` key its service DID is
+  // derived from — instead of carrying a second, gateway-only key around.
+  it('signs the gateway connect with the service key behind the daemon service DID', async () => {
+    let connection!: FakeGatewayConnection;
+    const built = await runDaemon({
+      socketPath: join(socketDir, 'ac2d-device.sock'),
+      keystore: createKeyStoreFixture(stateDir).options(),
+      handleSignals: false,
+      hostKeystore: false,
+      log: () => {},
+      providerFactory: (requestId?: string) =>
+        new InMemoryChannelProvider({ origin: ORIGIN, ...(requestId ? { requestId } : {}) }),
+      runtime: {
+        adapter: 'openclaw-gateway',
+        config: {
+          __connectionFactory: () => {
+            connection = new FakeGatewayConnection();
+            return connection;
+          },
+          __readOpenClawConfigFile: () => undefined,
+        },
+      },
+    });
+    daemon = built;
+
+    connection.triggerOpen();
+    connection.emitEvent('connect.challenge', { nonce: 'nonce-daemon', ts: 1 });
+    await waitFor(() => connection.sent.length === 1);
+
+    const params = connection.sent[0]?.params as Record<string, unknown>;
+    const device = params['device'] as Record<string, unknown>;
+    const publicKeyRaw = Buffer.from(device['publicKey'] as string, 'base64url');
+    expect(device['id']).toBe(deviceIdFromPublicKeyRaw(publicKeyRaw));
+    expect(device['nonce']).toBe('nonce-daemon');
+    // Same key, both faces of it: the gateway device and the service DID.
+    expect(publicKeyToDidKey(publicKeyRaw)).toBe(built.status().serviceDid);
   });
 });
 

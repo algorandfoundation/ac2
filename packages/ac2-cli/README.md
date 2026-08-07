@@ -131,6 +131,17 @@ returning wallet is never connected to a service with nothing behind it. Start
 your agent, or select the right runtime adapter. With OpenClaw that means running
 `openclaw ac2 pair`, which selects the gateway adapter for you.
 
+**`ac2 service logs` shows `missing scope: operator.read` / `operator.write`.**
+The gateway accepted the connection but granted it nothing: it only binds the
+requested operator scopes to a **device identity**, and a connect that presents
+only a shared token is stripped of them while still answering `hello-ok`. The
+service now signs the gateway's connect challenge with its own service key —
+the same one behind its `did:key` service identity, kept in the keystore — and
+refuses a handshake that came back without the scopes it needs, so this failure
+reports itself at connect time instead of on every message. If it persists,
+approve the device on the OpenClaw side (`openclaw devices`) and check that the
+token in `openclaw.json` (`gateway.auth.token`) matches the running gateway.
+
 **The wallet paired, but nothing is routed and the status says locked.** An agent
 stays bound to the first wallet that issued it an identity. Run `ac2 forget`
 before pairing a different wallet.

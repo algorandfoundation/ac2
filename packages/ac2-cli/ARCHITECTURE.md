@@ -188,9 +188,9 @@ In precedence order:
 
 `url` defaults to `ws://127.0.0.1:18789`. `token` and `agentId` are optional: an
 unauthenticated local gateway needs neither, and an unset `agentId` lets the
-Gateway pick its own default agent. A Gateway configured with
-`gateway.auth.mode: "token"` **requires** a valid token; without one the
-handshake is rejected with `NOT_PAIRED` / `DEVICE_IDENTITY_REQUIRED`.
+Gateway pick its own default agent. A Gateway configured for token auth
+**requires** a valid token; without one the handshake is rejected with
+`NOT_PAIRED` / `DEVICE_IDENTITY_REQUIRED`.
 
 Other config keys, each with a defensive default (an invalid value is logged and
 ignored rather than thrown):
@@ -201,6 +201,50 @@ ignored rather than thrown):
 | `taskTimeoutMs` | `900000` | Timeout for awaiting a delegated sub-agent run. |
 | `conversationsLimit` | `100` | Sessions fetched via `sessions.list` when advertising threads. |
 
+### Device identity and operator scopes
+
+The Gateway grants a connection its operator scopes from the **identity behind
+the connection**, not from the scopes the client asks for. A connect carrying
+only a shared token is *unbound*: the Gateway answers `hello-ok` anyway (an
+operator with valid shared auth may skip device identity) but drops the
+requested scopes first, so every later call fails with
+`missing scope: operator.read` / `missing scope: operator.write` on a connection
+that looked healthy.
+
+So the service authenticates as a **device**, using the key it already has:
+
+1. The Gateway pushes a `connect.challenge` event as soon as the socket opens.
+2. The service answers with `connect` carrying a `device` block — an Ed25519
+   signature over the challenge nonce, the requested scopes, the client
+   identity and the token — which BINDS `operator.read` + `operator.write` to
+   its key.
+3. `hello-ok.auth.scopes` is then **verified**: a handshake that granted less
+   than the adapter needs fails with a remediation hint instead of connecting
+   into a stream of permission errors. `operator.admin` counts as covering
+   everything.
+4. Any `hello-ok.auth.deviceToken` is persisted and replayed as
+   `auth.deviceToken` on later connects, so a paired service keeps working even
+   where no shared token is configured.
+
+The signing key is the daemon's **own service key** (`ac2-service` in the AC2
+keystore) — the same self-generated Ed25519 key its `did:key` service identity
+is derived from, and the one key in the keystore that is not wallet-issued.
+Authenticating to the Gateway is an assertion of who this daemon is, so there
+is no second key and no key file: the private material stays non-extractable
+in the keystore and the adapter only ever asks it for a signature. The device
+id the Gateway registers is SHA-256 over that key's raw public key, and any
+issued device token is kept in the keystore's sealed **secret** store
+(`ac2-gateway-device-token:operator`) rather than on disk.
+
+Built-ins reach the key through `serviceKeystore`, a daemon-internal host
+capability (`src/runtime/keystore-host.ts`) that a loaded third-party adapter
+never sees — the same arrangement as `SocketRuntimeHost`. A keystore that
+cannot sign (locked keychain, failed migration) is not fatal: the connect goes
+out unsigned and the scope check above reports it.
+
+On a loopback gateway the first connect is typically approved silently — if it
+is not, approve the device on the OpenClaw side (`openclaw devices`).
+
 ### Auto-discovering the token and port
 
 When neither token nor URL is supplied, the adapter reads **OpenClaw's own config
@@ -210,9 +254,11 @@ exporting `OPENCLAW_GATEWAY_TOKEN` first.
 
 - **Path**, resolved the same way the plugin does: `OPENCLAW_STATE_DIR`, then
   `OPENCLAW_CONFIG_PATH`, then `OPENCLAW_HOME`, then `~/.openclaw/openclaw.json`.
-- **Token** from `gateway.auth.token`, but only when `gateway.auth.mode` is
-  `"token"` (a stale token under another auth mode would only get the handshake
-  rejected).
+- **Token** from `gateway.auth.token`, falling back to `gateway.remote.token`.
+  An **absent** `gateway.auth.mode` still means token auth — that is the
+  Gateway's own default — so the token is lifted then too; only an explicit
+  non-token mode suppresses it (a stale token under another auth mode would
+  only get the handshake rejected).
 - **URL** built as `ws://127.0.0.1:<gateway.port>`.
 
 Discovery is strictly lowest priority, best-effort, and never fatal: a missing or
@@ -259,9 +305,11 @@ both. Without the event subscription no tool or task card can ever appear.
   re-awaited.
 
 The handshake, history read, run RPCs and streaming events were validated against
-a live Gateway (server `2026.7.1-2`, protocol v4). One correction found during
+a live Gateway (server `2026.7.1-2`, protocol v4). Two corrections found during
 that work: the Gateway does not send a top-level `hello-ok` frame, it answers the
-`connect` request with a response whose payload is the `hello-ok`.
+`connect` request with a response whose payload is the `hello-ok`; and a
+successful `hello-ok` says nothing about the scopes granted — those must be read
+from `hello-ok.auth.scopes` and checked.
 
 ## Where state lives
 
@@ -272,6 +320,7 @@ that work: the Gateway does not send a top-level `hello-ok` frame, it answers th
 | `~/.ac2/ac2d.pid` | Pidfile for the detached process. |
 | `~/.ac2/AC2.app` | macOS only: the launcher the launchd agent runs (see below). Generated by `ac2 service install`. |
 | state directory | Persisted connections, agent identities, the remembered runtime, and the sealed keystore metadata. |
+| OS keychain (via the keystore) | The `ac2-service` key that signs the `openclaw-gateway` handshake, and the device token it is issued (secret `ac2-gateway-device-token:operator`). |
 
 `AC2_HOME` moves the runtime files (default `~/.ac2`). The state directory is
 `AC2_STATE_DIR`, falling back to `OPENCLAW_STATE_DIR` and then `~/.openclaw`, so

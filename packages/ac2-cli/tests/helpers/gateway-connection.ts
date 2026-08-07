@@ -91,14 +91,25 @@ export class FakeGatewayConnection implements GatewayConnection {
    * to the `connect` request — the Gateway does NOT send a top-level
    * `hello-ok` frame. Requires the client to have already sent its `connect`
    * request (call {@link triggerOpen} first).
+   *
+   * The challenge comes FIRST because a client that signs a device identity
+   * can only assemble its `connect` once it has the nonce — and, since that
+   * signature goes through the keystore, only ASYNCHRONOUSLY. Hence this
+   * awaits the `connect` frame before answering it.
+   *
+   * @param auth optional `hello-ok.auth` block (granted `scopes`, issued
+   *   `deviceToken`); omitted entirely by default, which is how a server that
+   *   does not report grants behaves.
    */
-  emitHelloOk(): void {
+  async emitHelloOk(auth?: { role?: string; scopes?: string[]; deviceToken?: string }): Promise<void> {
     this.emitEvent('connect.challenge', { nonce: 'test-nonce', ts: Date.now() });
+    await waitFor(() => this.findPendingRequest('connect') !== undefined);
     this.respondOk('connect', {
       type: 'hello-ok',
       protocol: 4,
       server: { version: 'test', connId: 'conn-1' },
       features: { methods: [], events: [] },
+      ...(auth ? { auth } : {}),
     });
   }
 

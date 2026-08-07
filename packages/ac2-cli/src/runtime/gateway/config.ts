@@ -7,7 +7,8 @@
  *
  * As a LAST resort — after explicit config and env come back empty — the
  * token and URL are auto-discovered from OpenClaw's own config file
- * (`openclaw.json`, `gateway.auth.token` / `gateway.port`). This is what makes
+ * (`openclaw.json`, `gateway.auth.token` / `gateway.remote.token` /
+ * `gateway.port`). This is what makes
  * the plugin's auto-started daemon "just work" against a token-guarded local
  * Gateway without the operator having to export `OPENCLAW_GATEWAY_TOKEN`
  * first: the daemon inherits the plugin's env, resolves the same
@@ -126,10 +127,20 @@ interface OpenClawGatewayDiscovery {
 /**
  * Best-effort discovery of the local Gateway's connection settings from
  * `openclaw.json`. Reads `gateway.port` (to build the default loopback URL)
- * and, ONLY when `gateway.auth.mode === 'token'`, `gateway.auth.token`. A
- * non-token auth mode never yields a token here — sending a stale token to a
- * gateway that no longer expects one is worse than sending none. Never throws:
- * a missing/invalid file simply yields an empty result with a logged note.
+ * and the shared token.
+ *
+ * TOKEN MODES: `gateway.auth.mode` is read when present, but an ABSENT mode
+ * still means token auth — that is the Gateway's own default (it generates a
+ * token at startup when none is configured), and treating "no mode" as "no
+ * token" made the daemon connect unauthenticated against a perfectly
+ * token-guarded gateway, which costs it every operator scope. Only an
+ * explicit non-token mode (e.g. `none`) suppresses the token: sending a stale
+ * token to a gateway that no longer expects one is worse than sending none.
+ *
+ * `gateway.remote.token` is used as a fallback for the same reason the
+ * OpenClaw CLI does: local setups configured for a remote gateway keep the
+ * shared secret there. Never throws: a missing/invalid file simply yields an
+ * empty result with a logged note.
  */
 function discoverOpenClawGateway(
   env: NodeJS.ProcessEnv,
@@ -162,8 +173,10 @@ function discoverOpenClawGateway(
   }
 
   const authMode = getAtPath(parsed, 'gateway.auth.mode');
-  if (authMode === 'token') {
-    const token = stringOrUndefined(getAtPath(parsed, 'gateway.auth.token'));
+  if (authMode === undefined || authMode === 'token') {
+    const token =
+      stringOrUndefined(getAtPath(parsed, 'gateway.auth.token')) ??
+      stringOrUndefined(getAtPath(parsed, 'gateway.remote.token'));
     if (token !== undefined) result.token = token;
   }
 

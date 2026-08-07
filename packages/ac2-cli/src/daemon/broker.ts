@@ -35,7 +35,8 @@ import {
   touchConnection,
   type PersistedIdentity,
 } from '../identity/state.js';
-import { SERVICE_KEY_ID, ed25519SeedFromBase64, type Ac2KeyStore } from '../keystore/index.js';
+import { ed25519SeedFromBase64, type Ac2KeyStore } from '../keystore/index.js';
+import { ensureServiceKey } from '../identity/service-key.js';
 import { bootstrapAgentIdentity, BootstrapError } from '../session/bootstrap.js';
 
 /** Reconnect backoff bounds (capped exponential, reset on success). */
@@ -162,24 +163,7 @@ export function createConnectionBroker(options: ConnectionBrokerOptions): Connec
   /** Ensure the self-generated ed25519 service key and derive its did:key. */
   const ensureServiceIdentity = async (): Promise<void> => {
     if (serviceDidValue) return;
-    // `ready` also settles the one-time migration of the pre-upstream keystore,
-    // so a service key carried over from it is found instead of regenerated.
-    await keystore.ready;
-    let publicKey = keystore.keys.find((key) => key.id === SERVICE_KEY_ID)?.publicKey;
-    if (!publicKey) {
-      await keystore.keystore.generate({
-        type: 'ed25519',
-        algorithm: 'EdDSA',
-        extractable: false,
-        keyUsages: ['sign', 'verify'],
-        params: { id: SERVICE_KEY_ID, name: 'AC2 service identity' },
-      });
-      publicKey = (await keystore.keystore.export(SERVICE_KEY_ID)).publicKey;
-    }
-    if (!publicKey) {
-      throw new Error('[ac2] service key exists but exposes no public key');
-    }
-    serviceDidValue = publicKeyToDidKey(publicKey);
+    serviceDidValue = publicKeyToDidKey(await ensureServiceKey(keystore));
     log(`[ac2] service identity ready: ${serviceDidValue}`);
   };
 
