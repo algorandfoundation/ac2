@@ -101,6 +101,19 @@ const RUN_FINALIZE_GRACE_MS = 400;
 const RUN_START_SKEW_MS = 2000;
 
 /**
+ * Slack added to a wait's SERVER-side deadline to derive the client-side RPC
+ * timeout for the same call. Every `agent.wait` must pass an explicit client
+ * timeout of `<its server timeoutMs> + this`: the client's own default
+ * (`DEFAULT_REQUEST_TIMEOUT_MS`, 30s — see `./client.ts`) is far below the run
+ * and task deadlines, so omitting it makes the client abandon a perfectly
+ * healthy run long before the gateway does, reporting a generic transport
+ * error for a run that keeps executing and can never be cancelled. Keeping the
+ * client deadline strictly above the server's means a server-side timeout
+ * always wins the race and yields the honest `status: 'timeout'` result.
+ */
+const WAIT_CLIENT_TIMEOUT_SLACK_MS = 5000;
+
+/**
  * Result shape of the `agent` RPC (accepted response), confirmed against the
  * Gateway source (`agent-run-admission-phase.ts`): `{runId, sessionKey,
  * agentId?, status:'accepted', acceptedAt, runtime?}`. Only `runId` is used
@@ -925,13 +938,14 @@ export function createOpenClawGatewayAdapter(
       try {
         if (!client) throw new Error('gateway not connected');
         // The RPC's own client-side timeout is kept slightly ABOVE the
-        // server-side `agent.wait` timeout it carries as a param, so a
-        // server-side timeout response always wins the race and yields the
-        // honest `failed` reason below instead of a generic client timeout.
+        // server-side `agent.wait` timeout it carries as a param (see
+        // {@link WAIT_CLIENT_TIMEOUT_SLACK_MS}), so a server-side timeout
+        // response always wins the race and yields the honest `failed` reason
+        // below instead of a generic client timeout.
         const waitResult = await client.request<AgentWaitResult>(
           'agent.wait',
           { runId: watch.childRunId, timeoutMs: cfg.taskTimeoutMs },
-          cfg.taskTimeoutMs + 5000,
+          cfg.taskTimeoutMs + WAIT_CLIENT_TIMEOUT_SLACK_MS,
         );
         if (stopped) return;
 
@@ -1545,10 +1559,24 @@ export function createOpenClawGatewayAdapter(
           }
           activeRun = run;
 
-          const waitResult = await client.request<AgentWaitResult>('agent.wait', {
-            runId: run.runId,
-            timeoutMs: cfg.runTimeoutMs,
-          });
+          // As on the spawned-task path (see the `agent.wait` call in the task
+          // watcher above), the RPC's own client-side timeout is kept slightly
+          // ABOVE the server-side `agent.wait` timeout it carries as a param.
+          // Without the third argument the client falls back to its 30s
+          // default, which is FAR below `runTimeoutMs` — so a turn that
+          // legitimately takes longer (an x402 payment blocks on a wallet
+          // signature round-trip, itself allowed 120s) was failed by the
+          // client timer at 30s while the gateway happily kept running. The
+          // run cannot be cancelled, so that surfaced as "the agent ran into
+          // an error" for work that then quietly succeeded.
+          const waitResult = await client.request<AgentWaitResult>(
+            'agent.wait',
+            {
+              runId: run.runId,
+              timeoutMs: cfg.runTimeoutMs,
+            },
+            cfg.runTimeoutMs + WAIT_CLIENT_TIMEOUT_SLACK_MS,
+          );
 
           if (waitResult.status === 'ok') {
             // `agent.wait` can resolve microseconds before the FINAL segment's

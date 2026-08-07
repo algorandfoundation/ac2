@@ -135,6 +135,25 @@ const AC2_HEARTBEAT_MS = 20000;
  * long. 2.5× the send interval tolerates one missed round-trip plus jitter.
  */
 const AC2_DEFAULT_HEARTBEAT_TIMEOUT_MS = AC2_HEARTBEAT_MS * 2.5;
+/**
+ * Multiplier applied to the heartbeat timeout to obtain the SECOND-TIER
+ * ("hard") stale window, past which the heartbeat tears the peer down even
+ * though our signaling socket is up and presence still reports the wallet as
+ * present.
+ *
+ * The first tier deliberately defers to presence (see
+ * {@link shouldCloseOnHeartbeatTimeout}) because a backgrounded phone may
+ * legitimately suspend its heartbeat. But presence can be WRONG in exactly the
+ * way that hangs a reconnect: a mobile wallet whose WebRTC path died while its
+ * native service kept the signaling socket registered (and kept answering our
+ * pings from native code) is counted as present forever, so nothing ever
+ * corrects the stale peer and the wallet's re-offers land on a socket with no
+ * answer armed. Escalating after a much longer silence makes the heartbeat the
+ * authority of last resort: worst case we tear down a merely-quiet peer, and
+ * `connect()` is immediately re-armed on the same socket to answer it back in
+ * place.
+ */
+const AC2_HEARTBEAT_HARD_TIMEOUT_FACTOR = 4;
 /** Default ceiling for awaiting the signaling socket's initial `connect`. */
 const AC2_DEFAULT_PAIRING_TIMEOUT_MS = 120_000;
 /**
@@ -667,12 +686,63 @@ export function shouldTeardownOnPresence(
  * ignored — otherwise a still-present, merely-quiet peer is dropped, producing
  * spurious "peer went offline" churn on a link the server still reports as
  * present.
+ *
+ * That deference is bounded, though: presence is not infallible. A wallet
+ * whose data path died while its native service kept the signaling socket in
+ * the room stays "present" forever, so deferring to presence indefinitely
+ * meant NOTHING ever tore the stale peer down and the returning wallet's
+ * offers were never answered ("Reconnecting…" on the phone, silence in the
+ * agent log — no state transition, nothing to report). So a SECOND tier
+ * (`staleForFarTooLong`, see {@link AC2_HEARTBEAT_HARD_TIMEOUT_FACTOR}) closes
+ * the peer regardless of signaling/presence once the silence is far longer
+ * than any plausible backgrounding hiccup.
  */
 export function shouldCloseOnHeartbeatTimeout(state: {
   staleForTooLong: boolean;
   signalingConnected: boolean;
+  /**
+   * Silence has exceeded the second-tier ("hard") window. Optional so callers
+   * that only model the first tier keep their existing behaviour.
+   */
+  staleForFarTooLong?: boolean;
 }): boolean {
+  if (state.staleForFarTooLong === true) return true;
   return state.staleForTooLong && !state.signalingConnected;
+}
+
+/**
+ * Decide whether an INBOUND offer arriving on the live signaling socket means
+ * the peer restarted its side of the connection behind our back.
+ *
+ * A wallet only sends an `offer-description` when it wants a NEW peer session.
+ * If we believe we are still connected, that is unambiguous proof our peer is
+ * stale: the phone's WebRTC path died (typically while backgrounded) but its
+ * signaling socket never left the room, so presence still counts two devices
+ * and neither the presence rule (`shouldTeardownOnPresence`) nor the
+ * first-tier heartbeat rule (`shouldCloseOnHeartbeatTimeout`) ever fires. The
+ * SDK arms its answer listener only INSIDE `client.peer(...)` — a single
+ * `socket.once('offer-description')` per negotiation — so with nothing armed
+ * the wallet's offers vanish and it retries forever ("Reconnecting…"), while
+ * the agent logs nothing because no state ever transitions.
+ *
+ * Reacting to the offer breaks that deadlock from our side: tear the stale
+ * peer down so the caller re-arms `connect()` on the SAME socket. The offer
+ * that triggered this is necessarily lost (it arrived with no answer armed),
+ * but the wallet's own retry loop re-sends one, and by then we are listening.
+ *
+ * Ignored while a negotiation is already armed (`negotiating`) — that pending
+ * `peer(...)` is exactly what should consume the offer, and tearing down mid-
+ * handshake nulls its `peerClient` — and when we are not connected at all
+ * (nothing stale to replace).
+ */
+export function shouldTeardownOnRemoteOffer(state: {
+  connected: boolean;
+  negotiating: boolean;
+  closed: boolean;
+}): boolean {
+  if (state.closed) return false;
+  if (state.negotiating) return false;
+  return state.connected;
 }
 
 /**
@@ -882,6 +952,9 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
     const heartbeatTimeoutMs =
       this.defaults.heartbeatTimeoutMs ??
       resolveHeartbeatTimeoutMs(process.env['AC2_HEARTBEAT_TIMEOUT_MS']);
+    // Second-tier stale window: past this the heartbeat overrides presence
+    // (see `AC2_HEARTBEAT_HARD_TIMEOUT_FACTOR`).
+    const heartbeatHardTimeoutMs = heartbeatTimeoutMs * AC2_HEARTBEAT_HARD_TIMEOUT_FACTOR;
 
     // Build the signaling socket from the Node-native `socket.io-client` and
     // pass it to `SignalClient` via its `{ socket }` option. Replay any
@@ -1003,6 +1076,10 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
     let streamChannel: any;
     let heartbeatChannel: any;
     let onDataChannel: ((channel: any) => void) | undefined;
+    // The standing re-offer listener, bound ONCE below and detached only by
+    // `fullTeardown` (it must survive `teardownPeer`, whose whole point is to
+    // keep the socket usable between negotiations).
+    let onRemoteOffer: ((sdp: unknown) => void) | undefined;
 
     // Forward-declared so the presence subscription and the reactive re-offer
     // listener (both bound once, below) can trigger teardown before `connect()`
@@ -1060,6 +1137,15 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         s?.off?.('offer-candidate');
         s?.off?.('answer-candidate');
         s?.off?.('answer-description');
+        // `SignalClient.signal()` arms a ONE-SHOT `offer-description` listener
+        // that stays attached when a negotiation is torn down before the offer
+        // arrives. Left behind, it would consume the returning wallet's next
+        // offer into the peer we just destroyed (`setRemoteDescription` on an
+        // undefined `peerClient`) instead of the freshly armed negotiation. Off
+        // by event name clears every handler — including our standing re-offer
+        // listener — so re-attach that one immediately afterwards.
+        s?.off?.('offer-description');
+        if (onRemoteOffer) (socket as any).on?.('offer-description', onRemoteOffer);
       } catch {
         // Best-effort.
       }
@@ -1107,9 +1193,11 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       try {
         socket.off?.('disconnect', markSignalingUnstable);
         socket.off?.('connect', markSignalingStableSoon);
+        if (onRemoteOffer) socket.off?.('offer-description', onRemoteOffer);
       } catch {
         // Best-effort.
       }
+      onRemoteOffer = undefined;
       try {
         client.close(true);
       } catch {
@@ -1166,6 +1254,33 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         void close();
       }
     });
+
+    // Reactive re-offer listener. Bound ONCE, for the lifetime of the socket,
+    // and deliberately OUTSIDE `connect()`: the SDK's `client.peer(...)` arms
+    // only a one-shot `socket.once('offer-description')` for the negotiation it
+    // is running, so between negotiations — and, critically, while we still
+    // believe we are connected — an offer from a returning wallet lands on a
+    // socket with nothing listening and is silently dropped.
+    //
+    // That is the other half of the "hangs on Reconnecting… forever" deadlock:
+    // the wallet's recovery preserves its signaling socket, so presence never
+    // drops to one device and neither presence nor the (presence-deferring)
+    // heartbeat tears our stale peer down; meanwhile the wallet renegotiates
+    // into the void. An inbound offer while `connected` is proof the peer
+    // restarted, so tear the stale peer down here and let the caller re-arm
+    // `connect()` on this same socket — the wallet's next retry is answered in
+    // place, with no QR rescan and no session switch (see
+    // `shouldTeardownOnRemoteOffer` for the exclusions).
+    onRemoteOffer = (): void => {
+      if (!shouldTeardownOnRemoteOffer({ connected, negotiating, closed })) return;
+      log(
+        'warn',
+        'received a new offer from the wallet while the peer was still considered live — ' +
+          'the peer restarted behind us; tearing down the stale peer to answer the next offer.',
+      );
+      void close();
+    };
+    socket.on?.('offer-description', onRemoteOffer);
 
     // Capture the wallet account from the Liquid Auth `link` response. The
     // `link-message` also marks the wallet as linked, arming the presence-driven
@@ -1366,7 +1481,9 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         heartbeat = setInterval(() => {
           if (!heartbeatChannel || heartbeatChannel.readyState !== 'open') return;
 
-          const staleForTooLong = Date.now() - lastInboundAt > heartbeatTimeoutMs;
+          const silentForMs = Date.now() - lastInboundAt;
+          const staleForTooLong = silentForMs > heartbeatTimeoutMs;
+          const staleForFarTooLong = silentForMs > heartbeatHardTimeoutMs;
           // While our signaling socket is alive, presence is the authority for a
           // departed peer (it is faster and reflects the room membership the
           // server tracks). A mobile controller can legitimately suspend its
@@ -1376,11 +1493,22 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
           // still reported as present. Only when we have no connection to the
           // signaling server (no presence to trust) does the heartbeat become
           // authoritative again (see `shouldCloseOnHeartbeatTimeout`).
+          //
+          // …with one bound: presence can be stuck reporting a wallet that is
+          // no longer reachable over the data path (its native service holds
+          // the socket in the room). Past the much longer HARD window the
+          // heartbeat therefore escalates and closes anyway — otherwise the
+          // stale peer is never replaced and the wallet reconnects forever.
           const signalingConnected = (socket as { connected?: boolean }).connected === true;
-          if (shouldCloseOnHeartbeatTimeout({ staleForTooLong, signalingConnected })) {
+          if (
+            shouldCloseOnHeartbeatTimeout({ staleForTooLong, signalingConnected, staleForFarTooLong })
+          ) {
             log(
               'warn',
-              `Heartbeat timeout (${heartbeatTimeoutMs}ms with no inbound) and signaling is down — closing channel.`,
+              staleForFarTooLong && signalingConnected
+                ? `Heartbeat silent for ${silentForMs}ms (past the ${heartbeatHardTimeoutMs}ms hard window) ` +
+                    'while presence still reports the peer as present — closing the stale peer to await re-link.'
+                : `Heartbeat timeout (${heartbeatTimeoutMs}ms with no inbound) and signaling is down — closing channel.`,
             );
             void close();
             return;

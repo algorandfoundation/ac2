@@ -8,6 +8,7 @@ import {
   cookiePairsFromSetCookie,
   resolveHeartbeatTimeoutMs,
   shouldCloseOnHeartbeatTimeout,
+  shouldTeardownOnRemoteOffer,
   withSignalingHealthGuard,
 } from '../src/providers/liquid-auth.js';
 
@@ -406,6 +407,63 @@ describe('shouldCloseOnHeartbeatTimeout', () => {
     ).toBe(false);
     expect(
       shouldCloseOnHeartbeatTimeout({ staleForTooLong: false, signalingConnected: true }),
+    ).toBe(false);
+  });
+
+  it('escalates past the hard window even while signaling (and presence) says the peer is there', () => {
+    // Presence can be stuck: a wallet whose data path died while its native
+    // service kept the socket in the room is counted forever. Deferring to it
+    // indefinitely left the stale peer in place and the wallet reconnecting
+    // into the void, so the second tier overrides it.
+    expect(
+      shouldCloseOnHeartbeatTimeout({
+        staleForTooLong: true,
+        signalingConnected: true,
+        staleForFarTooLong: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('keeps deferring to presence inside the hard window', () => {
+    expect(
+      shouldCloseOnHeartbeatTimeout({
+        staleForTooLong: true,
+        signalingConnected: true,
+        staleForFarTooLong: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('shouldTeardownOnRemoteOffer', () => {
+  it('tears the stale peer down when an offer arrives on a supposedly live link', () => {
+    // The wallet only offers when it wants a NEW peer session, so this is proof
+    // our peer is stale even though presence still reports two devices.
+    expect(
+      shouldTeardownOnRemoteOffer({ connected: true, negotiating: false, closed: false }),
+    ).toBe(true);
+  });
+
+  it('ignores an offer while a negotiation is already armed', () => {
+    // The pending `client.peer(...)` is what must consume that offer; tearing
+    // down mid-handshake nulls its `peerClient`.
+    expect(
+      shouldTeardownOnRemoteOffer({ connected: true, negotiating: true, closed: false }),
+    ).toBe(false);
+    expect(
+      shouldTeardownOnRemoteOffer({ connected: false, negotiating: true, closed: false }),
+    ).toBe(false);
+  });
+
+  it('ignores an offer when there is no live peer to replace', () => {
+    expect(
+      shouldTeardownOnRemoteOffer({ connected: false, negotiating: false, closed: false }),
+    ).toBe(false);
+  });
+
+  it('never re-triggers once already closed', () => {
+    expect(
+      shouldTeardownOnRemoteOffer({ connected: true, negotiating: false, closed: true }),
     ).toBe(false);
   });
 });
