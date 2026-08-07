@@ -371,7 +371,9 @@ describe('resolveGatewayConfig (config.ts)', () => {
     expect(cfg.token).toBeUndefined();
     expect(cfg.agentId).toBeUndefined();
     expect(cfg.connectTimeoutMs).toBe(10000);
-    expect(cfg.runTimeoutMs).toBe(120000);
+    // Deliberately above the 120s an x402 wallet signature is allowed to take,
+    // so a turn blocked on human approval is not failed as "did not respond".
+    expect(cfg.runTimeoutMs).toBe(300000);
   });
 
   it('prefers explicit config over env, and env over the default', () => {
@@ -603,6 +605,43 @@ describe('createOpenClawGatewayAdapter (adapter.ts)', () => {
     await handled;
     const finalize = parseStreamFrame(sends[sends.length - 1]!.payload);
     expect(finalize).toMatchObject({ t: 'discard', thid: 'default' });
+  });
+
+  it('lets a slow turn run past the client RPC default instead of failing it at 30s', async () => {
+    // Regression: the foreground `agent.wait` omitted its client-side timeout,
+    // so the RPC's 30s default fired long before the 5-minute server deadline
+    // it had just asked for. An x402 payment blocks on a wallet signature
+    // round-trip (itself allowed 120s), so every one of them was reported to
+    // the user as "the agent ran into an error" — while the run, which cannot
+    // be cancelled, kept going and often succeeded.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { sends, logs, connection, adapter } = await setup();
+
+      const handled = adapter.handleInbound(inboundMessage('pay the invoice'));
+      await waitFor(() => connection.sent.some((f) => f.method === 'sessions.messages.subscribe'));
+      connection.respondOk('sessions.messages.subscribe', {});
+      await waitFor(() => connection.sent.some((f) => f.method === 'agent'));
+      connection.respondOk('agent', { runId: 'run-slow', acceptedAt: Date.now() });
+      await waitFor(() => connection.sent.some((f) => f.method === 'agent.wait'));
+
+      // Well past the client default, still inside the deadline we asked for.
+      await vi.advanceTimersByTimeAsync(60_000);
+      // (Only the wait matters here: the harness never answers the optional
+      // `sessions.subscribe`, whose own best-effort timeout is expected.)
+      expect(logs.filter((line) => line.includes('"agent.wait" timed out'))).toEqual([]);
+      expect(sends.some((s) => parseStreamFrame(s.payload)['t'] === 'finalize')).toBe(false);
+
+      // The signature finally lands and the turn completes normally.
+      connection.respondOk('agent.wait', { status: 'ok' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await waitFor(() => connection.sent.some((f) => f.method === 'chat.history'));
+      connection.respondOk('chat.history', { messages: [] });
+      await handled;
+      expect(logs.some((line) => line.includes('agent run failed'))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('never re-posts a STALE chat.history message as this run\'s reply', async () => {

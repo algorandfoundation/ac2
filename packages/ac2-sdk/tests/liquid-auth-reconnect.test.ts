@@ -292,6 +292,66 @@ describe('LiquidAuthChannelProvider — socket-preserving reconnect', () => {
     expect(handle.isSignalingAlive?.()).toBe(true);
   });
 
+  it('tears the stale peer down when the wallet re-offers while presence still reports it live', async () => {
+    // The failure this fixes: after a long background the wallet's native
+    // service keeps its signaling socket in the room (so presence never drops
+    // to one device) while its WebRTC path is dead. Nothing tore our peer
+    // down, and the SDK only arms an answer listener INSIDE `peer()`, so the
+    // wallet's renegotiation offers landed on a socket with nothing listening
+    // — "Reconnecting…" forever, and not a line in the agent log. An inbound
+    // offer while we still believe we are connected is proof the peer
+    // restarted, so tear it down and let the caller re-arm in place.
+    const { handle, paired } = await startAndConnect();
+    H.state.lastClient.emit('link-message', { wallet: 'W' });
+    let closed = 0;
+    paired.transport.onClose(() => {
+      closed += 1;
+    });
+
+    H.state.lastSocket.emit('offer-description', 'v=0 (the wallet restarted)');
+
+    await vi.waitFor(() => {
+      expect(H.state.peerCloseSpies[0]).toHaveBeenCalledTimes(1);
+    });
+    expect(closed).toBe(1);
+    // The socket is untouched: the very next offer is answered on it in place.
+    expect(H.clientCloseSpy).not.toHaveBeenCalled();
+    expect(H.socketDisconnectSpy).not.toHaveBeenCalled();
+    expect(handle.isSignalingAlive?.()).toBe(true);
+
+    const paired2 = await handle.connect();
+    expect(H.state.peerCalls).toBe(2);
+    await paired2.close();
+  });
+
+  it('does NOT act on the offer that an armed negotiation is itself waiting for', async () => {
+    // While `peer()` is parked awaiting the wallet, its own one-shot listener
+    // must consume the offer; tearing down here would null `peerClient` under
+    // the pending handshake (the crash the presence rule already guards).
+    const { handle, paired } = await startAndConnect();
+    H.state.lastClient.emit('link-message', { wallet: 'W' });
+    await paired.close();
+
+    let releaseWallet!: () => void;
+    H.state.peerGate = new Promise<void>((resolve) => {
+      releaseWallet = resolve;
+    });
+    const reconnect = handle.connect();
+    await vi.waitFor(() => {
+      expect(H.state.peerCalls).toBe(2);
+    });
+
+    H.state.lastSocket.emit('offer-description', 'v=0 (the awaited offer)');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(H.state.peerCloseSpies[1]).not.toHaveBeenCalled();
+    expect(H.state.lastClient.peerClient).toBeTruthy();
+
+    releaseWallet();
+    const paired2 = await reconnect;
+    expect(paired2.transport).toBeDefined();
+    await paired2.close();
+  });
+
   it('does NOT tear down an in-flight re-link negotiation on a presence drop', async () => {
     // Regression for the production crash: the wallet linked once, the session
     // dropped, and `connect()` was re-armed — parked inside `peer()` awaiting
