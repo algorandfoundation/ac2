@@ -209,7 +209,11 @@ class ControlError extends Error {
 }
 
 /** Lazily loads the Liquid Auth provider so tests that inject `providerFactory` never load `wrtc`. */
-function createLazyLiquidAuthProvider(requestId: string | undefined, origin: string): Ac2ChannelProvider {
+function createLazyLiquidAuthProvider(
+  requestId: string | undefined,
+  origin: string,
+  log: (line: string) => void,
+): Ac2ChannelProvider {
   return {
     async startPairing(opts) {
       const { LiquidAuthChannelProvider } = await import(
@@ -218,6 +222,13 @@ function createLazyLiquidAuthProvider(requestId: string | undefined, origin: str
       const provider = new LiquidAuthChannelProvider({
         origin,
         ...(requestId !== undefined ? { requestId } : {}),
+        // Route the SDK's signaling diagnostics through the daemon's logger so
+        // they land in `ac2d.log` with the same ISO timestamp as every other
+        // daemon line. They used to be bare `console.error` writes: untimestamped
+        // and uncorrelatable against the signaling server's own log.
+        logger: (level, line) => {
+          log(level === 'info' ? line : `${level.toUpperCase()} ${line}`);
+        },
         // The SDK has no notion of the CLI's on-disk state — adapt the CLI's
         // own session-cookie persistence (`identity/state.ts`) so the daemon
         // still reuses the same signaling session across restarts.
@@ -424,7 +435,8 @@ export async function runDaemon(options: DaemonRunOptions = {}): Promise<Running
 
   const broker: ConnectionBroker = createConnectionBroker({
     providerFactory:
-      options.providerFactory ?? ((requestId) => createLazyLiquidAuthProvider(requestId, origin)),
+      options.providerFactory ??
+      ((requestId) => createLazyLiquidAuthProvider(requestId, origin, log)),
     defaultAgent,
     origin,
     keystore: identityKeystore,

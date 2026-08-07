@@ -760,6 +760,35 @@ export interface Ac2SessionCookieStore {
   set(key: string, cookie: string): void;
 }
 
+/** Severity of a diagnostic emitted by {@link LiquidAuthChannelProvider}. */
+export type Ac2ProviderLogLevel = 'info' | 'warn' | 'error';
+
+/**
+ * Sink for the provider's own diagnostics (signaling connect/disconnect,
+ * presence, heartbeat). Injectable so a host process can fold them into ITS
+ * log stream instead of raw `console` writes: the ac2 daemon, for instance,
+ * stamps every line it logs with an ISO timestamp, and signaling lines that
+ * bypassed that wrapper could not be correlated against the signaling
+ * server's own timestamped log — which is exactly what made "is it the daemon
+ * or the service?" unanswerable from the captured logs.
+ */
+export type Ac2ProviderLogger = (level: Ac2ProviderLogLevel, line: string) => void;
+
+/**
+ * Fallback logger used when no {@link Ac2ProviderLogger} is injected. Writes
+ * to `console` but ALWAYS prefixes an ISO timestamp, so even un-hosted output
+ * can be lined up against a server log.
+ */
+const defaultProviderLogger: Ac2ProviderLogger = (level, line) => {
+  const stamped = `${new Date().toISOString()} ${line}`;
+  // eslint-disable-next-line no-console
+  if (level === 'error') console.error(stamped);
+  // eslint-disable-next-line no-console
+  else if (level === 'warn') console.warn(stamped);
+  // eslint-disable-next-line no-console
+  else console.log(stamped);
+};
+
 export interface LiquidAuthChannelProviderOptions {
   /** Liquid Auth signaling server origin. */
   origin?: string;
@@ -786,6 +815,12 @@ export interface LiquidAuthChannelProviderOptions {
    * not survive a restart.
    */
   sessionCookie?: Ac2SessionCookieStore;
+  /**
+   * Sink for this provider's diagnostics. Defaults to a `console` writer that
+   * prefixes an ISO timestamp. Every line is additionally tagged with the
+   * pairing `requestId`, so concurrent pairings stay distinguishable.
+   */
+  logger?: Ac2ProviderLogger;
 }
 
 /**
@@ -837,6 +872,13 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
     const origin = this.defaults.origin ?? 'https://debug.liquidauth.com';
     const requestId = this.defaults.requestId ?? SignalClient.generateRequestId();
     const includeStream = this.defaults.includeStreamChannel ?? true;
+    // Every diagnostic below goes through here rather than `console` directly,
+    // so the host's log formatting (timestamps) applies and each line names the
+    // pairing it belongs to.
+    const sink = this.defaults.logger ?? defaultProviderLogger;
+    const log = (level: Ac2ProviderLogLevel, message: string): void => {
+      sink(level, `[ac2] [requestId=${requestId}] ${message}`);
+    };
     const heartbeatTimeoutMs =
       this.defaults.heartbeatTimeoutMs ??
       resolveHeartbeatTimeoutMs(process.env['AC2_HEARTBEAT_TIMEOUT_MS']);
@@ -940,9 +982,9 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       lastWakeCheckAt = now;
       if (elapsed < AC2_WAKE_JUMP_THRESHOLD_MS) return;
       if ((socket as { connected?: boolean }).connected) return;
-      // eslint-disable-next-line no-console
-      console.log(
-        `[ac2] Detected system wake (clock jumped ${elapsed}ms) — reconnecting signaling socket now.`,
+      log(
+        'info',
+        `Detected system wake (clock jumped ${elapsed}ms) — reconnecting signaling socket now.`,
       );
       try {
         (socket as { connect?: () => void }).connect?.();
@@ -1024,6 +1066,31 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
     };
 
     /**
+     * Drop the signaling socket AND its underlying engine.
+     *
+     * `socket.close()` alone is not enough on a socket whose transport has
+     * already broken (`transport close`): socket.io marks the client closed but
+     * the disconnect packet never reaches the wire, so the SERVER keeps the
+     * session alive until its own heartbeat expires (pingInterval + pingTimeout
+     * = 45 s by default). A reconnect loop abandoning sockets that way leaves a
+     * pile of orphaned sessions squatting in the requestId's presence room,
+     * which corrupts `deviceCount` and triggers spurious "peer went offline"
+     * teardowns. Closing the engine too forces the transport down immediately.
+     */
+    const forceSocketDown = (): void => {
+      try {
+        (socket as { close?: () => void }).close?.();
+      } catch {
+        // Already closed; ignore.
+      }
+      try {
+        (socket as { io?: { engine?: { close?: () => void } } }).io?.engine?.close?.();
+      } catch {
+        // Engine already gone; ignore.
+      }
+    };
+
+    /**
      * Fully tear down the persistent signaling socket (and peer). Used only
      * when the pairing handle is abandoned or a hard signaling failure means
      * the socket can no longer be reused — NOT on an ordinary peer drop, which
@@ -1048,11 +1115,7 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       } catch {
         // Already closed; ignore.
       }
-      try {
-        (socket as { close?: () => void }).close?.();
-      } catch {
-        // Already closed; ignore.
-      }
+      forceSocketDown();
     };
 
     // Presence is handled outside SignalClient, directly on the socket. Track
@@ -1062,9 +1125,9 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
     const onPresence = this.defaults.onPresence;
     subscribeToPresence(socket as unknown as PresenceSocket, (presence) => {
       if (presence.requestId && presence.requestId !== requestId) return;
-      // eslint-disable-next-line no-console
-      console.log(
-        `[ac2-open-claw] presence for ${presence.requestId}: ${presence.deviceCount} device(s), online=${presence.online}`,
+      log(
+        'info',
+        `presence for ${presence.requestId}: ${presence.deviceCount} device(s), online=${presence.online}`,
       );
       onPresence?.(presence);
       // Presence-driven teardown. A drop back to a single device (just this
@@ -1096,9 +1159,9 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
           negotiating,
         })
       ) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[ac2-open-claw] peer went offline (presence: ${presence.deviceCount} device(s)) — tearing down to await re-link.`,
+        log(
+          'warn',
+          `peer went offline (presence: ${presence.deviceCount} device(s)) — tearing down to await re-link.`,
         );
         void close();
       }
@@ -1133,11 +1196,7 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
         } catch {
           // Already closed; ignore.
         }
-        try {
-          (socket as { close?: () => void }).close?.();
-        } catch {
-          // Already closed; ignore.
-        }
+        forceSocketDown();
       },
     });
     // Bind low-level error/disconnect diagnostics once the socket is built.
@@ -1152,33 +1211,29 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
               err?.description !== undefined ? ` description=${String(err.description)}` : '';
             const ctxStatus =
               err?.context?.status !== undefined ? ` status=${String(err.context.status)}` : '';
-            // eslint-disable-next-line no-console
-            console.error(
-              `[ac2] Signaling socket connect_error: ${err?.message ?? err}${description}${ctxStatus}`,
+            log(
+              'error',
+              `Signaling socket connect_error: ${err?.message ?? err}${description}${ctxStatus}`,
             );
           });
           sock.on('disconnect', (reason: unknown, details: unknown) => {
             const extra = details ? ` details=${JSON.stringify(details)}` : '';
-            // eslint-disable-next-line no-console
-            console.error(`[ac2] Signaling socket disconnect reason: ${String(reason)}${extra}`);
+            log('error', `Signaling socket disconnect reason: ${String(reason)}${extra}`);
           });
           const engine = sock.io?.engine;
           if (engine && typeof engine.on === 'function') {
             engine.on('close', (reason: unknown) =>
-              // eslint-disable-next-line no-console
-              console.error(`[ac2] Signaling engine closed: ${String(reason)}`),
+              log('error', `Signaling engine closed: ${String(reason)}`),
             );
           }
           if (sock.io && typeof sock.io.on === 'function') {
             sock.io.on('error', (err: Error) =>
-              // eslint-disable-next-line no-console
-              console.error(`[ac2] Signaling manager error: ${err?.message ?? err}`),
+              log('error', `Signaling manager error: ${err?.message ?? err}`),
             );
           }
         }
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error(`[ac2] Failed to initialize signaling socket: ${(err as Error).message}`);
+        log('error', `Failed to initialize signaling socket: ${(err as Error).message}`);
       }
     })();
 
@@ -1323,9 +1378,9 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
           // authoritative again (see `shouldCloseOnHeartbeatTimeout`).
           const signalingConnected = (socket as { connected?: boolean }).connected === true;
           if (shouldCloseOnHeartbeatTimeout({ staleForTooLong, signalingConnected })) {
-            // eslint-disable-next-line no-console
-            console.warn(
-              `[ac2] Heartbeat timeout (${heartbeatTimeoutMs}ms with no inbound) and signaling is down — closing channel.`,
+            log(
+              'warn',
+              `Heartbeat timeout (${heartbeatTimeoutMs}ms with no inbound) and signaling is down — closing channel.`,
             );
             void close();
             return;

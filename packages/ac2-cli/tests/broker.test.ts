@@ -6,7 +6,7 @@
  * so neither the OS keychain nor the network is ever touched.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -14,7 +14,11 @@ import { tmpdir } from 'node:os';
 import { buildKeyResponse } from '@algorandfoundation/ac2-sdk/protocol';
 import { isKeyRequest } from '@algorandfoundation/ac2-sdk/schema';
 import type { Ac2Transport } from '@algorandfoundation/ac2-sdk/transport';
-import type { Ac2PairingHandle, Ac2StartPairingOptions } from '@algorandfoundation/ac2-sdk/signaling';
+import type {
+  Ac2ChannelProvider,
+  Ac2PairingHandle,
+  Ac2StartPairingOptions,
+} from '@algorandfoundation/ac2-sdk/signaling';
 import { createConnectionBroker, type ConnectionBroker } from '../src/daemon/broker.js';
 import { InMemoryChannelProvider, type InMemoryChannelProviderOptions } from '@algorandfoundation/ac2-sdk/providers/in-memory';
 import { SERVICE_KEY_ID, type Ac2KeyStore } from '../src/keystore/index.js';
@@ -117,6 +121,28 @@ class DenyingWalletProvider extends InMemoryChannelProvider {
         );
       }
     });
+  }
+}
+
+/**
+ * A provider whose pairing handle is built successfully but whose `connect()`
+ * rejects instantly, with dead signaling — i.e. the shape the broker's
+ * reconnect loop hit in production. Each `startPairing()` stands for one fresh
+ * signaling socket on the server, so `built` is the socket count.
+ */
+class FailingPairingProvider implements Ac2ChannelProvider {
+  built = 0;
+
+  async startPairing(): Promise<Ac2PairingHandle> {
+    this.built += 1;
+    return {
+      pairing: { qrPayload: 'qr-fail', metadata: { origin: ORIGIN, requestId: 'req-fail' } },
+      connect: async () => {
+        throw new Error('Signaling engine closed: transport close');
+      },
+      isSignalingAlive: () => false,
+      dispose: async () => {},
+    };
   }
 }
 
@@ -361,6 +387,101 @@ describe('createConnectionBroker', () => {
     expect(connectedEvent.identityGranted).toBe(true);
     expect(connectedEvent.agentDid).toBe(STORED_AGENT_DID);
     expect(broker.snapshot().locked).toBe(false);
+  });
+
+  describe('reconnect loop throttling', () => {
+    /** Build a broker over `provider`, collecting its log lines. */
+    const makeFailingBroker = (
+      provider: Ac2ChannelProvider,
+      logs: string[],
+    ): ConnectionBroker => {
+      const broker = createConnectionBroker({
+        providerFactory: () => provider,
+        origin: ORIGIN,
+        keystore,
+        emit,
+        log: (line: string) => logs.push(line),
+      });
+      brokers.push(broker);
+      return broker;
+    };
+
+    it('does not rebuild pairing in a storm when a session dies immediately after a SUCCESSFUL beginPairing', async () => {
+      // Regression: the loop only slept when `beginPairing()` THREW, so a
+      // pairing that was built fine and then died at once re-cycled with zero
+      // delay — opening (and abandoning) a fresh signaling socket every few
+      // milliseconds. The server saw ~45 orphaned sessions in ~2s.
+      const provider = new FailingPairingProvider();
+      const broker = makeFailingBroker(provider, []);
+      await broker.start();
+      await broker.startPairing();
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // The initial build plus at most one more inside the 500ms window (the
+      // first backoff is 2s). Unthrottled, this was in the hundreds.
+      expect(provider.built).toBeLessThanOrEqual(2);
+    });
+
+    it('drops to a slow retry cadence after repeated failures WITHOUT ever stalling', async () => {
+      const provider = new FailingPairingProvider();
+      const logs: string[] = [];
+      const broker = makeFailingBroker(provider, logs);
+      // Start before faking timers so the keystore's real I/O completes.
+      await broker.start();
+
+      vi.useFakeTimers();
+      try {
+        await broker.startPairing();
+        // Well past the full 2s→30s ramp plus the first cooldown waits.
+        await vi.advanceTimersByTimeAsync(600_000);
+
+        // Escalated, but bounded: the 2s→30s ramp gives 8 builds in the first
+        // ~2 minutes, after which the 5-minute tier adds roughly one more per
+        // 5 minutes. Unthrottled this was in the thousands.
+        const afterTenMinutes = provider.built;
+        expect(afterTenMinutes).toBeGreaterThanOrEqual(8);
+        expect(afterTenMinutes).toBeLessThanOrEqual(12);
+        expect(logs.some((line) => line.includes('slowing reconnect attempts'))).toBe(true);
+
+        // Never a dead end: the daemon is headless, so a terminal give-up
+        // would leave the wallet with no way back in. The loop must still be
+        // trying — both in state and in fresh attempts.
+        expect(broker.snapshot().state).toBe('reconnecting');
+        await vi.advanceTimersByTimeAsync(600_000);
+        expect(provider.built).toBeGreaterThan(afterTenMinutes);
+      } finally {
+        vi.useRealTimers();
+      }
+
+      // …and the degraded cadence is surfaced to clients, not just logged.
+      const reasons = eventsOf('connection.disconnected').map(
+        (e) => (e.data as ControlEvents['connection.disconnected']).reason,
+      );
+      expect(reasons.some((reason) => reason.includes('pairing degraded after'))).toBe(true);
+    });
+
+    it('retries immediately when an explicit pair request arrives during a backoff', async () => {
+      // The slow tier must never feel like a stall: asking to pair collapses
+      // the outstanding delay instead of making the caller wait it out.
+      const provider = new FailingPairingProvider();
+      const broker = makeFailingBroker(provider, []);
+      await broker.start();
+
+      vi.useFakeTimers();
+      try {
+        await broker.startPairing();
+        // Sit inside a backoff window (the first is 2s, so 500ms is well in).
+        await vi.advanceTimersByTimeAsync(500);
+        const beforeKick = provider.built;
+
+        await broker.startPairing();
+        await vi.advanceTimersByTimeAsync(10);
+        expect(provider.built).toBeGreaterThan(beforeKick);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it('reports no granted identity when the wallet rejects the bootstrap KeyRequest', async () => {

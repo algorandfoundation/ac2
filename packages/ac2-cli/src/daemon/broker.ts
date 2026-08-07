@@ -43,6 +43,26 @@ import { bootstrapAgentIdentity, BootstrapError } from '../session/bootstrap.js'
 const BACKOFF_INITIAL_MS = 2_000;
 const BACKOFF_MAX_MS = 30_000;
 
+/**
+ * How many pairing cycles may end WITHOUT the session ever reaching
+ * `connected` before the reconnect loop drops to its slow tier. Below this the
+ * loop uses the normal 2s→30s ramp; above it, {@link COOLDOWN_RETRY_MS}.
+ */
+const FAILURES_BEFORE_COOLDOWN = 8;
+
+/**
+ * Retry interval used once {@link FAILURES_BEFORE_COOLDOWN} is exceeded.
+ *
+ * This is a SLOW TIER, never a stop. The daemon is normally headless and
+ * unattended, and the signaling socket is the only way a wallet can come back
+ * — so a terminal give-up would strand the daemon offline until a human
+ * noticed and re-ran `ac2 pair`, which is strictly worse than the socket storm
+ * it was meant to prevent. Retrying every 5 minutes keeps a path back online
+ * open while costing the signaling server ~1 session per daemon per 5 min
+ * instead of ~45 sessions in 2 s.
+ */
+const COOLDOWN_RETRY_MS = 300_000;
+
 /** A pairing handle that may expose persistent-signaling lifecycle hooks. */
 type BrokerPairingHandle = Ac2PairingHandle & {
   isSignalingAlive?(): boolean;
@@ -155,9 +175,17 @@ export function createConnectionBroker(options: ConnectionBrokerOptions): Connec
   let agentDid: string | null = null;
   let backoffTimer: ReturnType<typeof setTimeout> | null = null;
   let backoffWake: (() => void) | null = null;
+  /**
+   * Whether the cycle currently being run ever reached `connected`. The
+   * reconnect loop resets its backoff only on a cycle that actually produced a
+   * live channel — a cycle that paired and died immediately must keep ramping,
+   * otherwise it re-cycles at socket-handshake speed.
+   */
+  let reachedConnected = false;
 
   const setState = (next: ConnectionState): void => {
     state = next;
+    if (next === 'connected') reachedConnected = true;
   };
 
   /** Ensure the self-generated ed25519 service key and derive its did:key. */
@@ -445,10 +473,59 @@ export function createConnectionBroker(options: ConnectionBrokerOptions): Connec
     timeoutMs?: number,
   ): Promise<void> => {
     let active = first;
+    // Both counters live OUTSIDE the loop: re-declaring `backoffMs` per pass
+    // reset the ramp on every cycle, so it could never escalate towards
+    // BACKOFF_MAX_MS no matter how long the failure lasted.
+    let backoffMs = BACKOFF_INITIAL_MS;
+    let consecutiveFailures = 0;
+    /** True once the loop has escalated to the {@link COOLDOWN_RETRY_MS} tier. */
+    let cooling = false;
+
+    /** Delay ceiling for the tier the loop is currently in. */
+    const ceilingMs = (): number => (cooling ? COOLDOWN_RETRY_MS : BACKOFF_MAX_MS);
+
+    /**
+     * Escalate to the slow retry tier. Deliberately NOT a hard stop — see
+     * {@link COOLDOWN_RETRY_MS}: the loop keeps probing so the wallet always
+     * has a way back, just at a cadence the signaling server cannot notice.
+     */
+    const enterCooldown = (reason: string): void => {
+      cooling = true;
+      backoffMs = COOLDOWN_RETRY_MS;
+      const everySeconds = Math.round(COOLDOWN_RETRY_MS / 1_000);
+      log(
+        `[ac2] ${consecutiveFailures} consecutive pairing cycles with no connected wallet (${reason}); ` +
+          `slowing reconnect attempts to one every ${everySeconds}s until one succeeds.`,
+      );
+      emit('connection.disconnected', {
+        requestId: requestId ?? loadAc2State().requestId ?? null,
+        reason:
+          `pairing degraded after ${consecutiveFailures} failed cycles ` +
+          `(still retrying, now every ${everySeconds}s): ${reason}`,
+      });
+    };
+
+    /** Record a cycle that never reached `connected`, escalating if needed. */
+    const noteFailure = (reason: string): void => {
+      consecutiveFailures += 1;
+      if (!cooling && consecutiveFailures >= FAILURES_BEFORE_COOLDOWN) enterCooldown(reason);
+    };
+
+    /** Record a cycle that actually served a wallet: back to the fast tier. */
+    const noteSuccess = (): void => {
+      if (cooling) log('[ac2] wallet reconnected — restoring normal reconnect cadence.');
+      cooling = false;
+      backoffMs = BACKOFF_INITIAL_MS;
+      consecutiveFailures = 0;
+    };
+
     while (!stopped && token === cycleToken) {
+      reachedConnected = false;
+      let failureReason = 'session ended before the wallet linked';
       try {
         await runConnectedSession(active);
       } catch (err) {
+        failureReason = (err as Error).message;
         log(`[ac2] session failed: ${(err as Error).message}`);
         if (requestId !== null || loadAc2State().requestId) {
           emit('connection.disconnected', {
@@ -459,11 +536,23 @@ export function createConnectionBroker(options: ConnectionBrokerOptions): Connec
       }
       if (stopped || token !== cycleToken) break;
 
+      // A cycle that actually served a wallet is progress; one that never
+      // linked ramps the delay and eventually drops to the cooldown tier.
+      if (reachedConnected) noteSuccess();
+      else noteFailure(failureReason);
+
       if (active.isSignalingAlive?.() ?? false) {
         // Signaling survived: re-arm connect() on the same handle so the
-        // wallet re-links in place (no rescan).
+        // wallet re-links in place (no rescan). No new socket is created here,
+        // but a cycle that never connected must still be throttled — otherwise
+        // a handle that rejects instantly spins this loop at full CPU.
         setState('reconnecting');
         log('[ac2] wallet link dropped — signaling alive, awaiting re-link.');
+        if (!reachedConnected) {
+          await sleep(backoffMs);
+          backoffMs = Math.min(backoffMs * 2, ceilingMs());
+          if (stopped || token !== cycleToken) break;
+        }
         continue;
       }
 
@@ -474,16 +563,26 @@ export function createConnectionBroker(options: ConnectionBrokerOptions): Connec
       } catch {
         // Already torn down; ignore.
       }
-      let backoffMs = BACKOFF_INITIAL_MS;
+
+      // Throttle BEFORE rebuilding, on every pass. Sleeping only when
+      // `beginPairing()` threw left the common case unthrottled: a pairing that
+      // is built successfully and then dies immediately re-cycled with zero
+      // delay, opening (and abandoning) a fresh signaling socket every few
+      // milliseconds.
+      await sleep(backoffMs);
+      backoffMs = Math.min(backoffMs * 2, ceilingMs());
+      if (stopped || token !== cycleToken) break;
+
       let rebuilt: BrokerPairingHandle | null = null;
       while (!stopped && token === cycleToken) {
         try {
           rebuilt = await beginPairing(timeoutMs);
           break;
         } catch (err) {
+          noteFailure(`failed to rebuild pairing: ${(err as Error).message}`);
           log(`[ac2] failed to restart pairing; retrying in ${backoffMs}ms: ${err}`);
           await sleep(backoffMs);
-          backoffMs = Math.min(backoffMs * 2, BACKOFF_MAX_MS);
+          backoffMs = Math.min(backoffMs * 2, ceilingMs());
         }
       }
       if (!rebuilt) break;
@@ -531,7 +630,15 @@ export function createConnectionBroker(options: ConnectionBrokerOptions): Connec
       timeoutMs?: number;
     }): Promise<{ requestId: string; qrPayload: string; origin: string }> {
       if (stopped) throw new Error('[ac2] broker is stopped');
-      if (cycleActive && activePairing) return activePairing;
+      if (cycleActive && activePairing) {
+        // An explicit pair request means a human is saying "try now": collapse
+        // whatever reconnect delay is outstanding — possibly the 5-minute
+        // cooldown tier — so the daemon retries at once instead of making the
+        // caller sit out the gap. Without this the slow tier, while never
+        // terminal, would still feel like a stall.
+        cancelBackoff();
+        return activePairing;
+      }
       await ensureServiceIdentity();
       cycleActive = true;
       const token = ++cycleToken;
