@@ -1,3 +1,15 @@
+# [ac2-cli@1.0.0-canary.4](https://github.com/algorandfoundation/ac2/compare/ac2-cli@1.0.0-canary.3...ac2-cli@1.0.0-canary.4) (2026-08-07)
+
+
+### Bug Fixes
+
+* always retry connections with backoff and improve debug logs ([c7bce44](https://github.com/algorandfoundation/ac2/commit/c7bce44c76a7105bb1cb1e868b1a5cacb7514007))
+
+
+### Features
+
+* device identity using service key ([a9c870a](https://github.com/algorandfoundation/ac2/commit/a9c870a4015b454b8bad9de8845ca4dda93bb4ff))
+
 # [ac2-cli@1.0.0-canary.3](https://github.com/algorandfoundation/ac2/compare/ac2-cli@1.0.0-canary.2...ac2-cli@1.0.0-canary.3) (2026-08-06)
 
 
