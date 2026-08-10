@@ -1,14 +1,27 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import {
-  isMissingWebRtcError,
-  shouldSeedConnectionId,
-  tokenizeArgs,
-} from '../src/cli/ac2-command.js';
+/**
+ * `pair` must never actually reach a daemon in this suite: mock
+ * `connectAgentSession` (the very first daemon call `pair` makes, right after
+ * committing the `AC2_RUNTIME` env var) to reject immediately, so these tests
+ * observe the env-var side effect without spawning or dialing a real daemon.
+ * Every other export of the control module is passed through untouched.
+ */
+vi.mock('@algorandfoundation/ac2-cli/control', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@algorandfoundation/ac2-cli/control')>();
+  return {
+    ...actual,
+    connectAgentSession: vi.fn(async () => {
+      throw new Error('daemon unreachable (mocked for AC2_RUNTIME test)');
+    }),
+  };
+});
+
+import { buildAc2Command, isMissingWebRtcError, tokenizeArgs } from '../src/cli/ac2-command.js';
 import {
   applyGitConfigEntries,
   buildGitConfigEntries,
@@ -18,22 +31,28 @@ import {
   recordGitSetup,
 } from '../src/git/config.js';
 
-function moduleLoadError(
-  code: 'ERR_MODULE_NOT_FOUND' | 'MODULE_NOT_FOUND',
-  message: string,
-): Error {
-  const err = new Error(message) as Error & { code: string };
-  err.code = code;
-  return err;
+/**
+ * The daemon owns WebRTC now, so a missing `@roamhq/wrtc` arrives here as a
+ * control-socket failure: `ControlRequestError` carries only the *message* the
+ * daemon produced (the original `code` is dropped by the protocol). These
+ * fixtures therefore mimic that shape — a plain `Error` subclass with a code
+ * that is a protocol error code, never a NodeJS module-resolution code.
+ */
+class ControlRequestErrorLike extends Error {
+  readonly code = 'internal_error';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ControlRequestError';
+  }
 }
 
 describe('ac2 command WebRTC error handling', () => {
-  it('matches missing @roamhq/wrtc package import failures', () => {
+  it('matches missing @roamhq/wrtc package import failures relayed by the daemon', () => {
     expect(
       isMissingWebRtcError(
-        moduleLoadError(
-          'ERR_MODULE_NOT_FOUND',
-          "Cannot find package '@roamhq/wrtc' imported from /plugin/dist/providers.liquid-auth.js",
+        new ControlRequestErrorLike(
+          "Cannot find package '@roamhq/wrtc' imported from /usr/lib/node_modules/@algorandfoundation/ac2-cli/dist/providers.liquid-auth.js",
         ),
       ),
     ).toBe(true);
@@ -41,55 +60,86 @@ describe('ac2 command WebRTC error handling', () => {
 
   it('matches missing @roamhq/wrtc platform optional dependency failures', () => {
     expect(
-      isMissingWebRtcError(
-        moduleLoadError('MODULE_NOT_FOUND', "Cannot find module '@roamhq/wrtc-darwin-arm64'"),
-      ),
+      isMissingWebRtcError(new ControlRequestErrorLike("Cannot find module '@roamhq/wrtc-darwin-arm64'")),
     ).toBe(true);
   });
 
   it('matches @roamhq/wrtc binary search failures', () => {
     expect(
       isMissingWebRtcError(
-        new Error(
+        new ControlRequestErrorLike(
           'Could not find wrtc binary on any of the paths: ../build-darwin-arm64/wrtc.node,@roamhq/wrtc-darwin-arm64',
         ),
       ),
     ).toBe(true);
   });
 
+  it('matches the same messages on a plain message-only Error', () => {
+    // Nothing in the matcher may depend on the error subclass: the same text can
+    // also reach us as a bare `Error` (e.g. a local throw or a re-wrapped cause).
+    expect(isMissingWebRtcError(new Error("Cannot find package '@roamhq/wrtc'"))).toBe(true);
+  });
+
   it('does not mask runtime errors from the WebRTC stack', () => {
-    const err = new Error('RTCDataChannel failed inside @roamhq/wrtc');
+    const err = new ControlRequestErrorLike('RTCDataChannel failed inside @roamhq/wrtc');
     err.stack = 'Error: RTCDataChannel failed\n    at node_modules/@roamhq/wrtc/lib/index.js';
 
     expect(isMissingWebRtcError(err)).toBe(false);
   });
 
   it('does not match unrelated module-load failures', () => {
-    expect(
-      isMissingWebRtcError(
-        moduleLoadError('MODULE_NOT_FOUND', "Cannot find module 'socket.io-client'"),
-      ),
-    ).toBe(false);
+    expect(isMissingWebRtcError(new ControlRequestErrorLike("Cannot find module 'socket.io-client'"))).toBe(
+      false,
+    );
+  });
+
+  it('does not match non-Error rejection values', () => {
+    // `session.startPairing()` rejects with whatever the control client throws;
+    // a string/undefined must never be treated as a WebRTC problem.
+    expect(isMissingWebRtcError("Cannot find package '@roamhq/wrtc'")).toBe(false);
+    expect(isMissingWebRtcError(undefined)).toBe(false);
   });
 });
 
-describe('shouldSeedConnectionId', () => {
-  it('seeds the stable connection id from the first pairing when none is persisted', () => {
-    expect(shouldSeedConnectionId(undefined, 'req-fresh')).toBe(true);
-    expect(shouldSeedConnectionId('', 'req-fresh')).toBe(true);
+/**
+ * `pair` commits new pairings to the daemon's `openclaw-gateway` runtime
+ * adapter by setting `AC2_RUNTIME` (see `ac2-command.ts`) before it ever
+ * dials the daemon. `connectAgentSession` is mocked to reject immediately
+ * (above), so `pair` always fails fast right after that env-var commitment —
+ * exactly the moment these tests need to observe.
+ */
+describe('ac2 pair command AC2_RUNTIME commitment', () => {
+  const previousRuntime = process.env['AC2_RUNTIME'];
+
+  afterEach(() => {
+    if (previousRuntime === undefined) delete process.env['AC2_RUNTIME'];
+    else process.env['AC2_RUNTIME'] = previousRuntime;
   });
 
-  it('never re-seeds once a stable connection id already exists (reconnect keeps the id)', () => {
-    // The whole point of the fix: a reconnect mints a *fresh* Liquid Auth
-    // requestId, but the persisted connection id must stay put so history and
-    // identity are not orphaned.
-    expect(shouldSeedConnectionId('stable-connection-id', 'req-fresh')).toBe(false);
+  function fakeApi(): any {
+    return {
+      config: {},
+      pluginConfig: {},
+      logger: { info(): void {}, warn(): void {}, error(): void {} },
+    };
+  }
+
+  it('sets AC2_RUNTIME to openclaw-gateway when the operator has not set it', async () => {
+    delete process.env['AC2_RUNTIME'];
+    const command = buildAc2Command(fakeApi()) as {
+      handler: (ctx: { args?: string }) => Promise<{ text: string }>;
+    };
+    await command.handler({ args: 'pair' });
+    expect(process.env['AC2_RUNTIME']).toBe('openclaw-gateway');
   });
 
-  it('does not seed when the freshly-minted requestId is missing or blank', () => {
-    expect(shouldSeedConnectionId(undefined, undefined)).toBe(false);
-    expect(shouldSeedConnectionId(undefined, '')).toBe(false);
-    expect(shouldSeedConnectionId(undefined, 42)).toBe(false);
+  it('does not override an operator-provided AC2_RUNTIME value', async () => {
+    process.env['AC2_RUNTIME'] = 'socket';
+    const command = buildAc2Command(fakeApi()) as {
+      handler: (ctx: { args?: string }) => Promise<{ text: string }>;
+    };
+    await command.handler({ args: 'pair' });
+    expect(process.env['AC2_RUNTIME']).toBe('socket');
   });
 });
 

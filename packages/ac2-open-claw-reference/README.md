@@ -1,169 +1,92 @@
 # `@algorandfoundation/ac2-open-claw-reference`
 
-Reference [OpenClaw](https://docs.openclaw.ai/) plugin for the **AC2**
-protocol. It implements both the tool and channel interfaces — `ac2_sign`,
-`ac2_capabilities`, `ac2_x402_fetch`, and `ac2_git_sign` tools plus the `ac2`
-channel — over Liquid Auth + WebRTC via
-[`@algorandfoundation/ac2-sdk`](../ac2-sdk).
+The reference [OpenClaw](https://docs.openclaw.ai/) plugin for **AC2**. It lets
+your OpenClaw agent chat with a mobile wallet and ask that wallet to sign things,
+while you keep custody of your keys.
 
-## What AC2 contributes to OpenClaw
+You get four agent tools and one channel:
 
-| OpenClaw surface        | AC2 contribution                                                           |
-| ----------------------- | -------------------------------------------------------------------------- |
-| Channel `ac2`           | Owns Liquid Auth + WebRTC pairing and the active session.                  |
-| Tool `ac2_capabilities` | Agent DID, connected wallet address, and `sig_hint` catalog.              |
-| Tool `ac2_sign`         | Routes a `SigningRequest` and returns signature details to the agent.      |
-| Tool `ac2_x402_fetch`   | Pays x402 exact Algorand resources using wallet-approved AC2 signing.      |
-| Tool `ac2_git_sign`     | Produces a git-compatible SSHSIG signature approved by the wallet.         |
-| Setup entry             | `openclaw ac2 setup` writes the channel/tools wiring into `openclaw.json`. |
+| Tool or channel | What it gives the agent |
+| --- | --- |
+| `ac2_capabilities` | Whether a wallet is connected, its address, and what it can sign. |
+| `ac2_sign` | Ask the wallet to sign a payload; the user approves on their phone. |
+| `ac2_x402_fetch` | Fetch an HTTP resource that charges with x402 on Algorand, paying with wallet approval. |
+| `ac2_git_sign` | Produce a git-compatible SSHSIG signature approved by the wallet. |
+| Channel `ac2` | The wallet becomes a chat channel: you message your agent from your phone. |
 
-**Channels own the lifecycle; tools are pure consumers.** The `ac2`
-channel pairs once (one QR per session) and registers the transport on a
-`SessionManager`. `ac2_sign` reads from that manager and rejects with
-`no_active_session` when no channel is connected. The agent's own
-identity key is **issued by the wallet** during pairing (bootstrap
-`KeyRequest`) and persisted in an OS-keychain-protected keystore — the
-agent never touches the user's account keys or passkeys.
+The wallet connection itself is owned by the separate
+[AC2 service](../ac2-cli/README.md), which this plugin starts for you.
 
-**First-controller lock.** The agent registers to the **first** wallet
-(controller) that grants it an identity and stays bound to it. If a
-*different* wallet later connects — e.g. because the mobile app flushed
-its keystore and now presents a brand-new account key — the agent refuses
-the takeover: it will **not** reuse the bound identity or regenerate a
-fresh one for the new wallet. The connection is locked (no messages are
-routed to the agent) and the wallet is shown a `notice` banner explaining
-that the operator must clear the agent's keys — run `openclaw ac2 forget`
-(or delete the agent state under `~/.openclaw`) — before a new wallet can
-register and be issued a fresh identity. `ac2 status` reports the lock.
+## Install
 
-## Getting started
+```sh
+npm install -g openclaw @algorandfoundation/ac2-cli@next
+```
 
-### Prerequisites
+Then add the plugin to OpenClaw:
 
-- Node.js ≥ 22, pnpm ≥ 10
-- `openclaw` CLI on `PATH`
-- `openclaw` already set up with an agent
-- The plugin's native dependencies (`@napi-rs/keyring` and `@roamhq/wrtc`)
-  publish platform packages that OpenClaw installs automatically.
-
-### Install the plugin into OpenClaw
-
-#### From the npm registry (canary)
-
-```bash
+```sh
 openclaw plugins install @algorandfoundation/ac2-open-claw-reference@next
 openclaw plugins enable ac2
-openclaw ac2 setup                                    # wire channel + tools into openclaw.json
-openclaw ac2 status
+openclaw ac2 setup          # writes the channel + tools into openclaw.json
 openclaw gateway restart
 ```
 
-Keep the `@next` tag in the install command and do not add `--pin`. OpenClaw
-records that moving npm spec, which lets both the normal OpenClaw updater and
-the plugin-only updater discover newer AC2 canary releases.
+Keep the `@next` tag and do not add `--pin`: OpenClaw records that moving spec, so
+both the OpenClaw updater and the plugin-only updater can find newer AC2 canary
+releases. The unversioned package and `@latest` follow stable releases and will
+not pick up canaries.
 
-Use `@next` while testing canary releases published from `master`. The
-unversioned package and `@latest` both follow stable releases published from
-the `release` branch, so they do not receive new canary builds.
+You need Node.js 22 or newer, an OpenClaw agent already set up, and the `ac2`
+binary from `@algorandfoundation/ac2-cli` on your `PATH`. The native WebRTC and
+keychain dependencies belong to that service, not to this plugin.
 
-The npm-registry install lays the plugin and its dependencies out in
-OpenClaw's managed npm-project directory under the active state directory.
+## Use it
 
-#### From this monorepo (pre-release / development)
-
-```bash
-git clone https://github.com/algorandfoundation/ac2.git
-cd ac2
-pnpm install                                          # once, at the repo root
-
-cd packages/ac2-open-claw-reference
-pnpm install:plugin                                   # build → pack → openclaw plugins install → rebuild natives → enable
-openclaw ac2 setup                                    # wire channel + tools into openclaw.json
-openclaw gateway restart
+```sh
+openclaw ac2 pair
 ```
 
-`pnpm install:plugin` builds the flat tree-shakeable `dist/`, packs a
-tarball with workspace-only devDependencies stripped, installs it into
-`${OPENCLAW_HOME:-~/.openclaw}/extensions/ac2`, rebuilds the native
-`@napi-rs/keyring` addon via `npm rebuild`, and
-enables the plugin.
+Scan the QR code with your AC2 controller wallet and approve. That command starts
+the AC2 service if it is not already running, so this is the only step.
 
-### Update the plugin
+From then on:
 
-An npm install made with the moving `@next` tag is updated automatically when
-you update OpenClaw:
+- Message your agent from the wallet app and the reply comes back to your phone,
+  including tool activity and sub-agent progress.
+- The agent can call `ac2_capabilities` to see the connection, `ac2_sign` to ask
+  you to sign a payload, and `ac2_x402_fetch` for paid resources.
 
-```bash
-openclaw update
-```
+Running `openclaw ac2 pair` again while a wallet is connected simply prints the
+live session and exits.
 
-To check and update AC2 without updating OpenClaw itself, run:
+### Paid fetches
 
-```bash
-openclaw plugins update ac2
-openclaw gateway restart
-```
-
-You can preview a plugin update with `openclaw plugins update ac2 --dry-run`.
-OpenClaw reports the currently installed and available package versions.
-
-To uninstall (either install path):
-
-```bash
-openclaw plugins uninstall ac2
-# or, from the monorepo:
-pnpm uninstall:plugin
-```
-
-### Configuration
-
-Once installed, `openclaw.json` will contain an entry like:
-
-```json5
-{
-  plugins: {
-    entries: {
-      ac2: {
-        enabled: true,
-      },
-    },
-  },
-  channels: {
-    ac2: {
-      liquidAuthServer: 'https://debug.liquidauth.com',
-    },
-  },
-}
-```
-
-`AC2_LIQUID_AUTH_SERVER` overrides `liquidAuthServer` at runtime.
-`AC2_HEARTBEAT_TIMEOUT_MS` overrides the WebRTC heartbeat liveness timeout;
-it defaults to `50000`.
-
-### Using it
-
-In a conversation, enable the `ac2` channel, scan the QR with your AC2
-Controller / wallet, then the model can call `ac2_capabilities`
-followed by `ac2_sign` for raw signing or `ac2_x402_fetch` for paid HTTP
-resources that advertise x402 exact payments on Algorand. `ac2_x402_fetch`
-does the x402 402-response negotiation, asks the wallet to approve the
-Algorand payment transaction signing over AC2, retries with
-`PAYMENT-SIGNATURE`, and returns the HTTP/payment result.
-
-For the demo weather resource, the agent should use `ac2_x402_fetch` even
-when the user asks a plain weather question such as "what's the weather
-like today?" and does not provide a URL. In that case the default endpoint
-is:
+`ac2_x402_fetch` handles the whole x402 flow: it reads the payment challenge, asks
+you to approve the Algorand payment on your phone, retries with the signature, and
+returns the result. For the demo weather resource the agent should use this tool
+even for a plain question like "what's the weather like today?", with the default
+endpoint:
 
 ```text
 https://example.x402.goplausible.xyz/avm/weather
 ```
 
-The wallet approval prompt intentionally stays human-readable: it names
-the paid resource, amount, network, and a compact recipient/sender summary.
-The underlying signing request still uses raw Ed25519 over Algorand
-transaction signing bytes (`TX`-prefixed bytes), with x402 payment and
-payload metadata available in the technical request details.
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `openclaw ac2 pair` | Pair a wallet (starts the AC2 service if needed). |
+| `openclaw ac2 status` | Show the connection as the service reports it. |
+| `openclaw ac2 connections` | List remembered wallet connections. |
+| `openclaw ac2 forget` | Drop a pairing and the agent identity bound to it. |
+| `openclaw ac2 setup` | Write or refresh the plugin's `openclaw.json` wiring. |
+| `openclaw ac2 github-key` | Print the wallet's key as a GitHub SSH signing key. |
+| `openclaw ac2 git-config` | Wire git commit signing (and HTTPS push) through the AC2 wallet. |
+| `/ac2 status` | The same status from inside a chat. |
+
+Everything except `pair`, `setup`, and `git-config` is read-only and never starts
+the service.
 
 ## Git commit signing over AC2
 
@@ -225,11 +148,55 @@ Signing requires an active `ac2` session (`openclaw ac2 pair`) — each
 commit is a wallet approval. `ac2_git_sign` exposes the same flow as a
 tool so the agent can sign arbitrary git objects with consent.
 
-## Scope
+## Configuration
 
-- ✅ Liquid Auth pairing, AC2 signing trio, `thid`-bound responses,
-  channel-owned sessions, wallet-issued agent identity, x402 exact Algorand
-  paid fetch via wallet-approved signing, git/GitHub commit signing (SSHSIG)
-  via the wallet's account key.
-- ❌ Chain-specific verifiers, wallet introspection, holding user keys,
-  a bundled Node WebRTC stack — these belong in downstream plugins.
+`openclaw ac2 setup` writes the wiring for you. The result looks like this:
+
+```json5
+{
+  plugins: { entries: { ac2: { enabled: true } } },
+  channels: { ac2: { liquidAuthServer: 'https://debug.liquidauth.com' } },
+}
+```
+
+Connection settings are read by the process that owns the connection, which is the
+AC2 service, so set them in its environment (before `ac2 service start`, or in the
+unit written by `ac2 service install`):
+
+| Variable | Purpose |
+| --- | --- |
+| `AC2_LIQUID_AUTH_SERVER` | Overrides `liquidAuthServer`. |
+| `AC2_HEARTBEAT_TIMEOUT_MS` | Wallet channel liveness timeout (default `50000`). |
+| `AC2_RUNTIME` | Which runtime drives agent turns. `openclaw ac2 pair` selects `openclaw-gateway`; `socket` is the rollback. |
+
+## Update and remove
+
+```sh
+openclaw update                     # updates OpenClaw and @next plugins together
+openclaw plugins update ac2         # AC2 only
+openclaw gateway restart
+```
+
+Preview an update with `openclaw plugins update ac2 --dry-run`. To remove the
+plugin, run `openclaw plugins uninstall ac2`.
+
+## Troubleshooting
+
+**The tools say no wallet is connected.** Check `openclaw ac2 status`. If the
+service is not running, run `openclaw ac2 pair`.
+
+**The wallet paired but nothing reaches the agent.** The agent may be bound to a
+different wallet (see the first-controller lock in
+[ARCHITECTURE.md](./ARCHITECTURE.md)). Run `openclaw ac2 forget`, then pair again.
+
+**You upgraded and turns are not running.** A service that was already running
+keeps the runtime it started with. Run `ac2 service stop`, then
+`openclaw ac2 pair`.
+
+## Learn more
+
+- [ARCHITECTURE.md](./ARCHITECTURE.md): how the plugin, the AC2 service and the
+  OpenClaw gateway divide the work, plus the x402 and identity details.
+- [`@algorandfoundation/ac2-cli`](../ac2-cli): the AC2 service and `ac2` CLI.
+- [`@algorandfoundation/ac2-sdk`](../ac2-sdk): the protocol SDK.
+- [Developing in this monorepo](../CONTRIBUTING.md).

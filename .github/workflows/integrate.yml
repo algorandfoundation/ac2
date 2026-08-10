@@ -16,4 +16,6 @@ jobs:
       - run: pnpm install
       #- run: pnpm run lint:github
       #- run: pnpm run fmt:check
+      - run: pnpm run --if-present build
+      - run: pnpm install
       - run: pnpm test

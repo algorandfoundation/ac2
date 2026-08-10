@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 
 import { decodeAddress } from '@algorandfoundation/algokit-utils/common';
 
-import { loadAc2State } from '../identity/state.js';
+import { loadAc2State } from '@algorandfoundation/ac2-cli/identity';
 import { sessionManager } from '../session/manager.js';
 import {
   controllerDidToAlgorandAddress,

@@ -1,3 +1,37 @@
+# [ac2-open-claw-reference@1.0.0-canary.27](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.26...ac2-open-claw-reference@1.0.0-canary.27) (2026-08-07)
+
+
+### Bug Fixes
+
+* always retry connections with backoff and improve debug logs ([c7bce44](https://github.com/algorandfoundation/ac2/commit/c7bce44c76a7105bb1cb1e868b1a5cacb7514007))
+
+
+### Features
+
+* device identity using service key ([a9c870a](https://github.com/algorandfoundation/ac2/commit/a9c870a4015b454b8bad9de8845ca4dda93bb4ff))
+
+# [ac2-open-claw-reference@1.0.0-canary.26](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.25...ac2-open-claw-reference@1.0.0-canary.26) (2026-08-06)
+
+
+### Bug Fixes
+
+* darwin keyring, cli-entrypoint and windows fixes ([a460b8e](https://github.com/algorandfoundation/ac2/commit/a460b8edf0aab69174e6dd354a59b1a5237b0ed4))
+* macOS names for background service and liveness check from daemon ([4690181](https://github.com/algorandfoundation/ac2/commit/46901819ef3d3f71feb963b0b15a2a70cec0b0d5))
+
+# [ac2-open-claw-reference@1.0.0-canary.25](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.24...ac2-open-claw-reference@1.0.0-canary.25) (2026-08-06)
+
+
+### Bug Fixes
+
+* resolve keystore packages from the npm registry ([4af3953](https://github.com/algorandfoundation/ac2/commit/4af395394b16549401169cd8da69bb2ce8da8e82))
+
+# [ac2-open-claw-reference@1.0.0-canary.24](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.23...ac2-open-claw-reference@1.0.0-canary.24) (2026-08-06)
+
+
+### Features
+
+* ac2-cli and agent runtime isolation ([98ac62f](https://github.com/algorandfoundation/ac2/commit/98ac62f05080d227ff36aad01c41f1b04bd01cac))
+
 # [ac2-open-claw-reference@1.0.0-canary.23](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.22...ac2-open-claw-reference@1.0.0-canary.23) (2026-07-28)
 
 

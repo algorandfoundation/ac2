@@ -2,7 +2,7 @@
 
 import { encodeAddress, isValidAddress } from '@algorandfoundation/algokit-utils/common';
 
-import { extractEd25519PublicKey } from '../identity/did.js';
+import { extractEd25519PublicKey } from '@algorandfoundation/ac2-cli/identity';
 import type { ActiveSession } from './manager.js';
 
 /** Recover an Algorand account from a controller DID when no linked address is available. */
@@ -18,10 +18,27 @@ export function controllerDidToAlgorandAddress(controllerDid: string): string | 
   return isValidAddress(address) ? address : undefined;
 }
 
+/**
+ * The minimum an AC2 connection has to expose for its Algorand account to be
+ * resolvable. Deliberately structural (not {@link ActiveSession}) so the same
+ * rule applies to a connection the DAEMON owns — where the only facts we get
+ * back over the control socket are the controller DID and the wallet address
+ * it reported — as to an in-process pairing session.
+ */
+export interface WalletAccountFacts {
+  controllerDid: string;
+  walletAddress?: string | null;
+}
+
+/** Return the validated public Algorand account for a connection's facts. */
+export function walletAccountAlgorandAddress(facts: WalletAccountFacts): string | undefined {
+  if (facts.walletAddress && isValidAddress(facts.walletAddress)) {
+    return facts.walletAddress;
+  }
+  return controllerDidToAlgorandAddress(facts.controllerDid);
+}
+
 /** Return the validated public Algorand account associated with an active session. */
 export function sessionAlgorandAddress(active: ActiveSession): string | undefined {
-  if (active.walletAddress && isValidAddress(active.walletAddress)) {
-    return active.walletAddress;
-  }
-  return controllerDidToAlgorandAddress(active.controllerDid);
+  return walletAccountAlgorandAddress(active);
 }

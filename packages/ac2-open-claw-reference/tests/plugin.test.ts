@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Buffer } from 'node:buffer';
 import {
   buildKeyResponse,
@@ -14,6 +14,7 @@ import {
   type AC2SigningRequest as SigningRequestMessage,
 } from '@algorandfoundation/ac2-sdk/schema';
 import type { Ac2Transport } from '@algorandfoundation/ac2-sdk/transport';
+import { Ac2Client } from '@algorandfoundation/ac2-sdk';
 import { Address } from '@algorandfoundation/algokit-utils/common';
 import {
   bytesForSigning,
@@ -22,29 +23,38 @@ import {
   Transaction,
   TransactionType,
 } from '@algorandfoundation/algokit-utils/transact';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   signFlow,
   capabilitiesFlow,
-  runAc2Channel,
   SessionManager,
   NoActiveSessionError,
-  InMemoryChannelProvider,
   buildChannelObject,
   sessionManager,
   resolveAc2SessionConversation,
   resolveAc2OutboundSessionRoute,
   buildAc2SessionKey,
-  routeInboundToAgent,
-  classifyAgentError,
   AC2_MEDIA_SOURCE_PARAMS,
   getToolPluginMetadata,
   pluginManifest as plugin,
   createAc2AvmSigner,
   X402_ALGORAND_SIGNING_SCHEMA,
   buildSignTool,
+  buildAc2Command,
 } from '../src/index.js';
 import { describeX402Result } from '../src/tools/index.js';
-import { publicKeyToDidKey } from '../src/identity/did.js';
+import {
+  resolveCapabilities,
+  capabilitiesFromDaemon,
+  signViaDaemon,
+  resolveSign,
+} from '../src/session/flows.js';
+import { publicKeyToDidKey } from '@algorandfoundation/ac2-cli/identity';
+import { InMemoryChannelProvider } from '@algorandfoundation/ac2-sdk/providers/in-memory';
+import { runDaemon, type RunningDaemon } from '@algorandfoundation/ac2-cli';
+import { connectControl } from '@algorandfoundation/ac2-cli/control';
 
 /**
  * Stub controller DID used by the in-memory provider — the wallet's
@@ -103,41 +113,36 @@ function makeClient(
 }
 
 /**
- * Helper: boot the `ac2` channel in the background against a stub
- * provider and wait until it has registered an active session.
- * Returns the manager + a teardown that closes the channel cleanly.
+ * Helper: pair a stub provider, wrap the agent end in an `Ac2Client` and
+ * register it as the active session.
+ *
+ * This deliberately does NOT go through any plugin-owned connection
+ * runtime — the plugin no longer owns wallet connections (the AC2 daemon
+ * does, see `buildAc2Command`). These signing tests only need a live
+ * request/response transport plus an active session, which is exactly
+ * what the daemon hands the plugin in production via
+ * `sessionManager.setActive({ transport, client, ... })`.
  */
-async function bootChannel(
-  provider: InMemoryChannelProvider,
-  extraContext: Partial<{
-    receive: (text: string) => Promise<void>;
-    onOutput: (handler: (text: string) => Promise<void>) => void;
-  }> = {},
-): Promise<{
+async function bootChannel(provider: InMemoryChannelProvider): Promise<{
   manager: SessionManager;
-  done: Promise<void>;
   teardown: () => Promise<void>;
 }> {
   const manager = new SessionManager();
-  const abort = new AbortController();
-  const done = runAc2Channel(
-    { defaultTimeoutMs: 2_000 },
-    { provider, renderQr: () => {}, manager },
-    {
-      signal: abort.signal,
-      receive: extraContext.receive ?? (async () => {}),
-      onOutput: extraContext.onOutput ?? (() => {}),
-    },
-  );
-  for (let i = 0; i < 100 && !manager.getActive(); i++) {
-    await new Promise((r) => setTimeout(r, 5));
-  }
+  const { connect } = await provider.startPairing({ timeoutMs: 2_000 });
+  const paired = await connect();
+  const client = new Ac2Client(paired.transport);
+  manager.setActive({
+    transport: paired.transport,
+    client,
+    controllerDid: STUB_CONTROLLER_DID,
+    agentDid: STUB_AGENT_DID,
+    identityGranted: true,
+  });
   return {
     manager,
-    done,
     teardown: async () => {
-      abort.abort();
-      await done;
+      manager.clearActive();
+      await paired.close();
     },
   };
 }
@@ -214,6 +219,349 @@ describe('ac2 plugin', () => {
       expect(caps.status).toBe('ok');
       expect(caps.session.connected).toBe(true);
       expect(caps.agent.did).toBeNull();
+    });
+  });
+
+  describe('daemon-backed capabilities detection', () => {
+    /**
+     * The daemon — not this process — owns the wallet connection now, so
+     * `ac2_capabilities` must ask it over the control socket. A tool running in
+     * the agent/gateway process has no local pairing session, yet a wallet can
+     * be fully connected; a fake control client stands in for the daemon here.
+     */
+    function fakeConnect(config: {
+      reachable?: boolean;
+      state?: 'connected' | 'idle' | 'connecting';
+      requestId?: string | null;
+      controllerDid?: string | null;
+      walletAddress?: string | null;
+      locked?: boolean;
+      connections?: Array<{ requestId: string; agentDid: string | null }>;
+    }): () => Promise<any> {
+      return async () => {
+        if (config.reachable === false) return undefined;
+        return {
+          async request(method: string) {
+            if (method === 'daemon.status') {
+              return {
+                connection: {
+                  state: config.state ?? 'connected',
+                  requestId: config.requestId ?? null,
+                  controllerDid: config.controllerDid ?? null,
+                  walletAddress: config.walletAddress ?? null,
+                  origin: 'https://example.test',
+                  locked: config.locked ?? false,
+                },
+              };
+            }
+            if (method === 'connections.list') {
+              return { connections: config.connections ?? [] };
+            }
+            throw new Error(`unexpected control method ${method}`);
+          },
+          close() {},
+        };
+      };
+    }
+
+    it('returns null when the daemon is unreachable (caller falls back)', async () => {
+      const caps = await capabilitiesFromDaemon({}, { connect: fakeConnect({ reachable: false }) });
+      expect(caps).toBeNull();
+    });
+
+    it('reports no_active_session when the daemon is idle (no wallet linked)', async () => {
+      const caps = await capabilitiesFromDaemon({}, { connect: fakeConnect({ state: 'idle' }) });
+      expect(caps?.status).toBe('no_active_session');
+      expect(caps?.session.connected).toBe(false);
+    });
+
+    it('reports connected with agent/controller/wallet from the daemon', async () => {
+      const caps = await capabilitiesFromDaemon(
+        {},
+        {
+          connect: fakeConnect({
+            state: 'connected',
+            requestId: 'req-1',
+            controllerDid: 'did:key:zController',
+            walletAddress: 'WALLETADDR',
+            connections: [{ requestId: 'req-1', agentDid: 'did:key:zAgent' }],
+          }),
+        },
+      );
+      expect(caps?.status).toBe('ok');
+      expect(caps?.session.connected).toBe(true);
+      expect(caps?.session.controllerDid).toBe('did:key:zController');
+      expect(caps?.session.walletAddress).toBe('WALLETADDR');
+      expect(caps?.agent.did).toBe('did:key:zAgent');
+    });
+
+    it('reports agent.did null for a locked (refused) connection', async () => {
+      const caps = await capabilitiesFromDaemon(
+        {},
+        {
+          connect: fakeConnect({
+            state: 'connected',
+            requestId: 'req-1',
+            controllerDid: 'did:key:zOther',
+            locked: true,
+            connections: [{ requestId: 'req-1', agentDid: 'did:key:zAgent' }],
+          }),
+        },
+      );
+      expect(caps?.status).toBe('ok');
+      expect(caps?.session.connected).toBe(true);
+      expect(caps?.agent.did).toBeNull();
+    });
+
+    it('resolveCapabilities prefers a live local session over the daemon', async () => {
+      const manager = new SessionManager();
+      manager.setActive({
+        transport: {} as never,
+        client: {} as never,
+        controllerDid: 'did:key:zLocalController',
+        agentDid: 'did:key:zLocalAgent',
+        identityGranted: true,
+      });
+      // The daemon reports a DIFFERENT controller; the local session must win.
+      const caps = await resolveCapabilities(
+        {},
+        {
+          manager,
+          connect: fakeConnect({ state: 'connected', controllerDid: 'did:key:zDaemonController' }),
+        },
+      );
+      expect(caps.status).toBe('ok');
+      expect(caps.session.controllerDid).toBe('did:key:zLocalController');
+    });
+
+    it('resolveCapabilities falls back to the daemon when no local session', async () => {
+      const manager = new SessionManager();
+      const caps = await resolveCapabilities(
+        {},
+        {
+          manager,
+          connect: fakeConnect({
+            state: 'connected',
+            requestId: 'req-9',
+            controllerDid: 'did:key:zDaemonController',
+            connections: [{ requestId: 'req-9', agentDid: 'did:key:zDaemonAgent' }],
+          }),
+        },
+      );
+      expect(caps.status).toBe('ok');
+      expect(caps.session.controllerDid).toBe('did:key:zDaemonController');
+      expect(caps.agent.did).toBe('did:key:zDaemonAgent');
+    });
+
+    it('resolveCapabilities reports no_active_session when local and daemon are both idle', async () => {
+      const manager = new SessionManager();
+      const caps = await resolveCapabilities(
+        {},
+        { manager, connect: fakeConnect({ state: 'idle' }) },
+      );
+      expect(caps.status).toBe('no_active_session');
+    });
+  });
+
+  describe('daemon-backed signing (agent.request passthrough)', () => {
+    /**
+     * The daemon owns the wallet connection and is the only party that can
+     * complete a signing round-trip, so `ac2_sign` must broker through it when
+     * this process has no local pairing session. Signing now rides the generic
+     * verb-agnostic `agent.request` passthrough: the plugin builds the
+     * `ac2/SigningRequest` frame and interprets the relayed reply. A fake
+     * control client stands in for the daemon's `agent.request` (no real
+     * socket/wallet).
+     */
+    function fakeSignConnect(config: {
+      reachable?: boolean;
+      result?: unknown;
+      throwCode?: string;
+      onParams?: (params: unknown) => void;
+    }): () => Promise<any> {
+      return async () => {
+        if (config.reachable === false) return undefined;
+        return {
+          async request(method: string, params: unknown) {
+            if (method === 'agent.request') {
+              config.onParams?.(params);
+              if (config.throwCode) {
+                throw Object.assign(new Error(config.throwCode), { code: config.throwCode });
+              }
+              return config.result;
+            }
+            throw new Error(`unexpected control method ${method}`);
+          },
+          close() {},
+        };
+      };
+    }
+
+    /** Build a relayed `ac2/SigningResponse` `agent.request` result. */
+    function signedResponse(body: Record<string, unknown>, thid = 'req-1') {
+      return {
+        status: 'response',
+        message: {
+          type: 'ac2/SigningResponse',
+          from: STUB_CONTROLLER_DID,
+          to: [STUB_AGENT_DID],
+          thid,
+          body,
+        },
+      };
+    }
+
+    it('returns null when the daemon is unreachable (caller falls back)', async () => {
+      const result = await signViaDaemon(
+        { description: 'x', payload_base64: 'eA==' },
+        {},
+        { connect: fakeSignConnect({ reachable: false }) },
+      );
+      expect(result).toBeNull();
+    });
+
+    it('builds a SigningRequest frame and interprets the relayed SigningResponse', async () => {
+      let seen: any;
+      const result = await signViaDaemon(
+        {
+          description: 'Sign this',
+          payload_base64: Buffer.from('hello').toString('base64'),
+          schema: 'test/schema',
+          sig_hint: 'raw-ed25519',
+        },
+        { defaultTimeoutMs: 5000 },
+        {
+          connect: fakeSignConnect({
+            result: signedResponse(
+              { signature: 'c2ln', public_key: 'cGs=', address: 'ADDR', key_type: 'account' },
+              'req-1',
+            ),
+            onParams: (p) => (seen = p),
+          }),
+        },
+      );
+      expect(result).toEqual({
+        status: 'signed',
+        signature: 'c2ln',
+        public_key: 'cGs=',
+        address: 'ADDR',
+        key_type: 'account',
+        thid: 'req-1',
+      });
+      // The plugin builds a verb-tagged AC2 request frame and declares the
+      // settling response types; it never fills from/to (the daemon does).
+      expect(seen.type).toBe('ac2/SigningRequest');
+      expect(seen.responseTypes).toEqual(['ac2/SigningResponse', 'ac2/SigningRejected']);
+      expect(seen.timeoutMs).toBe(5000);
+      expect(seen.body).toMatchObject({
+        description: 'Sign this',
+        encoding: 'base64',
+        payload: Buffer.from('hello').toString('base64'),
+        schema: 'test/schema',
+        sig_hint: 'raw-ed25519',
+      });
+      expect(seen.body.from).toBeUndefined();
+      expect(seen.body.to).toBeUndefined();
+    });
+
+    it('interprets a relayed SigningRejected as a rejection', async () => {
+      const result = await signViaDaemon(
+        { description: 'x', payload_base64: 'eA==' },
+        {},
+        {
+          connect: fakeSignConnect({
+            result: {
+              status: 'response',
+              message: {
+                type: 'ac2/SigningRejected',
+                from: STUB_CONTROLLER_DID,
+                to: [STUB_AGENT_DID],
+                thid: 'req-2',
+                body: { reason: 'user_declined' },
+              },
+            },
+          }),
+        },
+      );
+      expect(result).toEqual({ status: 'rejected', reason: 'user_declined', thid: 'req-2' });
+    });
+
+    it('maps a daemon-side unavailable gate to a rejection with that reason', async () => {
+      const result = await signViaDaemon(
+        { description: 'x', payload_base64: 'eA==' },
+        {},
+        { connect: fakeSignConnect({ result: { status: 'unavailable', reason: 'no_identity' } }) },
+      );
+      expect(result).toEqual({ status: 'rejected', reason: 'no_identity' });
+    });
+
+    it('resolveSign prefers a live local session over the daemon', async () => {
+      const manager = new SessionManager();
+      let daemonCalled = false;
+      manager.setActive({
+        transport: {} as never,
+        client: {
+          requestSignature: async (args: BuildSigningRequestArgs) => ({
+            kind: 'signed',
+            message: {
+              id: 'r',
+              type: 'SigningResponse',
+              from: args.to,
+              to: args.from,
+              thid: 't',
+              created_time: 1,
+              body: {
+                signature: Buffer.from('localsig').toString('base64'),
+                public_key: Buffer.from('pk').toString('base64'),
+              },
+            },
+          }),
+        } as never,
+        controllerDid: STUB_CONTROLLER_DID,
+        agentDid: STUB_AGENT_DID,
+        identityGranted: true,
+      });
+
+      const result = await resolveSign(
+        { description: 'x', payload_base64: Buffer.from('y').toString('base64') },
+        {},
+        {
+          manager,
+          connect: fakeSignConnect({
+            result: { status: 'signed', signature: 'daemon', public_key: 'pk', thid: 't' },
+            onParams: () => (daemonCalled = true),
+          }),
+        },
+      );
+      expect(result.status).toBe('signed');
+      if (result.status === 'signed') {
+        expect(result.signature).toBe(Buffer.from('localsig').toString('base64'));
+      }
+      expect(daemonCalled).toBe(false);
+    });
+
+    it('resolveSign falls back to the daemon when no local session', async () => {
+      const manager = new SessionManager();
+      const result = await resolveSign(
+        { description: 'x', payload_base64: Buffer.from('y').toString('base64') },
+        {},
+        {
+          manager,
+          connect: fakeSignConnect({ result: signedResponse({ signature: 'daemonsig', public_key: 'pk' }, 't') }),
+        },
+      );
+      expect(result).toEqual({ status: 'signed', signature: 'daemonsig', public_key: 'pk', thid: 't' });
+    });
+
+    it('resolveSign throws NoActiveSessionError when local and daemon are both unavailable', async () => {
+      const manager = new SessionManager();
+      await expect(
+        resolveSign(
+          { description: 'x', payload_base64: Buffer.from('y').toString('base64') },
+          {},
+          { manager, connect: fakeSignConnect({ reachable: false }) },
+        ),
+      ).rejects.toMatchObject({ code: 'no_active_session' });
     });
   });
 
@@ -420,7 +768,7 @@ describe('ac2 plugin', () => {
         agentDid: STUB_AGENT_DID,
       });
 
-      const signer = createAc2AvmSigner({
+      const signer = await createAc2AvmSigner({
         config: { defaultTimeoutMs: 2_000 },
         deps: { manager },
         getPaymentContext: () => ({
@@ -517,7 +865,7 @@ describe('ac2 plugin', () => {
         agentDid: STUB_AGENT_DID,
       });
 
-      const signer = createAc2AvmSigner({
+      const signer = await createAc2AvmSigner({
         config: { defaultTimeoutMs: 2_000 },
         deps: { manager },
       });
@@ -540,6 +888,180 @@ describe('ac2 plugin', () => {
       );
       expect(observedRequest.body.schema).toBe(X402_ALGORAND_SIGNING_SCHEMA);
       expect(observedRequest.body.sig_hint).toBe('transaction-algorand');
+    });
+  });
+
+  /**
+   * The x402 signer must work with NO in-process pairing session at all — the
+   * situation in the agent/gateway process where tools actually execute, since
+   * the daemon owns the wallet connection. Both halves are exercised: the payer
+   * address comes from the daemon's connection facts, and each signature is
+   * brokered through its generic `agent.request` passthrough.
+   */
+  describe('daemon-backed x402 signing', () => {
+    /** Fake control client answering the status/connections + `agent.request` calls. */
+    function fakeX402Connect(config: {
+      reachable?: boolean;
+      controllerDid?: string | null;
+      walletAddress?: string | null;
+      signature?: Uint8Array;
+      publicKey?: Uint8Array;
+      address?: string;
+      rejectReason?: string;
+      onParams?: (params: unknown) => void;
+    }): () => Promise<any> {
+      return async () => {
+        if (config.reachable === false) return undefined;
+        return {
+          async request(method: string, params: unknown) {
+            if (method === 'daemon.status') {
+              return {
+                connection: {
+                  state: 'connected',
+                  requestId: 'req-x402',
+                  controllerDid: config.controllerDid ?? null,
+                  walletAddress: config.walletAddress ?? null,
+                  origin: 'https://example.test',
+                  locked: false,
+                },
+              };
+            }
+            if (method === 'connections.list') {
+              return { connections: [{ requestId: 'req-x402', agentDid: STUB_AGENT_DID }] };
+            }
+            if (method === 'agent.request') {
+              config.onParams?.(params);
+              if (config.rejectReason !== undefined) {
+                return {
+                  status: 'response',
+                  message: {
+                    type: 'ac2/SigningRejected',
+                    from: config.controllerDid ?? STUB_CONTROLLER_DID,
+                    to: [STUB_AGENT_DID],
+                    thid: 'req-x402',
+                    body: { reason: config.rejectReason },
+                  },
+                };
+              }
+              return {
+                status: 'response',
+                message: {
+                  type: 'ac2/SigningResponse',
+                  from: config.controllerDid ?? STUB_CONTROLLER_DID,
+                  to: [STUB_AGENT_DID],
+                  thid: 'req-x402',
+                  body: {
+                    signature: Buffer.from(config.signature ?? new Uint8Array(64).fill(9)).toString(
+                      'base64',
+                    ),
+                    public_key: Buffer.from(config.publicKey ?? new Uint8Array(32)).toString(
+                      'base64',
+                    ),
+                    ...(config.address !== undefined ? { address: config.address } : {}),
+                    key_type: 'account',
+                  },
+                },
+              };
+            }
+            throw new Error(`unexpected control method ${method}`);
+          },
+          close() {},
+        };
+      };
+    }
+
+    function buildTransferTxn(sender: Address, receiver: Address): Transaction {
+      return new Transaction({
+        type: TransactionType.AssetTransfer,
+        sender,
+        fee: 1_000n,
+        firstValid: 1n,
+        lastValid: 1_000n,
+        genesisHash: new Uint8Array(32).fill(3),
+        genesisId: 'testnet-v1.0',
+        assetTransfer: { assetId: 10_458_941n, amount: 55n, receiver },
+      });
+    }
+
+    it('signs a payment through the daemon with no local session', async () => {
+      const sender = new Address(new Uint8Array(32).fill(11));
+      const receiver = new Address(new Uint8Array(32).fill(12));
+      const txn = buildTransferTxn(sender, receiver);
+      const signature = new Uint8Array(64).fill(8);
+      let seen: any;
+
+      const signer = await createAc2AvmSigner({
+        config: { defaultTimeoutMs: 2_000 },
+        deps: {
+          manager: new SessionManager(),
+          connect: fakeX402Connect({
+            controllerDid: publicKeyToDidKey(sender.publicKey),
+            walletAddress: sender.toString(),
+            signature,
+            publicKey: sender.publicKey,
+            address: sender.toString(),
+            onParams: (p) => (seen = p),
+          }),
+        },
+      });
+
+      expect(signer.address).toBe(sender.toString());
+      const signed = await signer.signTransactions([encodeTransactionRaw(txn)], [0]);
+      const decoded = decodeSignedTransaction(signed[0]!);
+      expect(decoded.txn.txId()).toBe(txn.txId());
+      expect(Buffer.from(decoded.sig ?? new Uint8Array()).toString('base64')).toBe(
+        Buffer.from(signature).toString('base64'),
+      );
+      // The daemon received a proper AC2 signing request for the x402 bytes.
+      expect(seen.type).toBe('ac2/SigningRequest');
+      expect(seen.body.schema).toBe(X402_ALGORAND_SIGNING_SCHEMA);
+      expect(seen.body.sig_hint).toBe('transaction-algorand');
+      expect(seen.body.payload).toBe(
+        Buffer.from(bytesForSigning.transaction(txn)).toString('base64'),
+      );
+    });
+
+    it('derives the payer address from the controller DID when the daemon reports none', async () => {
+      const sender = new Address(new Uint8Array(32).fill(13));
+      const signer = await createAc2AvmSigner({
+        config: {},
+        deps: {
+          manager: new SessionManager(),
+          connect: fakeX402Connect({
+            controllerDid: publicKeyToDidKey(sender.publicKey),
+            walletAddress: null,
+          }),
+        },
+      });
+      expect(signer.address).toBe(sender.toString());
+    });
+
+    it('surfaces a wallet decline as an x402 signing rejection', async () => {
+      const sender = new Address(new Uint8Array(32).fill(14));
+      const receiver = new Address(new Uint8Array(32).fill(15));
+      const signer = await createAc2AvmSigner({
+        config: {},
+        deps: {
+          manager: new SessionManager(),
+          connect: fakeX402Connect({
+            controllerDid: publicKeyToDidKey(sender.publicKey),
+            walletAddress: sender.toString(),
+            rejectReason: 'User declined',
+          }),
+        },
+      });
+      await expect(
+        signer.signTransactions([encodeTransactionRaw(buildTransferTxn(sender, receiver))], [0]),
+      ).rejects.toThrow(/User declined/);
+    });
+
+    it('rejects with no_active_session when neither a local session nor the daemon is available', async () => {
+      await expect(
+        createAc2AvmSigner({
+          config: {},
+          deps: { manager: new SessionManager(), connect: fakeX402Connect({ reachable: false }) },
+        }),
+      ).rejects.toBeInstanceOf(NoActiveSessionError);
     });
   });
 
@@ -581,123 +1103,328 @@ describe('ac2 plugin', () => {
     });
   });
 
-  describe('identity bootstrap', () => {
-    it('derives agentDid + controllerDid from the wallet KeyResponse and only activates after bootstrap', async () => {
-      let observedKeyRequest: KeyRequestMessage | undefined;
-      const provider = new (class extends InMemoryChannelProvider {
-        protected override onPairingPrepared(peerTransport: Ac2Transport): void {
-          peerTransport.onMessage((msg) => {
-            if (isKeyRequest(msg)) {
-              observedKeyRequest = msg;
-              replyToBootstrap(msg, peerTransport);
-            }
+  /**
+   * The `pair` command no longer owns the wallet connection itself — it talks
+   * to the standalone AC2 daemon over its control socket (see
+   * `src/cli/ac2-command.ts`). These tests run a REAL daemon in-process
+   * (mirroring `packages/ac2-cli/tests/broker.test.ts`) with the in-memory
+   * channel provider standing in for the wallet, and drive the plugin's
+   * `pair` command against it exactly as `openclaw ac2 pair` would.
+   */
+  describe('daemon-backed pair command', () => {
+    /** In-memory keychain/metadata seams so the daemon never touches the OS keychain. */
+    function createMemoryKeystoreOptions(stateDir: string): {
+      keyring: { get: (a: string) => string | null; set: (a: string, s: string) => void; delete: (a: string) => boolean };
+      metadata: { read: () => Uint8Array | null; write: (b: Uint8Array) => void; remove: () => void };
+      migrateLegacy: false;
+      stateDir: string;
+    } {
+      const entries = new Map<string, string>();
+      let bytes: Uint8Array | null = null;
+      return {
+        keyring: {
+          get: (a) => entries.get(a) ?? null,
+          set: (a, s) => {
+            entries.set(a, s);
+          },
+          delete: (a) => entries.delete(a),
+        },
+        metadata: {
+          read: () => bytes,
+          write: (b) => {
+            bytes = b;
+          },
+          remove: () => {
+            bytes = null;
+          },
+        },
+        migrateLegacy: false,
+        stateDir,
+      };
+    }
+
+    /** Fake wallet: answers the bootstrap `KeyRequest` and records raw frames. */
+    class FakeWalletProvider extends InMemoryChannelProvider {
+      received: string[] = [];
+      peerTransport: Ac2Transport | undefined;
+
+      protected override onPairingPrepared(peerTransport: Ac2Transport): void {
+        this.peerTransport = peerTransport;
+        peerTransport.onMessage((msg) => {
+          if (isKeyRequest(msg)) replyToBootstrap(msg, peerTransport);
+        });
+        peerTransport.onRawMessage?.((payload) => {
+          this.received.push(payload);
+        });
+      }
+    }
+
+    /**
+     * Wraps {@link FakeWalletProvider} to also report a `peer.wallet` account on
+     * the paired channel — the daemon's controller-binding decision (`reuse` vs
+     * `locked`) only fires when the live link names an account, so a locked
+     * connection cannot be produced without it (mirrors `ac2-cli`'s broker test).
+     */
+    class ControllerWalletProvider extends FakeWalletProvider {
+      constructor(
+        private readonly walletAccount: string,
+        opts: { origin?: string; requestId?: string },
+      ) {
+        super(opts);
+      }
+
+      override async startPairing(opts: Record<string, unknown> = {}): Promise<
+        Awaited<ReturnType<InMemoryChannelProvider['startPairing']>>
+      > {
+        const handle = await super.startPairing(opts);
+        return {
+          ...handle,
+          connect: async () => {
+            const paired = await handle.connect();
+            return { ...paired, peer: { wallet: this.walletAccount } };
+          },
+        };
+      }
+    }
+
+    /** Build a minimal host `api` double sufficient to run `buildAc2Command(api).handler('pair')`. */
+    function makeDaemonTestApi(): { api: any } {
+      const api = {
+        config: {},
+        pluginConfig: { defaultTimeoutMs: 2_000 },
+        logger: { info(): void {}, warn(): void {}, error(): void {} },
+      };
+      return { api };
+    }
+
+    async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
+      const deadline = Date.now() + timeoutMs;
+      while (!predicate()) {
+        if (Date.now() > deadline) throw new Error('waitFor: condition not met in time');
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    }
+
+    let homeDir: string;
+    let stateDir: string;
+    let previousHome: string | undefined;
+    let previousStateDir: string | undefined;
+    let previousSocket: string | undefined;
+    let daemon: RunningDaemon | undefined;
+
+    beforeEach(async () => {
+      homeDir = await mkdtemp(join(tmpdir(), 'ac2-plugin-daemon-home-'));
+      stateDir = await mkdtemp(join(tmpdir(), 'ac2-plugin-daemon-state-'));
+      previousHome = process.env['AC2_HOME'];
+      previousStateDir = process.env['AC2_STATE_DIR'];
+      previousSocket = process.env['AC2_DAEMON_SOCKET'];
+      process.env['AC2_HOME'] = homeDir;
+      process.env['AC2_STATE_DIR'] = stateDir;
+      process.env['AC2_DAEMON_SOCKET'] = join(homeDir, 'ac2d.sock');
+      // `connectAgentSession` auto-starts the daemon when `daemonProcessStatus`
+      // reports it isn't running (a pidfile check). This daemon is started
+      // in-process below (no pidfile of its own), so a pidfile pointing at
+      // THIS test process (trivially alive) is seeded to skip the spawn path
+      // — the plugin then talks to the real in-process daemon over the socket
+      // exactly as it would over a genuinely detached one.
+      await writeFile(join(homeDir, 'ac2d.pid'), `${process.pid}\n`, 'utf8');
+    });
+
+    afterEach(async () => {
+      sessionManager.clearActive();
+      if (daemon) await daemon.stop();
+      daemon = undefined;
+      if (previousHome === undefined) delete process.env['AC2_HOME'];
+      else process.env['AC2_HOME'] = previousHome;
+      if (previousStateDir === undefined) delete process.env['AC2_STATE_DIR'];
+      else process.env['AC2_STATE_DIR'] = previousStateDir;
+      if (previousSocket === undefined) delete process.env['AC2_DAEMON_SOCKET'];
+      else process.env['AC2_DAEMON_SOCKET'] = previousSocket;
+      // `pair` sets AC2_RUNTIME as a side effect (see `ac2-command.ts`); this
+      // in-process daemon never reads it (it's constructed with explicit
+      // options, not env), but leaving it set would leak into later tests.
+      delete process.env['AC2_RUNTIME'];
+      await rm(homeDir, { recursive: true, force: true });
+      await rm(stateDir, { recursive: true, force: true });
+    });
+
+    it('pairs through the daemon: renders the QR, activates with the daemon-issued identity, sends outbound, then clears on disconnect', async () => {
+      let wallet: FakeWalletProvider;
+      daemon = await runDaemon({
+        socketPath: process.env['AC2_DAEMON_SOCKET']!,
+        keystore: createMemoryKeystoreOptions(stateDir) as never,
+        handleSignals: false,
+        hostKeystore: false,
+        log: () => {},
+        providerFactory: (requestId) => {
+          wallet = new FakeWalletProvider({
+            origin: 'https://debug.liquidauth.com',
+            ...(requestId ? { requestId } : {}),
           });
-        }
-      })();
+          return wallet;
+        },
+      });
 
-      const { manager, teardown } = await bootChannel(provider);
+      const { api } = makeDaemonTestApi();
+      const command = buildAc2Command(api) as {
+        handler: (ctx: { args?: string }) => Promise<{ text: string; keepAlive?: boolean }>;
+      };
+
+      const result = await command.handler({ args: 'pair' });
+      // QR rendered (as the plain-text pairing invitation, `qrcode-terminal`'s
+      // ASCII rendering plus the raw pairing URL).
+      expect(result.keepAlive).toBe(true);
+      expect(result.text).toContain('AC2 Pairing Invitation');
+      expect(result.text).toContain('Pairing URL:');
+
+      // Session becomes active with the identity the DAEMON granted (from the
+      // wallet's `KeyResponse`) — this plugin process never ran a bootstrap
+      // itself.
+      await waitFor(() => sessionManager.getActive() !== null);
+      const active = sessionManager.getActive()!;
+      expect(active.agentDid).toBe(STUB_AGENT_DID);
+      expect(active.controllerDid).toBe(STUB_CONTROLLER_DID);
+      expect(active.identityGranted).toBe(true);
+      expect(active.locked).toBe(false);
+
+      // NOTE: an inbound wallet message is no longer routed to an agent by this
+      // plugin at all — the daemon's `message.inbound` delivery goes exclusively
+      // to its active `openclaw-gateway` runtime adapter (see `daemon/run.ts`'s
+      // `emitEvent`), never back out over this control-socket client. There is
+      // therefore nothing left to assert here about inbound routing.
+
+      // An outbound send over the active session's transport reaches the wallet.
+      active.transport.send('hello from the agent');
+      await waitFor(() => wallet!.received.includes('hello from the agent'));
+
+      // A disconnect clears the active session; the daemon (not this plugin)
+      // owns reconnect, so the command just waits for the next connection.
+      // The clear is observed through a spy rather than by polling
+      // `getActive() === null`, because the in-memory provider re-pairs and
+      // re-connects *immediately* — the daemon's reconnect would race the poll
+      // and re-activate the session before it could ever be seen as cleared.
+      const originalClear = sessionManager.clearActive.bind(sessionManager);
+      let cleared = 0;
+      (sessionManager as unknown as { clearActive: () => void }).clearActive = () => {
+        cleared += 1;
+        originalClear();
+      };
       try {
-        // Bootstrap KeyRequest must use the expected identity envelope.
-        expect(observedKeyRequest).toBeDefined();
-        expect(observedKeyRequest!.body.for_operation).toBe('ac2/identity');
-        expect(observedKeyRequest!.body.key_type).toBe('ed25519');
-
-        // Session is active and identity is wallet-derived, not hard-coded.
-        const active = manager.getActive();
-        expect(active).not.toBeNull();
-        expect(active!.agentDid).toBe(STUB_AGENT_DID);
-        expect(active!.controllerDid).toBe(STUB_CONTROLLER_DID);
-
-        // capabilitiesFlow surfaces the wallet-derived DID.
-        const caps = capabilitiesFlow({}, { manager });
-        expect(caps.status).toBe('ok');
-        expect(caps.agent.did).toBe(STUB_AGENT_DID);
-        // The connected controller account is surfaced so the agent can
-        // report who it is paired with (no hard-coded placeholder).
-        expect(caps.session.controllerDid).toBe(STUB_CONTROLLER_DID);
+        wallet!.peerTransport!.close();
+        await waitFor(() => cleared > 0);
       } finally {
-        await teardown();
+        (sessionManager as unknown as { clearActive: () => void }).clearActive = originalClear;
       }
     });
 
-    it('keeps the channel open (active but identity-less) and notifies the user when the wallet rejects the bootstrap KeyRequest', async () => {
-      const peerRaw: string[] = [];
-      const provider = new (class extends InMemoryChannelProvider {
-        protected override onPairingPrepared(peerTransport: Ac2Transport): void {
-          peerTransport.onMessage((msg) => {
-            if (!isKeyRequest(msg)) return;
-            peerTransport.send(
-              JSON.stringify(
-                buildKeyResponse({
-                  request: msg,
-                  from: STUB_CONTROLLER_DID,
-                  body: {
-                    status: 'rejected',
-                    key_type: 'ed25519',
-                    material: 'rejected',
-                    public_key: 'rejected',
-                    reason: 'user declined identity',
-                  },
-                }),
-              ),
-            );
+    /**
+     * `pair` run against a daemon that ALREADY has a linked wallet: the
+     * `connection.connected` event fired before this process existed, so the
+     * command must report the live session — with the invitation the daemon
+     * keeps armed, because `pair` is exactly the command an operator uses to get
+     * a code — and then EXIT (no `keepAlive`): there is no pairing to wait for,
+     * and the daemon owns the connection without this process.
+     */
+    it('reports the live session and exits early when a wallet is already connected', async () => {
+      let wallet: FakeWalletProvider;
+      daemon = await runDaemon({
+        socketPath: process.env['AC2_DAEMON_SOCKET']!,
+        keystore: createMemoryKeystoreOptions(stateDir) as never,
+        handleSignals: false,
+        hostKeystore: false,
+        log: () => {},
+        providerFactory: (requestId) => {
+          wallet = new FakeWalletProvider({
+            origin: 'https://debug.liquidauth.com',
+            ...(requestId ? { requestId } : {}),
           });
-          // Capture the banner notice the agent pushes after a failed
-          // bootstrap (surfaced as a `notice` control frame, not a chat message).
-          peerTransport.onRawMessage?.((msg) => {
-            peerRaw.push(msg);
+          return wallet;
+        },
+      });
+
+      // Bring a wallet up through a SEPARATE control client (registered under a
+      // different agent id so the plugin's own `openclaw` registration below is
+      // not refused with `agent_taken`), then disconnect it — mimicking a prior
+      // `pair` shell that has since exited while the daemon kept the session.
+      const driver = await connectControl({
+        path: process.env['AC2_DAEMON_SOCKET']!,
+        timeoutMs: 2_000,
+      });
+      await driver.request('agent.hello', { agent: 'driver' });
+      await driver.request('pair.start', {});
+      const deadline = Date.now() + 3_000;
+      for (;;) {
+        const status = await driver.request('daemon.status', {});
+        if (status.connection.state === 'connected') break;
+        if (Date.now() > deadline) throw new Error('wallet did not connect in time');
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      driver.close();
+
+      const { api } = makeDaemonTestApi();
+      const command = buildAc2Command(api) as {
+        handler: (ctx: {
+          args?: string;
+        }) => Promise<{ text: string; keepAlive?: boolean }>;
+      };
+      const result = await command.handler({ args: 'pair' });
+
+      expect(result.text).toContain('already has an active wallet connection');
+      expect(result.text).toContain(`Controller DID: ${STUB_CONTROLLER_DID}`);
+      // The armed invitation is rendered even though nothing is "waiting".
+      expect(result.text).toContain('AC2 Pairing Invitation');
+      expect(result.text).toContain('Pairing URL:');
+      expect(result.text).toContain('Nothing to do');
+      // Exits early: the shell must not hold open (and must not print the
+      // "Waiting for controller to pair..." banner).
+      expect(result.keepAlive).toBeUndefined();
+
+      // No local session is adopted — it would die with this process anyway.
+      expect(sessionManager.getActive()).toBeNull();
+    });
+
+    it('a locked connection (different wallet already registered) produces the notice', async () => {
+      const BOUND_CONTROLLER_DID = 'did:key:zBoundController';
+      let wallet: ControllerWalletProvider;
+      daemon = await runDaemon({
+        socketPath: process.env['AC2_DAEMON_SOCKET']!,
+        keystore: createMemoryKeystoreOptions(stateDir) as never,
+        handleSignals: false,
+        hostKeystore: false,
+        log: () => {},
+        providerFactory: (requestId) => {
+          // Connects as `zOtherWallet`, i.e. NOT the bound controller below.
+          wallet = new ControllerWalletProvider('zOtherWallet', {
+            origin: 'https://debug.liquidauth.com',
+            ...(requestId ? { requestId } : {}),
           });
-        }
-      })();
-
-      const manager = new SessionManager();
-      const abort = new AbortController();
-      const done = runAc2Channel(
-        { defaultTimeoutMs: 2_000 },
-        { provider, renderQr: () => {}, manager },
-        {
-          signal: abort.signal,
-          receive: async () => {},
-          onOutput: () => {},
+          return wallet;
         },
-      );
-
-      // Let the bootstrap round-trip + the no-identity notice flow.
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      // A rejected bootstrap is non-fatal: the transport is up and the wallet
-      // is chatting, so the channel IS connected. The session is registered as
-      // active with `identityGranted: false` (instead of being left inactive,
-      // which used to make the channel/tools report "registered but not online"
-      // while the user was actively chatting). Signing stays locked until the
-      // wallet grants an identity, and no agent DID is surfaced.
-      const active = manager.getActive();
-      expect(active).not.toBeNull();
-      expect(active!.identityGranted).toBe(false);
-
-      const caps = capabilitiesFlow({}, { manager });
-      expect(caps.status).toBe('ok');
-      expect(caps.session.connected).toBe(true);
-      expect(caps.agent.did).toBeNull();
-
-      // Signing is still gated on the missing identity.
-      const signOutcome = await signFlow(
-        {
-          description: 'should be locked — no identity granted',
-          payload_base64: Buffer.from('x').toString('base64'),
+      });
+      // Pre-bind the agent to a DIFFERENT controller than the one that will
+      // connect below, so the daemon refuses the takeover (`locked: true`).
+      const { saveAc2State } = await import('@algorandfoundation/ac2-cli/identity');
+      saveAc2State({
+        identity: {
+          agentDid: 'did:key:zBoundAgent',
+          controllerDid: BOUND_CONTROLLER_DID,
+          publicKey: 'unused',
         },
-        {},
-        { manager },
-      );
-      expect(signOutcome.status).toBe('rejected');
-      if (signOutcome.status === 'rejected') expect(signOutcome.reason).toBe('no_identity');
+      });
 
-      // The user is told (via a `notice` banner frame) that an identity is needed.
-      expect(peerRaw.some((m) => m.toLowerCase().includes('identity'))).toBe(true);
+      const { api } = makeDaemonTestApi();
+      const command = buildAc2Command(api) as {
+        handler: (ctx: { args?: string }) => Promise<{ text: string; keepAlive?: boolean }>;
+      };
+      await command.handler({ args: 'pair' });
 
-      // Aborting ends the still-open channel cleanly (it does not throw).
-      abort.abort();
-      await done;
+      await waitFor(() => sessionManager.getActive() !== null);
+      const active = sessionManager.getActive()!;
+      expect(active.locked).toBe(true);
+      expect(active.identityGranted).toBe(false);
+
+      // The wallet is told it isn't registered (a `notice` control frame).
+      await waitFor(() => wallet!.received.some((m) => m.includes('"code":"controller_locked"')));
     });
   });
 
@@ -899,289 +1626,6 @@ describe('ac2 plugin', () => {
     });
   });
 
-  describe('inbound session-key consistency (routeInboundToAgent)', () => {
-    /**
-     * Capture the `SessionKey` the plugin hands the host reply dispatcher on an
-     * inbound turn. The host persists the agent's conversation under exactly
-     * this key, so it MUST match the canonical outbound key — otherwise the
-     * default-thread conversation is split across `ac2:<did>` and
-     * `ac2:<did>:default` and the agent "forgets" the thread on reconnect.
-     */
-    interface RecordedInbound {
-      storePath?: string;
-      sessionKey?: string;
-      createIfMissing?: boolean;
-      ctxSessionKey?: string;
-      ctxAgentId?: string;
-    }
-
-    interface Captured {
-      sessionKey?: string;
-      /** Inbound-session records the plugin asked the host to persist. */
-      recorded: RecordedInbound[];
-      /** `resolveStorePath` invocations: `[store, opts]`. */
-      storePathCalls: Array<{ store?: string | undefined; agentId?: string | undefined }>;
-      /** True once dispatch ran; asserts recording happened BEFORE dispatch. */
-      dispatchedAfterRecord?: boolean;
-    }
-
-    /**
-     * Build a host `api` double that captures both the `SessionKey` handed to
-     * the reply dispatcher AND the inbound-session record the plugin persists
-     * first. `withSession` toggles the `channel.session` surface so we can also
-     * prove the plugin degrades gracefully on a runtime that lacks it.
-     */
-    function makeCapturingApi(opts?: {
-      withSession?: boolean;
-      agentId?: string;
-    }): { api: any; captured: Captured } {
-      const withSession = opts?.withSession ?? true;
-      const agentId = opts?.agentId;
-      const captured: Captured = { recorded: [], storePathCalls: [] };
-      const channel: any = {
-        routing: {
-          resolveAgentRoute(_params: unknown): { agentId: string } | undefined {
-            return agentId !== undefined ? { agentId } : undefined;
-          },
-        },
-        reply: {
-          dispatchReplyWithBufferedBlockDispatcher(this: unknown, args: any): void {
-            captured.sessionKey = args?.ctx?.SessionKey;
-            captured.dispatchedAfterRecord = captured.recorded.length > 0;
-            // Settle the turn immediately with no assistant text.
-            args?.dispatcherOptions?.onIdle?.();
-          },
-        },
-      };
-      if (withSession) {
-        channel.session = {
-          resolveStorePath(store?: string, o?: { agentId?: string }): string {
-            captured.storePathCalls.push({ store, agentId: o?.agentId });
-            return `/tmp/openclaw/agents/${o?.agentId ?? 'main'}/sessions/sessions.json`;
-          },
-          async recordInboundSession(params: any): Promise<void> {
-            captured.recorded.push({
-              storePath: params?.storePath,
-              sessionKey: params?.sessionKey,
-              createIfMissing: params?.createIfMissing,
-              ctxSessionKey: params?.ctx?.SessionKey,
-              ctxAgentId: params?.ctx?.AgentId,
-            });
-          },
-        };
-      }
-      const api = {
-        config: {},
-        logger: { info(): void {}, warn(): void {}, error(): void {} },
-        runtime: { channel },
-      };
-      return { api, captured };
-    }
-
-    const noopTransport = { isOpen: true, send(): void {} } as unknown as Ac2Transport;
-
-    it('keys a default-thread turn to the bare base key (matches the outbound route)', async () => {
-      const did = 'did:key:zInboundController';
-      const { api, captured } = makeCapturingApi();
-      await routeInboundToAgent(api, 'hello', noopTransport, did);
-      const outbound = resolveAc2OutboundSessionRoute({ target: did, from: 'did:key:zAgent' });
-      expect(captured.sessionKey).toBe(`ac2:${did}`);
-      expect(captured.sessionKey).toBe(outbound.sessionKey);
-    });
-
-    it('suffixes an explicit thread and matches the outbound route for that thread', async () => {
-      const did = 'did:key:zInboundController';
-      const { api, captured } = makeCapturingApi();
-      const frame = JSON.stringify({ thid: 'thread-7', body: { content: 'hi' } });
-      await routeInboundToAgent(api, frame, noopTransport, did);
-      const outbound = resolveAc2OutboundSessionRoute({
-        target: did,
-        from: 'did:key:zAgent',
-        threadId: 'thread-7',
-      });
-      expect(captured.sessionKey).toBe(`ac2:${did}:thread-7`);
-      expect(captured.sessionKey).toBe(outbound.sessionKey);
-    });
-
-    /**
-     * The buffered reply dispatcher only mirrors the assistant reply into an
-     * already-recorded session entry; it does not create the durable
-     * per-`SessionKey` entry the host reloads after a shutdown. The plugin must
-     * therefore call `recordInboundSession` (createIfMissing) BEFORE dispatch,
-     * under the same key — otherwise the agent "forgets" the conversation on
-     * every OpenClaw restart even though the key is stable.
-     */
-    it('records the inbound session (createIfMissing) before dispatch, under the same key', async () => {
-      const did = 'did:key:zInboundController';
-      const { api, captured } = makeCapturingApi({ agentId: 'main' });
-      await routeInboundToAgent(api, 'hello', noopTransport, did);
-      expect(captured.recorded).toHaveLength(1);
-      const rec = captured.recorded[0]!;
-      expect(rec.sessionKey).toBe(`ac2:${did}`);
-      // Persisted under the exact key the dispatcher used.
-      expect(rec.sessionKey).toBe(captured.sessionKey);
-      expect(rec.ctxSessionKey).toBe(captured.sessionKey);
-      expect(rec.createIfMissing).toBe(true);
-      // Recording precedes dispatch so the entry exists when the run persists.
-      expect(captured.dispatchedAfterRecord).toBe(true);
-    });
-
-    it('resolves the store path (and ctx.AgentId) with the resolved route agent', async () => {
-      const did = 'did:key:zInboundController';
-      const { api, captured } = makeCapturingApi({ agentId: 'support' });
-      await routeInboundToAgent(api, 'hello', noopTransport, did);
-      expect(captured.storePathCalls).toHaveLength(1);
-      expect(captured.storePathCalls[0]!.agentId).toBe('support');
-      expect(captured.recorded[0]!.storePath).toBe(
-        '/tmp/openclaw/agents/support/sessions/sessions.json',
-      );
-      // ctx.AgentId anchors the dispatcher's own store lookup to the same agent.
-      expect(captured.recorded[0]!.ctxAgentId).toBe('support');
-    });
-
-    it('still dispatches when the runtime lacks a session surface (older hosts)', async () => {
-      const did = 'did:key:zInboundController';
-      const { api, captured } = makeCapturingApi({ withSession: false });
-      await routeInboundToAgent(api, 'hello', noopTransport, did);
-      expect(captured.recorded).toHaveLength(0);
-      expect(captured.sessionKey).toBe(`ac2:${did}`);
-    });
-  });
-
-  describe('classifyAgentError', () => {
-    it('classifies quota / rate-limit / billing failures as quota_exceeded', () => {
-      const quotaCases: unknown[] = [
-        'You have exceeded your monthly quota',
-        new Error('Rate limit reached for requests'),
-        'rate_limit_exceeded',
-        'RateLimitError: slow down',
-        'HTTP 429 Too Many Requests',
-        'insufficient_quota',
-        'Your account has insufficient funds',
-        'insufficient credit remaining',
-        'You are out of credit',
-        'billing hard limit reached',
-        'Payment Required',
-      ];
-      for (const raw of quotaCases) {
-        expect(classifyAgentError(raw).code).toBe('quota_exceeded');
-      }
-    });
-
-    it('classifies everything else as a generic agent_error', () => {
-      expect(classifyAgentError(new Error('network timeout')).code).toBe('agent_error');
-      expect(classifyAgentError('some random failure').code).toBe('agent_error');
-      expect(classifyAgentError(undefined).code).toBe('agent_error');
-      expect(classifyAgentError(null).code).toBe('agent_error');
-    });
-
-    it('never leaks the raw error text into the client-facing message', () => {
-      const raw = 'internal stacktrace secret-token quota exceeded at provider.ts:42';
-      const classified = classifyAgentError(raw);
-      expect(classified.code).toBe('quota_exceeded');
-      expect(classified.text).not.toContain('secret-token');
-      expect(classified.text).not.toContain('provider.ts');
-      expect(classified.text.length).toBeGreaterThan(0);
-    });
-  });
-
-  describe('agent-error reply (routeInboundToAgent)', () => {
-    const did = 'did:key:zErrController';
-
-    /** A wallet transport that records every control frame the plugin sends. */
-    function makeCapturingTransport(): { transport: Ac2Transport; frames: any[] } {
-      const frames: any[] = [];
-      const transport = {
-        isOpen: true,
-        send(payload: string): void {
-          // Control frames are STX (\u0002) + JSON; ignore anything else.
-          if (typeof payload === 'string' && payload.startsWith('\u0002')) {
-            try {
-              frames.push(JSON.parse(payload.slice(1)));
-            } catch {
-              // not a control frame we care about
-            }
-          }
-        },
-      } as unknown as Ac2Transport;
-      return { transport, frames };
-    }
-
-    /**
-     * A host `api` double whose reply dispatcher fails the turn: either by
-     * invoking the dispatcher's `onError` callback (the common provider-error
-     * path) or by throwing synchronously (exercising the outer `catch`).
-     */
-    function makeErroringApi(opts: { error: unknown; throwSync?: boolean }): any {
-      return {
-        config: {},
-        logger: { info(): void {}, warn(): void {}, error(): void {} },
-        runtime: {
-          channel: {
-            reply: {
-              dispatchReplyWithBufferedBlockDispatcher(this: unknown, args: any): void {
-                if (opts.throwSync) throw opts.error;
-                args?.dispatcherOptions?.onError?.(opts.error);
-              },
-            },
-          },
-        },
-      };
-    }
-
-    const finals = (frames: any[]): any[] => frames.filter((f) => f?.t === 'finalize');
-    const notices = (frames: any[]): any[] => frames.filter((f) => f?.t === 'notice');
-    const discards = (frames: any[]): any[] => frames.filter((f) => f?.t === 'discard');
-
-    it('delivers a quota-specific error reply + error notice instead of a silent discard', async () => {
-      const err = new Error('Provider rejected request: 429 insufficient_quota');
-      const { transport, frames } = makeCapturingTransport();
-      await routeInboundToAgent(makeErroringApi({ error: err }), 'hello', transport, did);
-
-      const finalized = finals(frames);
-      expect(finalized).toHaveLength(1);
-      expect(finalized[0]!.thid).toBe('default');
-      // The client gets the canned, quota-aware message — never the raw error.
-      expect(finalized[0]!.text).toBe(classifyAgentError(err).text);
-      expect(finalized[0]!.text).not.toContain('insufficient_quota');
-      // The turn is NOT silently discarded.
-      expect(discards(frames)).toHaveLength(0);
-
-      const noticed = notices(frames);
-      expect(noticed).toHaveLength(1);
-      expect(noticed[0]!.code).toBe('quota_exceeded');
-      expect(noticed[0]!.level).toBe('error');
-    });
-
-    it('delivers a generic error reply for a non-quota agent failure', async () => {
-      const err = new Error('upstream connection reset');
-      const { transport, frames } = makeCapturingTransport();
-      await routeInboundToAgent(makeErroringApi({ error: err }), 'hello', transport, did);
-
-      const finalized = finals(frames);
-      expect(finalized).toHaveLength(1);
-      expect(finalized[0]!.text).toBe(classifyAgentError(err).text);
-      expect(discards(frames)).toHaveLength(0);
-      expect(notices(frames)[0]!.code).toBe('agent_error');
-    });
-
-    it('also reports an error message when the dispatch call itself throws', async () => {
-      const err = new Error('rate limit exceeded');
-      const { transport, frames } = makeCapturingTransport();
-      await routeInboundToAgent(
-        makeErroringApi({ error: err, throwSync: true }),
-        'hello',
-        transport,
-        did,
-      );
-      const finalized = finals(frames);
-      expect(finalized).toHaveLength(1);
-      expect(finalized[0]!.text).toBe(classifyAgentError(err).text);
-      expect(notices(frames)[0]!.code).toBe('quota_exceeded');
-      expect(discards(frames)).toHaveLength(0);
-    });
-  });
-
   describe('message adapter (OpenClaw channel-outbound contract)', () => {
     /** Minimal active session whose transport captures outbound frames. */
     function activate(): { sent: string[]; restore: () => void } {
@@ -1326,43 +1770,11 @@ describe('ac2 plugin', () => {
     });
   });
 
-  describe('chat surface on the ac2 channel', () => {
-    it('round-trips raw chat messages while the channel is live', async () => {
-      const receivedByController: string[] = [];
-      const provider = new (class extends InMemoryChannelProvider {
-        protected override onPairingPrepared(peerTransport: Ac2Transport): void {
-          // Respond to the bootstrap KeyRequest so the session activates.
-          peerTransport.onMessage((msg) => {
-            if (isKeyRequest(msg)) replyToBootstrap(msg, peerTransport);
-          });
-          peerTransport.onRawMessage?.((msg) => {
-            receivedByController.push(msg);
-            peerTransport.send(`Echo: ${msg}`);
-          });
-        }
-      })();
-
-      const receivedByAgent: string[] = [];
-      let outputHandler: ((text: string) => Promise<void>) | null = null;
-
-      const { teardown } = await bootChannel(provider, {
-        receive: async (text) => {
-          receivedByAgent.push(text);
-        },
-        onOutput: (handler) => {
-          outputHandler = handler;
-        },
-      });
-      try {
-        expect(outputHandler).not.toBeNull();
-        await outputHandler!('Hello from Agent');
-        // Give the in-memory transport a tick to deliver the echo.
-        await new Promise((r) => setTimeout(r, 20));
-        expect(receivedByController).toContain('Hello from Agent');
-        expect(receivedByAgent).toContain('Echo: Hello from Agent');
-      } finally {
-        await teardown();
-      }
-    });
-  });
+  // The old "chat surface on the ac2 channel" round-trip test lived here; it
+  // exercised the embedded `runAc2Channel` chat wiring directly. Inbound chat
+  // is no longer routed by this plugin at all — the daemon's `openclaw-gateway`
+  // adapter owns the whole run/reply lifecycle now (see `ac2-command.ts`'s
+  // `AC2_RUNTIME` commitment) — so there is no in-process round trip left to
+  // cover here. The `daemon-backed pair command` suite above still covers
+  // pairing/activation/outbound delivery/disconnect against a real daemon.
 });
