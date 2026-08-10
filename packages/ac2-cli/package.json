@@ -1,6 +1,6 @@
 {
   "name": "@algorandfoundation/ac2-cli",
-  "version": "1.0.0-canary.4",
+  "version": "1.0.0-canary.5",
   "description": "Standalone AC2 connection service (daemon) and `ac2` command line. Owns the Liquid Auth pairing lifecycle, identity persistence, and keystore hosting so any agent (OpenClaw, Hermes, ...) can share one wallet connection.",
   "type": "module",
   "license": "MIT",
