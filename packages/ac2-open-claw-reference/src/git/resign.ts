@@ -1,20 +1,12 @@
 /**
- * Sign-after-commit ("resign") flow — how AC2 git signing works: commits are
- * created unsigned by plain `git commit` and then rewritten in place:
+ * Sign-after-commit: `git commit` creates the commit unsigned, then it is
+ * rewritten in place. An unsigned commit's raw payload IS the SSHSIG
+ * signed-data input, so no git-side signing configuration is needed.
  *
- *   1. `git cat-file commit <sha>` — the exact raw payload SSHSIG signs
- *      (an unsigned commit's content IS the signed-data input),
- *   2. the wallet signs it via the ordinary in-process {@link gitSignFlow},
- *   3. the armored block is inserted as a `gpgsig` header and the new object
- *      written with `git hash-object`, and the ref moved with a
- *      compare-and-swap `git update-ref`.
- *
- * Because this runs inside the process that holds the active AC2 session,
- * no git-side signing configuration is needed. The trade-offs: commits
- * exist unsigned until re-signed, signing before push is enforced by the
- * skill instructions rather than by git itself (`commit.gpgsign` stays
- * off), and rewriting a parent changes every descendant hash — so ranges
- * are re-signed oldest first with parent headers rewritten along the way.
+ * Trade-offs: commits exist unsigned until re-signed (nothing in git enforces
+ * the re-sign — the skill instructions do), and rewriting a parent changes
+ * every descendant hash, so ranges are signed oldest first with parent headers
+ * rewritten along the way.
  */
 
 import { Buffer } from 'node:buffer';
@@ -23,7 +15,7 @@ import { spawnSync } from 'node:child_process';
 import type { PluginConfig, ToolContext } from '../session/contracts.js';
 import type { SignDeps } from '../session/flows.js';
 import { NoActiveSessionError } from '../session/manager.js';
-import { gitSignFlow } from './sign-flow.js';
+import { gitSignFlow, subjectLine } from './sign-flow.js';
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
@@ -120,13 +112,6 @@ export function rewriteParentHeaders(
   return changed ? joinHeaders(rewritten, message) : payload;
 }
 
-/** Message subject line, for per-commit reporting. */
-function commitSubject(payload: Buffer): string {
-  const separator = payload.indexOf('\n\n');
-  if (separator === -1) return '';
-  return (payload.subarray(separator + 2).toString('utf8').split('\n')[0] ?? '').trim();
-}
-
 export interface GitResignOptions {
   /** Absolute path to the git repository. */
   repoDir: string;
@@ -215,7 +200,7 @@ export async function resignCommits(
       .toString('utf8')
       .trim();
     mapping.set(sha, newSha);
-    commits.push({ oldSha: sha, newSha, subject: commitSubject(payload) });
+    commits.push({ oldSha: sha, newSha, subject: subjectLine(payload) });
   }
 
   const newTip = mapping.get(oldTip);

@@ -3,10 +3,10 @@ name: ac2
 description: "How to use the AC2 channel to ask the user's connected wallet to sign bytes over a live WebRTC link. Use this whenever the user asks you to 'sign', 'approve', or 'authorize' something with their wallet — even if they don't say 'AC2'. ALSO REQUIRED for any git work: before running `git commit` or `git push`, or configuring a git identity, read this skill — commits MUST be signed by the user's AC2 wallet (never with your own or an invented identity), and it documents the required `openclaw ac2 github-key` / `git-config` setup and the commit → `git-resign` → push rhythm. The agent never holds keys; the wallet does."
 metadata:
   {
-    "openclaw":
+    'openclaw':
       {
-        "emoji": "🔐",
-        "requires": { "config": ["plugins.entries.ac2.enabled"] },
+        'emoji': '🔐',
+        'requires': { 'config': ['plugins.entries.ac2.enabled'] },
       },
   }
 ---

@@ -67,10 +67,14 @@ export function parseExpectedPublicKey(value: string): Buffer | undefined {
   }
 }
 
-/**
- * Human-readable summary of a git object buffer for the wallet approval
- * prompt: object kind plus the message subject line.
- */
+/** Message subject line of a git object payload; empty when it has none. */
+export function subjectLine(payload: Buffer): string {
+  const text = payload.toString('utf8');
+  const separator = text.indexOf('\n\n');
+  return separator === -1 ? '' : (text.slice(separator + 2).split('\n')[0] ?? '').trim();
+}
+
+/** Wallet approval prompt for a git object: object kind plus subject line. */
 export function describeGitPayload(payload: Buffer): string {
   const text = payload.toString('utf8');
   const kind = text.startsWith('tree ')
@@ -78,13 +82,9 @@ export function describeGitPayload(payload: Buffer): string {
     : text.startsWith('object ')
       ? 'git tag'
       : 'git object';
-  const separator = text.indexOf('\n\n');
-  let subject = '';
-  if (separator !== -1) {
-    subject = (text.slice(separator + 2).split('\n')[0] ?? '').trim();
-    if (subject.length > SUBJECT_PREVIEW_LIMIT) {
-      subject = `${subject.slice(0, SUBJECT_PREVIEW_LIMIT - 1)}…`;
-    }
+  let subject = subjectLine(payload);
+  if (subject.length > SUBJECT_PREVIEW_LIMIT) {
+    subject = `${subject.slice(0, SUBJECT_PREVIEW_LIMIT - 1)}…`;
   }
   return subject.length > 0 ? `Sign ${kind}: "${subject}"` : `Sign ${kind}`;
 }

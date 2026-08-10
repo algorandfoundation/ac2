@@ -79,8 +79,8 @@ const plugin = defineToolPlugin({
                 : {}),
               ...(params.display_hint !== undefined
                 ? {
-                  display_hint: params.display_hint as SigningRequestBody['display_hint'],
-                }
+                    display_hint: params.display_hint as SigningRequestBody['display_hint'],
+                  }
                 : {}),
               ...(params.key_type !== undefined
                 ? { key_type: params.key_type as SigningRequestBody['key_type'] }

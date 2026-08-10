@@ -1,11 +1,8 @@
 /**
- * `openclaw ac2 git-config` plumbing: resolve the wallet's signing key,
- * build and apply the repo's `git config` identity + push-credential
- * entries, and persist the setup marker that stops agents from re-running
- * onboarding. Signing itself needs no git configuration — commits are
- * signed in place afterwards by `openclaw ac2 git-resign` (see
- * `./resign.ts`). The `ac2` command in `../cli/` is a thin handler over
- * this module.
+ * `openclaw ac2 git-config` plumbing: resolve the wallet's signing key, apply
+ * the repo's identity + push-credential `git config` entries, and persist the
+ * setup marker that stops agents re-running onboarding. Signing itself needs
+ * no git configuration — see `./resign.ts`.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -28,14 +25,10 @@ export function resolveAc2StateDir(): string {
 }
 
 /**
- * Resolve the wallet's account Ed25519 public key used for git signing.
- *
- * Address resolution is the same one the x402 signer and `capabilitiesFlow`
- * use (`sessionAlgorandAddress`); when no session is live (e.g. a fresh CLI
- * process) it falls back to the persisted bound controller — `state.identity`
- * is always the first-controller-locked wallet (see `setConnectionIdentity`).
- * An Algorand address *is* the account's Ed25519 key, so decoding it yields
- * the SSH signing key.
+ * The wallet's account Ed25519 public key, used as the git signing key. An
+ * Algorand address *is* the account's Ed25519 key, so decoding it yields the
+ * SSH signing key directly. Falls back to the persisted bound controller when
+ * no session is live (e.g. a fresh CLI process).
  */
 export function resolveWalletSigningPublicKey():
   | { address: string; publicKey: Uint8Array }
@@ -98,12 +91,10 @@ export function parseGitConfigArgs(tokens: string[]): GitConfigOptions | { error
 }
 
 /**
- * Build the `git config` key/value pairs for AC2 git work: the user's
- * committer identity and (optionally) push credentials. No signing entries —
- * commits are signed in place by `ac2 git-resign`, not by git. When a PAT is
- * given, writes a mode-0600 credential-store file under the AC2 state dir
- * (the token itself never appears in git config or command output) and adds
- * the matching `credential.helper` entry so `git push` over HTTPS works.
+ * Committer identity and (optionally) push-credential `git config` entries.
+ * No signing entries — `ac2 git-resign` signs, not git. A PAT is written to a
+ * mode-0600 credential-store file under the AC2 state dir and wired via
+ * `credential.helper`, so the token never appears in git config or output.
  */
 export function buildGitConfigEntries(opts: GitConfigOptions): Array<[string, string]> {
   const entries: Array<[string, string]> = [];
@@ -140,11 +131,7 @@ export function applyGitConfigEntries(
   }
 }
 
-/**
- * Marker persisted after a successful `git-config` apply so later
- * `github-key` / `git-config` runs can tell the agent that setup is already
- * done and it must not loop back through the onboarding steps.
- */
+/** Persisted after a successful apply, so agents don't loop back to onboarding. */
 export interface GitSetupRecord {
   configuredAt: string;
   /** Repo dirs (or the literal 'global') git-config has been applied to. */
@@ -186,10 +173,7 @@ export function recordGitSetup(target: string, opts: GitConfigOptions): void {
   writeFileSync(gitSetupMarkerPath(), `${JSON.stringify(record, null, 2)}\n`);
 }
 
-/**
- * Lines prepended to `github-key` output when setup has already completed —
- * an explicit instruction so agents stop re-running the onboarding flow.
- */
+/** Prepended to `github-key` output once setup is done, to stop agents redoing it. */
 export function gitSetupAlreadyConfiguredNotice(record: GitSetupRecord): string[] {
   const identity = record.name
     ? ` · identity: ${record.name}${record.email ? ` <${record.email}>` : ''}`

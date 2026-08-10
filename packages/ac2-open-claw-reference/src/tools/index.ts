@@ -62,8 +62,8 @@ export function buildSignTool(): AnyAgentTool {
           : {}),
         ...(typeof params.display_hint === 'string'
           ? {
-            display_hint: params.display_hint as SigningRequestBody['display_hint'],
-          }
+              display_hint: params.display_hint as SigningRequestBody['display_hint'],
+            }
           : {}),
         ...(typeof params.key_type === 'string'
           ? { key_type: params.key_type as SigningRequestBody['key_type'] }
