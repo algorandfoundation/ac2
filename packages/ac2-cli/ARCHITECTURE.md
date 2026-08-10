@@ -371,3 +371,18 @@ as the fallback for a daemon that was spawned but is not listening yet. That is
 what makes `ac2 status` report a supervised service correctly, and what stops
 `ac2 service start` (and an agent host's auto-start) from launching a second
 daemon on top of a healthy one.
+
+### Stopping exits the process explicitly
+
+A daemon that owns its process (`service run` / `--foreground`; anything but the
+in-process test embedding) calls `process.exit` itself once a stop — a signal or
+a control-socket `daemon.stop` — has finished tearing down, instead of trusting
+the event loop to drain: a paired daemon holds handles (native WebRTC peers,
+socket.io reconnect timers) that can keep a fully-stopped process alive forever,
+which is how a "stopped" daemon used to linger across a CLI reinstall until
+killed by hand. A graceful stop that itself wedges is bounded by an unref'd
+failsafe timer (exit code 1, so a supervisor can tell). `ac2 service stop`
+mirrors this from the outside: it resolves the pid first (the socket reports it
+even for a supervised daemon, which writes no pidfile), waits for the process to
+actually exit after `daemon.stop`, and escalates to SIGTERM, then SIGKILL, when
+it does not.

@@ -106,7 +106,7 @@ Everything has a working default. Set these only if you need to.
 | `AC2_DEFAULT_AGENT` | Agent id inbound wallet traffic goes to (default `openclaw`). |
 | `AC2_HEARTBEAT_TIMEOUT_MS` | How long a silent wallet channel may stay open. |
 | `AC2_RUNTIME` | Which runtime adapter drives the agent: `socket` (default), `openclaw-gateway`, or an npm package name. |
-| `AC2_RUNTIME_CONFIG` | JSON config handed to that adapter. |
+| `AC2_RUNTIME_CONFIG` | JSON config handed to that adapter. For `openclaw-gateway` it also accepts `runTimeoutMs` (how long one agent turn may run, default 300000 — x402 payments block on a wallet signature round-trip, so keep this generous) and `taskTimeoutMs` (same budget for a spawned sub-agent task, default 900000), e.g. `AC2_RUNTIME_CONFIG='{"runTimeoutMs":600000}'`. Values must be JSON numbers. |
 | `AC2_WAIT_FOR_RUNTIME` | Set to `0` to await a wallet even when no agent runtime is alive. |
 | `AC2_KEYRING` | macOS only. Set to `login` to store keys in the login keychain instead of the dedicated AC2 keychain (see Troubleshooting). |
 | `OPENCLAW_GATEWAY_URL` / `_PORT` / `_TOKEN` | Gateway connection for the `openclaw-gateway` adapter. Discovered from `openclaw.json` when unset. |
@@ -168,6 +168,19 @@ service start` writes — one supervised by launchd/systemd writes none. Livenes
 now comes from the live control socket, with the pidfile as fallback, and
 `ac2 service start` reports an already-running service instead of spawning a
 second one.
+
+**`ac2 service stop` "succeeded" but the daemon kept running** (classic symptom:
+reinstalling the CLI, then having to `kill` the old daemon by hand). Also fixed,
+twice over. The daemon used to rely on its event loop draining after a
+`daemon.stop`, which handles like native WebRTC peers could keep alive forever;
+it now exits its process explicitly once the graceful stop completes, with a
+failsafe exit if the teardown itself wedges. And `ac2 service stop` no longer
+reports success on the acknowledgement alone: it waits for the process to
+actually die and escalates to SIGTERM, then SIGKILL, when it does not — also for
+a supervised daemon with no pidfile, using the pid the daemon reported over the
+socket. Note that reinstalling the CLI never restarts a running daemon by
+itself: run `ac2 service stop` around the upgrade so the next start picks up the
+new code.
 
 **macOS asks whether "node" may run in the background.** That prompt (and the
 entry in System Settings → General → Login Items & Extensions) *is* the AC2

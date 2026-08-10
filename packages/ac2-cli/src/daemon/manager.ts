@@ -112,17 +112,30 @@ export async function daemonProcessStatus(
 
 /**
  * Stops the daemon process gracefully or forcefully.
+ *
+ * Targets `options.pid` when given — e.g. the pid the daemon itself reported
+ * over the control socket, which is the only handle on an OS-supervised
+ * daemon (it writes no pidfile) — and falls back to the pidfile otherwise.
+ * An explicit pid that is already dead reports `stopped: true`: the caller
+ * asked for a process it just observed alive to be gone, and it is.
  */
 export async function stopDaemonProcess(
-  options: DaemonManagerOptions & { timeoutMs?: number; force?: boolean } = {}
+  options: DaemonManagerOptions & { timeoutMs?: number; force?: boolean; pid?: number } = {}
 ): Promise<{ stopped: boolean; pid: number | null }> {
   const env = options.env ?? process.env;
   const pidFile = options.pidFile ?? resolvePidFilePath(env);
-  const status = await daemonProcessStatus(options);
-  const pid = status.pid;
-
-  if (!status.running || pid === null) {
-    return { stopped: false, pid: null };
+  let pid: number;
+  if (options.pid !== undefined) {
+    if (!isProcessAlive(options.pid)) {
+      return { stopped: true, pid: options.pid };
+    }
+    pid = options.pid;
+  } else {
+    const status = await daemonProcessStatus(options);
+    if (!status.running || status.pid === null) {
+      return { stopped: false, pid: null };
+    }
+    pid = status.pid;
   }
 
   const timeoutMs = options.timeoutMs ?? 10000;
@@ -156,10 +169,22 @@ export async function stopDaemonProcess(
   if (force) {
     try {
       process.kill(pid, 'SIGKILL');
-      await unlink(pidFile);
-      return { stopped: true, pid };
     } catch {
-      // Failed to kill
+      return { stopped: false, pid };
+    }
+    // SIGKILL cannot be caught, but delivery is asynchronous — poll briefly so
+    // `stopped: true` reflects an observed death, not just a sent signal.
+    const killDeadline = Date.now() + 2000;
+    while (Date.now() < killDeadline && isProcessAlive(pid)) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (!isProcessAlive(pid)) {
+      try {
+        await unlink(pidFile);
+      } catch {
+        // No pidfile to clean up (explicit-pid target) or already gone.
+      }
+      return { stopped: true, pid };
     }
   }
 

@@ -31,7 +31,14 @@ export interface OpenClawGatewayConfig {
   agentId?: string;
   /** Timeout for the initial Gateway connect handshake. */
   connectTimeoutMs: number;
-  /** Timeout passed to `agent.wait` for a single run. */
+  /**
+   * Timeout passed to `agent.wait` for a single run. Must stay comfortably
+   * ABOVE the longest human-in-the-loop tool a turn can block on — notably an
+   * x402 payment, whose wallet signature round-trip alone is allowed 120s by
+   * the reference plugin — otherwise a turn the user is actively approving is
+   * reported as "the agent did not respond in time" while it keeps running
+   * (a run cannot be cancelled once started).
+   */
   runTimeoutMs: number;
   /**
    * Maximum number of past messages to fetch (via `chat.history`) when
@@ -57,7 +64,7 @@ export interface OpenClawGatewayConfig {
 
 const DEFAULT_PORT = 18789;
 const DEFAULT_CONNECT_TIMEOUT_MS = 10000;
-const DEFAULT_RUN_TIMEOUT_MS = 120000;
+const DEFAULT_RUN_TIMEOUT_MS = 300000;
 const DEFAULT_HISTORY_LIMIT = 100;
 const DEFAULT_TASK_TIMEOUT_MS = 900000;
 const DEFAULT_CONVERSATIONS_LIMIT = 100;

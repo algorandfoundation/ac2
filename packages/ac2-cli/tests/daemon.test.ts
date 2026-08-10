@@ -381,6 +381,60 @@ describe('runDaemon', () => {
     await daemon.closed;
   });
 
+  it('daemon.stop exits the process explicitly when the daemon owns it', async () => {
+    // A paired daemon can hold handles that keep the event loop alive after a
+    // completed teardown (native WebRTC peers, socket.io timers) — trusting
+    // the loop to drain left stale daemons running across CLI reinstalls, so
+    // an owning daemon must exit itself once the graceful stop is done.
+    const exits: number[] = [];
+    const daemon = await startDaemon({ handleSignals: true, exit: (code) => exits.push(code) });
+    const client = await connect(daemon);
+
+    const result = await client.request('daemon.stop', {});
+    expect(result).toEqual({ stopping: true });
+
+    await daemon.closed;
+    await waitFor(() => exits.length > 0);
+    expect(exits).toEqual([0]);
+  });
+
+  it('exits non-zero via the failsafe when a graceful stop hangs', async () => {
+    let releaseDispose: () => void = () => {};
+    const disposeGate = new Promise<void>((resolve) => {
+      releaseDispose = resolve;
+    });
+    /** A pairing handle whose `dispose` wedges the broker's teardown. */
+    class HangingTeardownProvider extends FakeWalletProvider {
+      override async startPairing(
+        opts: Parameters<InMemoryChannelProvider['startPairing']>[0] = {},
+      ) {
+        const handle = await super.startPairing(opts);
+        return { ...handle, dispose: () => disposeGate };
+      }
+    }
+    const exits: number[] = [];
+    const daemon = await startDaemon({
+      handleSignals: true,
+      stopExitFailsafeMs: 150,
+      exit: (code) => exits.push(code),
+      providerFactory: () => new HangingTeardownProvider({ origin: ORIGIN }),
+    });
+    const client = await connect(daemon);
+    await client.request('pair.start', {});
+
+    const result = await client.request('daemon.stop', {});
+    expect(result).toEqual({ stopping: true });
+
+    // The graceful stop is stuck on the hanging dispose — only the failsafe
+    // can exit, and it must report the abnormal teardown (exit code 1).
+    await waitFor(() => exits.length > 0, 3000);
+    expect(exits).toEqual([1]);
+
+    // Unwedge the teardown so afterEach's `daemon.stop()` can settle.
+    releaseDispose();
+    await daemon.closed;
+  });
+
   it('hosts the embedded keystore service and reports its socket path', async () => {
     const keystoreSocketPath = join(socketDir, 'keystore.sock');
     const daemon = await startDaemon({ hostKeystore: true, keystoreSocketPath });

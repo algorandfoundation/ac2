@@ -371,7 +371,9 @@ describe('resolveGatewayConfig (config.ts)', () => {
     expect(cfg.token).toBeUndefined();
     expect(cfg.agentId).toBeUndefined();
     expect(cfg.connectTimeoutMs).toBe(10000);
-    expect(cfg.runTimeoutMs).toBe(120000);
+    // Deliberately above the 120s an x402 wallet signature is allowed to take,
+    // so a turn blocked on human approval is not failed as "did not respond".
+    expect(cfg.runTimeoutMs).toBe(300000);
   });
 
   it('prefers explicit config over env, and env over the default', () => {
@@ -605,6 +607,43 @@ describe('createOpenClawGatewayAdapter (adapter.ts)', () => {
     expect(finalize).toMatchObject({ t: 'discard', thid: 'default' });
   });
 
+  it('lets a slow turn run past the client RPC default instead of failing it at 30s', async () => {
+    // Regression: the foreground `agent.wait` omitted its client-side timeout,
+    // so the RPC's 30s default fired long before the 5-minute server deadline
+    // it had just asked for. An x402 payment blocks on a wallet signature
+    // round-trip (itself allowed 120s), so every one of them was reported to
+    // the user as "the agent ran into an error" — while the run, which cannot
+    // be cancelled, kept going and often succeeded.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { sends, logs, connection, adapter } = await setup();
+
+      const handled = adapter.handleInbound(inboundMessage('pay the invoice'));
+      await waitFor(() => connection.sent.some((f) => f.method === 'sessions.messages.subscribe'));
+      connection.respondOk('sessions.messages.subscribe', {});
+      await waitFor(() => connection.sent.some((f) => f.method === 'agent'));
+      connection.respondOk('agent', { runId: 'run-slow', acceptedAt: Date.now() });
+      await waitFor(() => connection.sent.some((f) => f.method === 'agent.wait'));
+
+      // Well past the client default, still inside the deadline we asked for.
+      await vi.advanceTimersByTimeAsync(60_000);
+      // (Only the wait matters here: the harness never answers the optional
+      // `sessions.subscribe`, whose own best-effort timeout is expected.)
+      expect(logs.filter((line) => line.includes('"agent.wait" timed out'))).toEqual([]);
+      expect(sends.some((s) => parseStreamFrame(s.payload)['t'] === 'finalize')).toBe(false);
+
+      // The signature finally lands and the turn completes normally.
+      connection.respondOk('agent.wait', { status: 'ok' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await waitFor(() => connection.sent.some((f) => f.method === 'chat.history'));
+      connection.respondOk('chat.history', { messages: [] });
+      await handled;
+      expect(logs.some((line) => line.includes('agent run failed'))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('never re-posts a STALE chat.history message as this run\'s reply', async () => {
     const { sends, connection, adapter } = await setup();
 
@@ -705,6 +744,83 @@ describe('createOpenClawGatewayAdapter (adapter.ts)', () => {
       return f['text'] === 'ping';
     });
     expect(echoedUser).toBe(false);
+
+    connection.respondOk('agent.wait', { status: 'ok' });
+    await handled;
+  });
+
+  it('a settled earlier turn no longer orphans the newer run\'s streaming events (activeRun identity guard)', async () => {
+    const { sends, connection, adapter } = await setup();
+
+    // Turn A blocks on its agent.wait…
+    const handledA = adapter.handleInbound(inboundMessage('turn A'));
+    await waitFor(() => connection.sent.some((f) => f.method === 'sessions.messages.subscribe'));
+    connection.respondOk('sessions.messages.subscribe', {});
+    await waitFor(() => connection.sent.some((f) => f.method === 'agent'));
+    connection.respondOk('agent', { runId: 'run-A', acceptedAt: Date.now() });
+    await waitFor(() => connection.sent.some((f) => f.method === 'agent.wait'));
+
+    // …while turn B arrives and takes over the activeRun slot.
+    const handledB = adapter.handleInbound(inboundMessage('turn B'));
+    await waitFor(() => connection.sent.filter((f) => f.method === 'agent').length === 2);
+    connection.respondOk('agent', { runId: 'run-B', acceptedAt: Date.now() });
+    await waitFor(() => connection.sent.filter((f) => f.method === 'agent.wait').length === 2);
+
+    // A settles first. Its finalize path (grace timer, chat.history fallback,
+    // and the finally clause) must NOT null out the slot B now owns.
+    const waitA = connection.sent.find(
+      (f) =>
+        f.method === 'agent.wait' && (f.params as Record<string, unknown>)['runId'] === 'run-A',
+    );
+    expect(waitA).toBeDefined();
+    connection.emitFrame({ type: 'res', id: waitA!.id, ok: true, payload: { status: 'ok' } });
+    await waitFor(() => connection.sent.some((f) => f.method === 'chat.history'));
+    connection.respondOk('chat.history', { messages: [] });
+    await handledA;
+
+    // B's committed segment still lands as its own bubble (previously dropped
+    // at the `if (!run) return` guard because A's settle cleared the slot).
+    connection.emitEvent('session.message', {
+      sessionKey: 'ac2:did:key:zTest',
+      messageId: 'm-B',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'answer B' }] },
+    });
+    await waitFor(() =>
+      sends.some((s) => {
+        const f = parseStreamFrame(s.payload);
+        return f['t'] === 'finalize' && f['text'] === 'answer B' && f['mid'] === 'm-B';
+      }),
+    );
+
+    connection.respondOk('agent.wait', { status: 'ok' });
+    await handledB;
+  });
+
+  it('a whitespace-only frame does not orphan the active run\'s streaming events', async () => {
+    const { sends, connection, adapter } = await setup();
+
+    const handled = adapter.handleInbound(inboundMessage('real turn'));
+    await waitFor(() => connection.sent.some((f) => f.method === 'sessions.messages.subscribe'));
+    connection.respondOk('sessions.messages.subscribe', {});
+    await waitFor(() => connection.sent.some((f) => f.method === 'agent'));
+    connection.respondOk('agent', { runId: 'run-live', acceptedAt: Date.now() });
+    await waitFor(() => connection.sent.some((f) => f.method === 'agent.wait'));
+
+    // An empty frame early-returns — its finally clause used to null the live
+    // run's slot unconditionally, silently killing the stream.
+    await adapter.handleInbound(inboundMessage('   '));
+
+    connection.emitEvent('session.message', {
+      sessionKey: 'ac2:did:key:zTest',
+      messageId: 'm-live',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'still streaming' }] },
+    });
+    await waitFor(() =>
+      sends.some((s) => {
+        const f = parseStreamFrame(s.payload);
+        return f['t'] === 'finalize' && f['text'] === 'still streaming' && f['mid'] === 'm-live';
+      }),
+    );
 
     connection.respondOk('agent.wait', { status: 'ok' });
     await handled;
