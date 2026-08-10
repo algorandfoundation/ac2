@@ -12,6 +12,7 @@ import { resolveControlSocketPath } from './control/protocol.js';
 import type { DaemonStatus } from './control/protocol.js';
 import {
   followLogFile,
+  isProcessAlive,
   startDetached,
   stopDaemonProcess,
   tailLogFile,
@@ -54,6 +55,23 @@ Commands:
 
 function printHelp(): void {
   console.log(HELP_TEXT);
+}
+
+/**
+ * How long `service stop` waits for the daemon process to actually exit after
+ * it acknowledged `daemon.stop`, before escalating to signals. Covers the
+ * daemon's own graceful-stop failsafe (5s, see `run.ts`) with margin.
+ */
+const DAEMON_STOP_GRACE_MS = 8_000;
+
+/** Poll `pid` until it exits (true) or `timeoutMs` elapses (false). */
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return !isProcessAlive(pid);
 }
 
 /** The `ac2` script's own path, used to spawn/reference itself (detached child, OS units). */
@@ -127,24 +145,55 @@ async function serviceStart(flags: CliFlags): Promise<number> {
 }
 
 async function serviceStop(): Promise<number> {
-  try {
-    const client = await connectControl({ timeoutMs: 1000 });
-    try {
-      await client.request('daemon.stop', {});
-      console.log('daemon stop requested');
-      return 0;
-    } finally {
-      client.close();
-    }
-  } catch {
-    const result = await stopDaemonProcess();
-    if (result.stopped) {
-      console.log(`daemon stopped (pid ${result.pid})`);
-      return 0;
-    }
+  // Resolve WHO to stop first: the control socket also yields the pid of an
+  // OS-supervised daemon (which writes no pidfile), so the signal escalation
+  // below can target it when the graceful path stalls.
+  const liveness = await daemonLiveness();
+  if (!liveness.running) {
     console.log('daemon is not running');
     return 1;
   }
+  const pid = liveness.pid;
+  if (liveness.source === 'control-socket') {
+    try {
+      const client = await connectControl({ timeoutMs: 1000 });
+      try {
+        await client.request('daemon.stop', {});
+      } finally {
+        client.close();
+      }
+      // `daemon.stop` only acknowledges that a stop has begun — never report
+      // success until the process is actually gone. A daemon wedged in
+      // teardown (or one predating the explicit post-stop exit) acknowledges
+      // and then lingers forever, which is exactly the "still active after a
+      // reinstall, had to kill it by hand" trap.
+      if (pid !== null && (await waitForProcessExit(pid, DAEMON_STOP_GRACE_MS))) {
+        console.log(`daemon stopped (pid ${pid})`);
+        return 0;
+      }
+      if (pid === null) {
+        // No pid to verify or signal (a daemon.status without one) — the
+        // request went through; nothing further can be checked.
+        console.log('daemon stop requested');
+        return 0;
+      }
+      console.log(`daemon did not exit after stop request; escalating to signals (pid ${pid})`);
+    } catch {
+      // The socket died between the liveness probe and the request — fall
+      // through to the signal path.
+    }
+  }
+  const result = await stopDaemonProcess({ ...(pid !== null ? { pid } : {}), force: true });
+  if (result.stopped) {
+    console.log(`daemon stopped (pid ${result.pid})`);
+    return 0;
+  }
+  if (result.pid !== null) {
+    console.error(`failed to stop daemon (pid ${result.pid}) — even SIGKILL did not take`);
+    return 1;
+  }
+  console.log('daemon is not running');
+  return 1;
 }
 
 function formatStatusLines(status: DaemonStatus): string[] {

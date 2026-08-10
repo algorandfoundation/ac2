@@ -169,6 +169,19 @@ now comes from the live control socket, with the pidfile as fallback, and
 `ac2 service start` reports an already-running service instead of spawning a
 second one.
 
+**`ac2 service stop` "succeeded" but the daemon kept running** (classic symptom:
+reinstalling the CLI, then having to `kill` the old daemon by hand). Also fixed,
+twice over. The daemon used to rely on its event loop draining after a
+`daemon.stop`, which handles like native WebRTC peers could keep alive forever;
+it now exits its process explicitly once the graceful stop completes, with a
+failsafe exit if the teardown itself wedges. And `ac2 service stop` no longer
+reports success on the acknowledgement alone: it waits for the process to
+actually die and escalates to SIGTERM, then SIGKILL, when it does not — also for
+a supervised daemon with no pidfile, using the pid the daemon reported over the
+socket. Note that reinstalling the CLI never restarts a running daemon by
+itself: run `ac2 service stop` around the upgrade so the next start picks up the
+new code.
+
 **macOS asks whether "node" may run in the background.** That prompt (and the
 entry in System Settings → General → Login Items & Extensions) *is* the AC2
 service: macOS names a background item after the program its launchd job runs,

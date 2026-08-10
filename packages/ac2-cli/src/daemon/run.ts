@@ -52,6 +52,14 @@ export const AC2_DAEMON_VERSION = '1.0.0-canary.1';
 /** Default Liquid Auth origin when none is configured. */
 const DEFAULT_ORIGIN = 'https://debug.liquidauth.com';
 
+/**
+ * Ceiling on how long a graceful stop may run before the daemon exits the
+ * process anyway (see `shutdown` inside {@link runDaemon}). Generous next to a
+ * normal teardown (well under a second), tight enough that `ac2 service stop`
+ * can wait it out before escalating to signals.
+ */
+const SHUTDOWN_EXIT_FAILSAFE_MS = 5_000;
+
 export interface DaemonRunOptions {
   /** Control socket path; defaults to {@link resolveControlSocketPath}. */
   socketPath?: string;
@@ -92,8 +100,21 @@ export interface DaemonRunOptions {
   keystoreSocketPath?: string;
   /** Host the keystore RPC service when nothing else already does (default `true`). */
   hostKeystore?: boolean;
-  /** Install SIGTERM/SIGINT handlers that gracefully stop the daemon (default `true`). */
+  /**
+   * "This daemon owns its process": install SIGTERM/SIGINT handlers that
+   * gracefully stop it, and exit the process explicitly once a stop (signal
+   * or control-socket `daemon.stop`) has completed (default `true`). Disable
+   * for in-process embedding (tests), where exiting would kill the host.
+   */
   handleSignals?: boolean;
+  /**
+   * How long a graceful stop may take before the process exits anyway
+   * (default {@link SHUTDOWN_EXIT_FAILSAFE_MS}; only used when
+   * {@link handleSignals} says this daemon owns its process).
+   */
+  stopExitFailsafeMs?: number;
+  /** Test seam for the post-stop process exit (default `process.exit`). */
+  exit?: (code: number) => void;
   /**
    * Runtime adapter wiring (opts → `AC2_RUNTIME`/`AC2_RUNTIME_CONFIG` env →
    * the built-in `socket` default). See `../runtime/loader.ts`.
@@ -339,6 +360,8 @@ export async function runDaemon(options: DaemonRunOptions = {}): Promise<Running
   const origin = firstNonEmpty(options.origin, env['AC2_LIQUID_AUTH_SERVER']) ?? DEFAULT_ORIGIN;
   const hostKeystoreOpt = options.hostKeystore ?? true;
   const handleSignals = options.handleSignals ?? true;
+  const stopExitFailsafeMs = options.stopExitFailsafeMs ?? SHUTDOWN_EXIT_FAILSAFE_MS;
+  const exitProcess = options.exit ?? ((code: number): void => process.exit(code));
   const autoPair = options.autoPair ?? false;
   const resumeConnections = options.resumeConnections ?? true;
   const waitForRuntime = resolveWaitForRuntime(options, env);
@@ -591,9 +614,10 @@ export async function runDaemon(options: DaemonRunOptions = {}): Promise<Running
         return buildStatus();
 
       case 'daemon.stop': {
-        // Respond first, then tear down once the frame has been flushed.
+        // Respond first, then tear down — and exit, see `shutdown` — once the
+        // frame has been flushed.
         setImmediate(() => {
-          void stop();
+          void shutdown('daemon.stop');
         });
         return { stopping: true };
       }
@@ -767,6 +791,41 @@ export async function runDaemon(options: DaemonRunOptions = {}): Promise<Running
     return stopping;
   }
 
+  /**
+   * Stop gracefully, then — when this daemon owns its process
+   * (`handleSignals`) — exit it explicitly instead of trusting the event loop
+   * to drain. A paired daemon holds handles that can outlive a completed
+   * teardown (native WebRTC peers, socket.io reconnect timers), which used to
+   * leave the process alive after `daemon.stop` had "succeeded" — a stale
+   * daemon lingering across a CLI reinstall until someone killed it by hand.
+   * A graceful stop that itself hangs (a wedged adapter/provider close) is
+   * bounded by an unref'd failsafe timer for the same reason; it exits
+   * non-zero so a supervisor can tell the difference.
+   */
+  function shutdown(trigger: string): Promise<void> {
+    const finished = stop();
+    if (!handleSignals) return finished;
+    // First exit wins, like the real `process.exit` — the test seam would
+    // otherwise see a late graceful completion "exit 0" after the failsafe.
+    let exited = false;
+    const exitOnce = (code: number): void => {
+      if (exited) return;
+      exited = true;
+      exitProcess(code);
+    };
+    const failsafe = setTimeout(() => {
+      log(
+        `[ac2] graceful stop still running after ${stopExitFailsafeMs}ms (${trigger}); exiting anyway.`,
+      );
+      exitOnce(1);
+    }, stopExitFailsafeMs);
+    failsafe.unref?.();
+    return finished.then(() => {
+      clearTimeout(failsafe);
+      exitOnce(0);
+    });
+  }
+
   const server: ControlServer = createControlServer({
     ...(options.socketPath !== undefined ? { path: options.socketPath } : {}),
     handler: handleRequest,
@@ -835,7 +894,7 @@ export async function runDaemon(options: DaemonRunOptions = {}): Promise<Running
   if (handleSignals) {
     const onSignal = (): void => {
       log('[ac2] received signal, shutting down…');
-      void stop().then(() => process.exit(0));
+      void shutdown('signal');
     };
     process.once('SIGTERM', onSignal);
     process.once('SIGINT', onSignal);
