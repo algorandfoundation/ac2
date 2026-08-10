@@ -245,13 +245,22 @@ export function closeAwareTransport(base: Ac2Transport): {
   return { transport, emitClose };
 }
 
+/**
+ * Enforce the heartbeat-timeout floor shared by BOTH configuration paths (the
+ * `AC2_HEARTBEAT_TIMEOUT_MS` env var and the `heartbeatTimeoutMs` option).
+ * Anything below 2× the ping cadence would let the derived hard window
+ * (`AC2_HEARTBEAT_HARD_TIMEOUT_FACTOR`) dip under the 20s ping interval and
+ * tear down a healthy link on nearly every tick, so sub-minimum or non-finite
+ * values fall back to the default instead of being honored.
+ */
+export function sanitizeHeartbeatTimeoutMs(value: number): number {
+  const minimum = AC2_HEARTBEAT_MS * 2;
+  return Number.isFinite(value) && value >= minimum ? value : AC2_DEFAULT_HEARTBEAT_TIMEOUT_MS;
+}
+
 export function resolveHeartbeatTimeoutMs(value?: string): number {
   if (value === undefined || value.trim().length === 0) return AC2_DEFAULT_HEARTBEAT_TIMEOUT_MS;
-  const parsed = Number(value);
-  const minimum = AC2_HEARTBEAT_MS * 2;
-  return Number.isFinite(parsed) && parsed >= minimum
-    ? parsed
-    : AC2_DEFAULT_HEARTBEAT_TIMEOUT_MS;
+  return sanitizeHeartbeatTimeoutMs(Number(value));
 }
 
 /** Raised when the signaling socket never reaches `connect` in time. */
@@ -866,7 +875,12 @@ export interface LiquidAuthChannelProviderOptions {
   requestId?: string;
   /** Request the optional `ac2-stream` channel (default `true`). */
   includeStreamChannel?: boolean;
-  /** Milliseconds without inbound heartbeat traffic before closing. */
+  /**
+   * Milliseconds without inbound heartbeat traffic before closing. Values
+   * below 2× the heartbeat ping cadence (40s) are rejected and fall back to
+   * the default, exactly like the `AC2_HEARTBEAT_TIMEOUT_MS` env var (see
+   * {@link sanitizeHeartbeatTimeoutMs}).
+   */
   heartbeatTimeoutMs?: number;
   /**
    * Optional presence listener. When provided, server-broadcast `presence`
@@ -950,8 +964,19 @@ export class LiquidAuthChannelProvider implements Ac2ChannelProvider {
       sink(level, `[ac2] [requestId=${requestId}] ${message}`);
     };
     const heartbeatTimeoutMs =
-      this.defaults.heartbeatTimeoutMs ??
-      resolveHeartbeatTimeoutMs(process.env['AC2_HEARTBEAT_TIMEOUT_MS']);
+      this.defaults.heartbeatTimeoutMs !== undefined
+        ? sanitizeHeartbeatTimeoutMs(this.defaults.heartbeatTimeoutMs)
+        : resolveHeartbeatTimeoutMs(process.env['AC2_HEARTBEAT_TIMEOUT_MS']);
+    if (
+      this.defaults.heartbeatTimeoutMs !== undefined &&
+      heartbeatTimeoutMs !== this.defaults.heartbeatTimeoutMs
+    ) {
+      log(
+        'warn',
+        `ignoring heartbeatTimeoutMs option ${this.defaults.heartbeatTimeoutMs} — below the ` +
+          `${AC2_HEARTBEAT_MS * 2}ms minimum (2x the ping cadence); using ${heartbeatTimeoutMs}ms`,
+      );
+    }
     // Second-tier stale window: past this the heartbeat overrides presence
     // (see `AC2_HEARTBEAT_HARD_TIMEOUT_FACTOR`).
     const heartbeatHardTimeoutMs = heartbeatTimeoutMs * AC2_HEARTBEAT_HARD_TIMEOUT_FACTOR;

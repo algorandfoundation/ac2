@@ -7,6 +7,7 @@ import {
   closeRtcDataChannel,
   cookiePairsFromSetCookie,
   resolveHeartbeatTimeoutMs,
+  sanitizeHeartbeatTimeoutMs,
   shouldCloseOnHeartbeatTimeout,
   shouldTeardownOnRemoteOffer,
   withSignalingHealthGuard,
@@ -380,6 +381,28 @@ describe('LiquidAuthChannelProvider heartbeat timeout', () => {
   it('falls back for invalid or too-small overrides', () => {
     expect(resolveHeartbeatTimeoutMs('not-a-number')).toBe(50_000);
     expect(resolveHeartbeatTimeoutMs('39999')).toBe(50_000);
+  });
+
+  it('sanitizes numeric option values with the same floor as the env path', () => {
+    // Valid values pass through untouched.
+    expect(sanitizeHeartbeatTimeoutMs(40_000)).toBe(40_000);
+    expect(sanitizeHeartbeatTimeoutMs(60_000)).toBe(60_000);
+    // Sub-minimum values would derive a hard window (4×) below the 20s ping
+    // cadence — they fall back to the default instead.
+    expect(sanitizeHeartbeatTimeoutMs(3_000)).toBe(50_000);
+    expect(sanitizeHeartbeatTimeoutMs(39_999)).toBe(50_000);
+    expect(sanitizeHeartbeatTimeoutMs(0)).toBe(50_000);
+    expect(sanitizeHeartbeatTimeoutMs(-1)).toBe(50_000);
+    expect(sanitizeHeartbeatTimeoutMs(Number.NaN)).toBe(50_000);
+    expect(sanitizeHeartbeatTimeoutMs(Number.POSITIVE_INFINITY)).toBe(50_000);
+  });
+
+  it('keeps the derived hard window above the ping cadence for any option value', () => {
+    const hardFactor = 4;
+    for (const requested of [1, 3_000, 19_999, 40_000, 120_000]) {
+      const sanitized = sanitizeHeartbeatTimeoutMs(requested);
+      expect(sanitized * hardFactor).toBeGreaterThanOrEqual(160_000);
+    }
   });
 });
 
