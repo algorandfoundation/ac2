@@ -3,6 +3,7 @@ import type { Ac2Transport } from '@algorandfoundation/ac2-sdk/transport';
 
 import {
   awaitSignalConnect,
+  awaitSignalingUp,
   closeAwareTransport,
   closeRtcDataChannel,
   cookiePairsFromSetCookie,
@@ -166,7 +167,6 @@ describe('withSignalingHealthGuard', () => {
     const sock = makeFakeSocket();
     let failures = 0;
     const pending = withSignalingHealthGuard(Promise.resolve('peer-channel'), sock, {
-      deadSocketTimeoutMs: 1_000,
       onFailure: () => {
         failures += 1;
       },
@@ -180,7 +180,6 @@ describe('withSignalingHealthGuard', () => {
     let failures = 0;
     const boom = new Error('peer negotiation failed');
     const pending = withSignalingHealthGuard(Promise.reject(boom), sock, {
-      deadSocketTimeoutMs: 1_000,
       onFailure: () => {
         failures += 1;
       },
@@ -199,13 +198,12 @@ describe('withSignalingHealthGuard', () => {
         resolveLate = resolve;
       });
       const pending = withSignalingHealthGuard(humanIsSlow, sock, {
-        deadSocketTimeoutMs: 1_000,
         onFailure: () => {
           failures += 1;
         },
       });
-      // Far longer than deadSocketTimeoutMs — simulates a human taking minutes
-      // to scan the QR and approve, with the socket healthy throughout.
+      // A human can take minutes to scan the QR and approve — with the socket
+      // healthy throughout, no amount of elapsed time may fail the handshake.
       await vi.advanceTimersByTimeAsync(10 * 60_000);
       resolveLate('approved');
       await expect(pending).resolves.toBe('approved');
@@ -215,97 +213,61 @@ describe('withSignalingHealthGuard', () => {
     }
   });
 
-  it('tolerates a disconnect that recovers before the dead-socket grace period', async () => {
-    vi.useFakeTimers();
-    try {
-      const sock = makeFakeSocket();
-      let failures = 0;
-      let resolveLate: (value: string) => void = () => { };
-      const pending = withSignalingHealthGuard(
-        new Promise<string>((resolve) => {
-          resolveLate = resolve;
-        }),
-        sock,
-        {
-          deadSocketTimeoutMs: 1_000,
-          onFailure: () => {
-            failures += 1;
-          },
-        },
-      );
-      sock.emit('disconnect');
-      await vi.advanceTimersByTimeAsync(500);
-      sock.emit('connect'); // recovers before the 1_000ms grace period elapses
-      await vi.advanceTimersByTimeAsync(5_000);
-      resolveLate('approved');
-      await expect(pending).resolves.toBe('approved');
-      expect(failures).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+  it('fails the handshake as soon as the socket disconnects, even if it reconnects', async () => {
+    // socket.io drops pending acks on `onclose` (`_clearAcks`; a plain ack has
+    // no `withError`, so it is not even notified) and the server tears down the
+    // `link` subscription with the old session — a reconnect cannot resume the
+    // rendezvous, it must be re-armed by the caller.
+    const sock = makeFakeSocket();
+    let failures = 0;
+    const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    const assertion = expect(pending).rejects.toMatchObject({
+      code: 'signaling-dropped',
+      reconnectable: true,
+    });
+    sock.emit('disconnect', 'transport close');
+    sock.emit('connect');
+    await assertion;
+    // The socket itself is reusable, so the guard must not tear it down.
+    expect(failures).toBe(0);
   });
 
-  it('rejects and tears down once the socket stays disconnected past the grace period', async () => {
-    vi.useFakeTimers();
-    try {
-      const sock = makeFakeSocket();
-      let failures = 0;
-      const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
-        deadSocketTimeoutMs: 1_000,
-        onFailure: () => {
-          failures += 1;
-        },
-      });
-      const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
-      sock.emit('disconnect');
-      await vi.advanceTimersByTimeAsync(1_000);
-      await assertion;
-      expect(failures).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
+  it('fails immediately (reconnectably) when the socket is already disconnected', async () => {
+    const sock = makeFakeSocket(false);
+    let failures = 0;
+    const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    await expect(pending).rejects.toMatchObject({
+      code: 'signaling-dropped',
+      reconnectable: true,
+    });
+    expect(failures).toBe(0);
   });
 
-  it('starts counting immediately if the socket is already disconnected', async () => {
-    vi.useFakeTimers();
-    try {
-      const sock = makeFakeSocket(false);
-      let failures = 0;
-      const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
-        deadSocketTimeoutMs: 1_000,
-        onFailure: () => {
-          failures += 1;
-        },
-      });
-      const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
-      await vi.advanceTimersByTimeAsync(1_000);
-      await assertion;
-      expect(failures).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('rejects immediately on a server-initiated disconnect (no auto-reconnect)', async () => {
-    vi.useFakeTimers();
-    try {
-      const sock = makeFakeSocket();
-      let failures = 0;
-      const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
-        deadSocketTimeoutMs: 45_000,
-        onFailure: () => {
-          failures += 1;
-        },
-      });
-      const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
-      // 'io server disconnect' will never auto-reconnect — must fail now,
-      // without waiting out the dead-socket grace period.
-      sock.emit('disconnect', 'io server disconnect');
-      await assertion;
-      expect(failures).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
+  it('reports a server-initiated disconnect as not reconnectable and tears down', async () => {
+    const sock = makeFakeSocket();
+    let failures = 0;
+    const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    const assertion = expect(pending).rejects.toMatchObject({
+      code: 'signaling-dropped',
+      reconnectable: false,
+    });
+    // 'io server disconnect' will never auto-reconnect — the socket is dead,
+    // so the guard tears down and hands off to the caller's re-pair loop.
+    sock.emit('disconnect', 'io server disconnect');
+    await assertion;
+    expect(failures).toBe(1);
   });
 
   it('rejects immediately when the abort signal is already aborted', async () => {
@@ -314,7 +276,6 @@ describe('withSignalingHealthGuard', () => {
     controller.abort();
     let failures = 0;
     const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
-      deadSocketTimeoutMs: 5_000,
       signal: controller.signal,
       onFailure: () => {
         failures += 1;
@@ -329,7 +290,6 @@ describe('withSignalingHealthGuard', () => {
     const controller = new AbortController();
     let failures = 0;
     const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
-      deadSocketTimeoutMs: 5_000,
       signal: controller.signal,
       onFailure: () => {
         failures += 1;
@@ -340,30 +300,93 @@ describe('withSignalingHealthGuard', () => {
     expect(failures).toBe(1);
   });
 
-  it('ignores a late settle once the dead-socket bound has already tripped', async () => {
+  it('ignores a late settle once the guard has already failed', async () => {
+    const sock = makeFakeSocket();
+    let resolveLate: (value: string) => void = () => { };
+    const late = new Promise<string>((resolve) => {
+      resolveLate = resolve;
+    });
+    const pending = withSignalingHealthGuard(late, sock, {});
+    const assertion = expect(pending).rejects.toMatchObject({ code: 'signaling-dropped' });
+    sock.emit('disconnect');
+    await assertion;
+    resolveLate('too-late');
+  });
+});
+
+describe('awaitSignalingUp', () => {
+  function makeFakeSocket(initialConnected = true): {
+    on: (event: string, listener: (...args: any[]) => void) => void;
+    off: (event: string, listener: (...args: any[]) => void) => void;
+    connected: boolean;
+    emit: (event: string, ...args: any[]) => void;
+  } {
+    const listeners: Record<string, Set<(...args: any[]) => void>> = {};
+    return {
+      connected: initialConnected,
+      on(event, listener) {
+        (listeners[event] ??= new Set()).add(listener);
+      },
+      off(event, listener) {
+        listeners[event]?.delete(listener);
+      },
+      emit(event, ...args) {
+        for (const listener of listeners[event] ?? []) listener(...args);
+      },
+    };
+  }
+
+  it('resolves immediately when the socket is already connected', async () => {
+    const sock = makeFakeSocket();
+    await expect(awaitSignalingUp(sock, 1_000)).resolves.toBeUndefined();
+  });
+
+  it('resolves as soon as socket.io reconnects', async () => {
+    const sock = makeFakeSocket(false);
+    let failures = 0;
+    const pending = awaitSignalingUp(sock, 1_000, {
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    sock.connected = true;
+    sock.emit('connect');
+    await expect(pending).resolves.toBeUndefined();
+    expect(failures).toBe(0);
+  });
+
+  it('rejects and tears down once the socket stays down past the bound', async () => {
     vi.useFakeTimers();
     try {
-      const sock = makeFakeSocket();
+      const sock = makeFakeSocket(false);
       let failures = 0;
-      let resolveLate: (value: string) => void = () => { };
-      const late = new Promise<string>((resolve) => {
-        resolveLate = resolve;
-      });
-      const pending = withSignalingHealthGuard(late, sock, {
-        deadSocketTimeoutMs: 1_000,
+      const pending = awaitSignalingUp(sock, 1_000, {
         onFailure: () => {
           failures += 1;
         },
       });
       const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
-      sock.emit('disconnect');
       await vi.advanceTimersByTimeAsync(1_000);
       await assertion;
-      resolveLate('too-late');
       expect(failures).toBe(1);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('rejects and tears down when the abort signal fires while waiting', async () => {
+    const sock = makeFakeSocket(false);
+    const controller = new AbortController();
+    let failures = 0;
+    const pending = awaitSignalingUp(sock, 5_000, {
+      signal: controller.signal,
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' });
+    expect(failures).toBe(1);
   });
 });
 

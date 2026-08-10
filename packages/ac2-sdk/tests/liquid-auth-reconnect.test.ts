@@ -23,10 +23,14 @@ const H = vi.hoisted(() => {
     lastClient: null as any,
     lastIoOpts: null as any,
     peerCalls: 0,
+    /** The `requestId` each `peer()` attempt was invoked with, in call order. */
+    peerRequestIds: [] as string[],
     peerCloseSpies: [] as Array<ReturnType<typeof vi.fn>>,
     // When set, the fake `peer()` parks on this promise after creating its
     // `peerClient` — mimicking the real SDK awaiting the wallet's link/offer —
-    // so tests can interleave events with an in-flight negotiation.
+    // so tests can interleave events with an in-flight negotiation. Consumed
+    // once: the attempt that finds the gate takes it, so a re-armed attempt
+    // runs through.
     peerGate: null as Promise<void> | null,
   };
   return { clientCloseSpy, socketCloseSpy, socketDisconnectSpy, socketConnectSpy, state };
@@ -113,25 +117,36 @@ vi.mock('@algorandfoundation/liquid-client/signal', () => {
     }
 
     async peer(
-      _requestId: string,
+      requestId: string,
       _type: string,
       _config: unknown,
       opts: { dataChannels: Record<string, unknown> },
     ): Promise<any> {
       H.state.peerCalls += 1;
+      H.state.peerRequestIds.push(requestId);
+      // Mirror the real `link()` latch: it refuses to run while a requestId is
+      // still in progress, and only clears it when the wallet's link ack
+      // arrives — which never happens for a negotiation stranded by a
+      // signaling drop (socket.io discards the pending ack).
+      if (this.requestId !== undefined) throw new Error('Request is in process');
+      this.requestId = requestId;
       const peerCloseSpy = vi.fn();
       this.peerClient = { close: peerCloseSpy };
       H.state.peerCloseSpies.push(peerCloseSpy);
-      if (H.state.peerGate) {
+      const gate = H.state.peerGate;
+      if (gate) {
+        H.state.peerGate = null;
         // Park like the real `peer()` does while awaiting the wallet's
         // link/offer, then dereference `peerClient` exactly like the real SDK
         // (`this.peerClient.onicecandidate = …`) — a teardown that nulled it
         // mid-flight reproduces the production TypeError.
-        await H.state.peerGate;
+        await gate;
         if (!this.peerClient) {
           throw new TypeError("Cannot set properties of undefined (setting 'onicecandidate')");
         }
       }
+      delete this.requestId;
+      this.authenticated = true;
       const channels: Record<string, any> = {};
       for (const label of Object.keys(opts?.dataChannels ?? {})) {
         const ch = {
@@ -192,6 +207,7 @@ describe('LiquidAuthChannelProvider — socket-preserving reconnect', () => {
     H.state.lastClient = null;
     H.state.lastIoOpts = null;
     H.state.peerCalls = 0;
+    H.state.peerRequestIds = [];
     H.state.peerCloseSpies = [];
     H.state.peerGate = null;
   });
@@ -397,6 +413,45 @@ describe('LiquidAuthChannelProvider — socket-preserving reconnect', () => {
     await paired2.close();
   });
 
+  it('re-arms the handshake on the same socket (same requestId) when signaling drops mid-negotiation', async () => {
+    // The production hang: parked in `peer()` awaiting the wallet's re-link, a
+    // ping-timeout blip discards the pending `link` ack (socket.io `_clearAcks`)
+    // and kills the server-side subscription — socket.io reconnects fine, but
+    // the rendezvous is gone and the daemon waited on it forever, deaf to every
+    // one of the wallet's retries until process restart.
+    const { handle, paired } = await startAndConnect();
+    H.state.lastClient.emit('link-message', { wallet: 'W' });
+    await paired.close();
+
+    let releaseStranded!: () => void;
+    H.state.peerGate = new Promise<void>((resolve) => {
+      releaseStranded = resolve;
+    });
+    const reconnect = handle.connect();
+    await vi.waitFor(() => {
+      expect(H.state.peerCalls).toBe(2);
+    });
+
+    const socketBefore = H.state.lastSocket;
+    socketBefore.connected = false;
+    socketBefore.emit('disconnect', 'transport close');
+    socketBefore.connect();
+
+    const paired2 = await reconnect;
+    // Re-armed: a THIRD `peer()` attempt answered the wallet…
+    expect(H.state.peerCalls).toBe(3);
+    // …on the SAME socket — no full teardown, no fresh pairing handle…
+    expect(H.state.lastSocket).toBe(socketBefore);
+    expect(H.clientCloseSpy).not.toHaveBeenCalled();
+    expect(handle.isSignalingAlive?.()).toBe(true);
+    // …and with the SAME pairing requestId: the identity only rotates when the
+    // user forgets the pairing, never behind their back on a reconnect.
+    expect(H.state.peerRequestIds[2]).toBe(H.state.peerRequestIds[1]);
+
+    await paired2.close();
+    releaseStranded();
+  });
+
   it('does NOT tear down a live connection when a presence drop coincides with a signaling blip', async () => {
     const { handle, paired } = await startAndConnect();
     H.state.lastClient.emit('link-message', { wallet: 'W' });
@@ -423,6 +478,43 @@ describe('LiquidAuthChannelProvider — socket-preserving reconnect', () => {
   });
 });
 
+describe('LiquidAuthChannelProvider — signaling diagnostics', () => {
+  beforeEach(() => {
+    (globalThis as any).RTCPeerConnection ??= class {};
+    H.state.lastSocket = null;
+    H.state.lastClient = null;
+    H.state.peerCalls = 0;
+    H.state.peerRequestIds = [];
+    H.state.peerCloseSpies = [];
+    H.state.peerGate = null;
+  });
+
+  it('logs every signaling reconnect', async () => {
+    // Production logs showed long runs of disconnect lines with no matching
+    // connect line, making a recovered blip indistinguishable from a permanent
+    // outage. The provider now logs the reconnect alongside the disconnect.
+    const lines: string[] = [];
+    const provider = new LiquidAuthChannelProvider({
+      origin: 'https://example.test',
+      logger: (_level, line) => lines.push(line),
+    });
+    const handlePromise = provider.startPairing({ timeoutMs: 5_000 });
+    await vi.waitFor(() => {
+      expect(H.state.lastSocket).toBeTruthy();
+    });
+    H.state.lastSocket.emit('connect');
+    await handlePromise;
+
+    H.state.lastSocket.connected = false;
+    H.state.lastSocket.emit('disconnect', 'ping timeout');
+    H.state.lastSocket.connect();
+
+    await vi.waitFor(() => {
+      expect(lines.some((l) => /signaling socket connected/i.test(l))).toBe(true);
+    });
+  });
+});
+
 describe('LiquidAuthChannelProvider — wake-aware reconnect kick', () => {
   beforeEach(() => {
     (globalThis as any).RTCPeerConnection ??= class {};
@@ -430,6 +522,7 @@ describe('LiquidAuthChannelProvider — wake-aware reconnect kick', () => {
     H.state.lastSocket = null;
     H.state.lastClient = null;
     H.state.peerCalls = 0;
+    H.state.peerRequestIds = [];
     H.state.peerCloseSpies = [];
     H.state.peerGate = null;
     vi.useFakeTimers();
