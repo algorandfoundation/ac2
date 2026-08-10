@@ -749,6 +749,83 @@ describe('createOpenClawGatewayAdapter (adapter.ts)', () => {
     await handled;
   });
 
+  it('a settled earlier turn no longer orphans the newer run\'s streaming events (activeRun identity guard)', async () => {
+    const { sends, connection, adapter } = await setup();
+
+    // Turn A blocks on its agent.wait…
+    const handledA = adapter.handleInbound(inboundMessage('turn A'));
+    await waitFor(() => connection.sent.some((f) => f.method === 'sessions.messages.subscribe'));
+    connection.respondOk('sessions.messages.subscribe', {});
+    await waitFor(() => connection.sent.some((f) => f.method === 'agent'));
+    connection.respondOk('agent', { runId: 'run-A', acceptedAt: Date.now() });
+    await waitFor(() => connection.sent.some((f) => f.method === 'agent.wait'));
+
+    // …while turn B arrives and takes over the activeRun slot.
+    const handledB = adapter.handleInbound(inboundMessage('turn B'));
+    await waitFor(() => connection.sent.filter((f) => f.method === 'agent').length === 2);
+    connection.respondOk('agent', { runId: 'run-B', acceptedAt: Date.now() });
+    await waitFor(() => connection.sent.filter((f) => f.method === 'agent.wait').length === 2);
+
+    // A settles first. Its finalize path (grace timer, chat.history fallback,
+    // and the finally clause) must NOT null out the slot B now owns.
+    const waitA = connection.sent.find(
+      (f) =>
+        f.method === 'agent.wait' && (f.params as Record<string, unknown>)['runId'] === 'run-A',
+    );
+    expect(waitA).toBeDefined();
+    connection.emitFrame({ type: 'res', id: waitA!.id, ok: true, payload: { status: 'ok' } });
+    await waitFor(() => connection.sent.some((f) => f.method === 'chat.history'));
+    connection.respondOk('chat.history', { messages: [] });
+    await handledA;
+
+    // B's committed segment still lands as its own bubble (previously dropped
+    // at the `if (!run) return` guard because A's settle cleared the slot).
+    connection.emitEvent('session.message', {
+      sessionKey: 'ac2:did:key:zTest',
+      messageId: 'm-B',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'answer B' }] },
+    });
+    await waitFor(() =>
+      sends.some((s) => {
+        const f = parseStreamFrame(s.payload);
+        return f['t'] === 'finalize' && f['text'] === 'answer B' && f['mid'] === 'm-B';
+      }),
+    );
+
+    connection.respondOk('agent.wait', { status: 'ok' });
+    await handledB;
+  });
+
+  it('a whitespace-only frame does not orphan the active run\'s streaming events', async () => {
+    const { sends, connection, adapter } = await setup();
+
+    const handled = adapter.handleInbound(inboundMessage('real turn'));
+    await waitFor(() => connection.sent.some((f) => f.method === 'sessions.messages.subscribe'));
+    connection.respondOk('sessions.messages.subscribe', {});
+    await waitFor(() => connection.sent.some((f) => f.method === 'agent'));
+    connection.respondOk('agent', { runId: 'run-live', acceptedAt: Date.now() });
+    await waitFor(() => connection.sent.some((f) => f.method === 'agent.wait'));
+
+    // An empty frame early-returns — its finally clause used to null the live
+    // run's slot unconditionally, silently killing the stream.
+    await adapter.handleInbound(inboundMessage('   '));
+
+    connection.emitEvent('session.message', {
+      sessionKey: 'ac2:did:key:zTest',
+      messageId: 'm-live',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'still streaming' }] },
+    });
+    await waitFor(() =>
+      sends.some((s) => {
+        const f = parseStreamFrame(s.payload);
+        return f['t'] === 'finalize' && f['text'] === 'still streaming' && f['mid'] === 'm-live';
+      }),
+    );
+
+    connection.respondOk('agent.wait', { status: 'ok' });
+    await handled;
+  });
+
   it('splits one turn into a wallet message per committed assistant segment (intro then reply around a tool)', async () => {
     const { sends, connection, adapter } = await setup();
 

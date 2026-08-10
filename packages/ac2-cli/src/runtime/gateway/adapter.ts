@@ -1476,6 +1476,13 @@ export function createOpenClawGatewayAdapter(
     },
 
     async handleInbound(message: Ac2RuntimeInbound): Promise<void> {
+      // The run THIS invocation published to the `activeRun` slot (if it got
+      // that far). Every clear below is guarded by identity so an overlapping
+      // turn — or an early-returning frame that never started a run — cannot
+      // null out a slot that a NEWER run now owns (which would orphan that
+      // run's `session.message`/`session.tool` events at the `if (!run)`
+      // guard in the event handler).
+      let startedRun: ActiveRun | null = null;
       try {
         const controllerDid = message.controllerDid;
         if (!controllerDid) return;
@@ -1558,6 +1565,7 @@ export function createOpenClawGatewayAdapter(
             run.sessionKey = agentResult.sessionKey;
           }
           activeRun = run;
+          startedRun = run;
 
           // As on the spawned-task path (see the `agent.wait` call in the task
           // watcher above), the RPC's own client-side timeout is kept slightly
@@ -1585,14 +1593,14 @@ export function createOpenClawGatewayAdapter(
             // THEN detach (so no even-later event double-commits) and
             // reconcile any leftovers.
             await new Promise((resolve) => setTimeout(resolve, RUN_FINALIZE_GRACE_MS));
-            activeRun = null;
+            if (activeRun === run) activeRun = null;
             await finalizeRun(run, sessionKey);
             return;
           }
 
           // Detach the run before emitting the failure bubble so no late event
           // double-commits.
-          activeRun = null;
+          if (activeRun === run) activeRun = null;
 
           // Timeout / error: segments already committed stay as their bubbles;
           // add one more bubble carrying the failure so the wallet is not left
@@ -1612,7 +1620,7 @@ export function createOpenClawGatewayAdapter(
           }
           await host.send(buildFinalizeFrame(effectiveThid, randomUUID(), finalText), 'stream');
         } catch (err) {
-          activeRun = null;
+          if (activeRun === run) activeRun = null;
           host.log(`[ac2][openclaw-gateway] agent run failed: ${(err as Error).message}`);
           await host.send(
             buildNoticeFrame({
@@ -1634,7 +1642,11 @@ export function createOpenClawGatewayAdapter(
       } catch (err) {
         host.log(`[ac2][openclaw-gateway] handleInbound failed: ${(err as Error).message}`);
       } finally {
-        activeRun = null;
+        // Only clear the slot if THIS invocation still owns it — a frame that
+        // early-returned (whitespace-only text, gateway unavailable) never
+        // started a run, and a settled turn may have been superseded by a
+        // newer one that must keep streaming.
+        if (startedRun !== null && activeRun === startedRun) activeRun = null;
       }
     },
 

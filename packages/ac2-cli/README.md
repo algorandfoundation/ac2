@@ -106,7 +106,7 @@ Everything has a working default. Set these only if you need to.
 | `AC2_DEFAULT_AGENT` | Agent id inbound wallet traffic goes to (default `openclaw`). |
 | `AC2_HEARTBEAT_TIMEOUT_MS` | How long a silent wallet channel may stay open. |
 | `AC2_RUNTIME` | Which runtime adapter drives the agent: `socket` (default), `openclaw-gateway`, or an npm package name. |
-| `AC2_RUNTIME_CONFIG` | JSON config handed to that adapter. |
+| `AC2_RUNTIME_CONFIG` | JSON config handed to that adapter. For `openclaw-gateway` it also accepts `runTimeoutMs` (how long one agent turn may run, default 300000 — x402 payments block on a wallet signature round-trip, so keep this generous) and `taskTimeoutMs` (same budget for a spawned sub-agent task, default 900000), e.g. `AC2_RUNTIME_CONFIG='{"runTimeoutMs":600000}'`. Values must be JSON numbers. |
 | `AC2_WAIT_FOR_RUNTIME` | Set to `0` to await a wallet even when no agent runtime is alive. |
 | `AC2_KEYRING` | macOS only. Set to `login` to store keys in the login keychain instead of the dedicated AC2 keychain (see Troubleshooting). |
 | `OPENCLAW_GATEWAY_URL` / `_PORT` / `_TOKEN` | Gateway connection for the `openclaw-gateway` adapter. Discovered from `openclaw.json` when unset. |
