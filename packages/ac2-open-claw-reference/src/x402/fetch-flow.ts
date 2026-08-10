@@ -24,7 +24,7 @@ import type { PaymentPayload, ResourceInfo, SettleResponse } from '@x402/core/ty
 import type { Network } from '@x402/core/types';
 
 import type { PluginConfig, ToolContext } from '../session/contracts.js';
-import type { SignDeps } from '../session/flows.js';
+import type { ResolveSignDeps } from '../session/flows.js';
 import { NoActiveSessionError } from '../session/manager.js';
 import {
   classifyX402SigningError,
@@ -36,6 +36,42 @@ const DEFAULT_MAX_AMOUNT_ATOMIC = '1000000';
 const DEFAULT_ALLOWED_NETWORKS = [ALGORAND_TESTNET_CAIP2, ALGORAND_MAINNET_CAIP2] as const;
 const DEFAULT_ALLOWED_ASSETS = [USDC_TESTNET_ASA_ID, USDC_MAINNET_ASA_ID, 'USDC'] as const;
 const RESPONSE_BODY_LIMIT_BYTES = 128 * 1024;
+
+/**
+ * CAIP-2 caps a chain reference at 32 characters, so `@x402/avm` canonicalises
+ * Algorand networks by TRUNCATING the base64 genesis hash
+ * (`algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDe`) — while live resources (and
+ * older `@x402/avm` builds) still advertise the full 44-character hash
+ * (`algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=`).
+ *
+ * Both spellings name the SAME chain, but the x402 client resolves registered
+ * schemes — and we resolve our own allow/preference lists — by exact string.
+ * Live, that surfaced as `No network/scheme registered for x402 version: 2
+ * which comply with the payment requirements` on a perfectly valid Algorand
+ * testnet offer: the endpoint advertised the long form while the installed
+ * library had registered the truncated one. Every network comparison therefore
+ * goes through {@link normalizeX402Network}, and schemes are registered under a
+ * pattern derived from it (the client supports `*` in a registered network id),
+ * so either spelling resolves regardless of which library version is installed.
+ */
+const CAIP2_REFERENCE_MAX_LENGTH = 32;
+
+/** Canonicalise a CAIP-2 network id so long/truncated references compare equal. */
+export function normalizeX402Network(network: string): string {
+  const separator = network.indexOf(':');
+  if (separator < 0) return network;
+  const reference = network.slice(separator + 1);
+  if (reference.length <= CAIP2_REFERENCE_MAX_LENGTH) return network;
+  return `${network.slice(0, separator)}:${reference.slice(0, CAIP2_REFERENCE_MAX_LENGTH)}`;
+}
+
+/**
+ * Registration key for an allowed network: the canonical id plus a `*` so the
+ * client also matches the longer, untruncated spelling of the same chain.
+ */
+function networkRegistrationPattern(network: string): string {
+  return `${normalizeX402Network(network)}*`;
+}
 
 export interface X402FetchParams {
   url: string;
@@ -152,7 +188,8 @@ function buildPaymentPolicy(options: PolicyOptions): PaymentPolicy {
     requirements.filter((req) => {
       if (req.scheme !== 'exact') return false;
       if (!isAlgorandNetwork(req.network)) return false;
-      if (!options.allowedNetworks.has(req.network)) return false;
+      // Normalized on both sides: the offer may carry either CAIP-2 spelling.
+      if (!options.allowedNetworks.has(normalizeX402Network(req.network))) return false;
       if (!options.allowedAssets.has(req.asset)) return false;
       try {
         if (BigInt(req.amount) > options.maxAmountAtomic) return false;
@@ -165,10 +202,10 @@ function buildPaymentPolicy(options: PolicyOptions): PaymentPolicy {
 }
 
 function buildSelector(preferences: readonly string[]): SelectPaymentRequirements {
-  const preferred = uniqueStrings(preferences);
+  const preferred = uniqueStrings(preferences).map(normalizeX402Network);
   return (_version, requirements) => {
     for (const network of preferred) {
-      const match = requirements.find((req) => req.network === network);
+      const match = requirements.find((req) => normalizeX402Network(req.network) === network);
       if (match) return match;
     }
     return requirements[0] as PaymentRequirements;
@@ -284,7 +321,7 @@ function paymentRequiredReason(paymentRequired: PaymentRequired | undefined): st
 export async function x402FetchFlow(
   params: X402FetchParams,
   config: PluginConfig,
-  deps: SignDeps = {},
+  deps: ResolveSignDeps = {},
   context: ToolContext = {},
 ): Promise<X402FetchResult> {
   context.signal?.throwIfAborted();
@@ -298,7 +335,10 @@ export async function x402FetchFlow(
   let paymentPayload: PaymentPayload | undefined;
 
   try {
-    const signer = createAc2AvmSigner({
+    // Resolving the signer is async now: the payer address and every
+    // signature come from whichever process owns the wallet connection (a
+    // local pairing session, else the daemon over its control socket).
+    const signer = await createAc2AvmSigner({
       config,
       deps,
       context,
@@ -318,14 +358,14 @@ export async function x402FetchFlow(
       ...(config.x402AlgodUrl !== undefined ? { algodUrl: config.x402AlgodUrl } : {}),
       ...(config.x402AlgodToken !== undefined ? { algodToken: config.x402AlgodToken } : {}),
     };
-    for (const network of allowedNetworks) {
-      client.register(network as Network, new ExactAvmScheme(signer, schemeConfig));
+    for (const pattern of uniqueStrings(allowedNetworks.map(networkRegistrationPattern))) {
+      client.register(pattern as Network, new ExactAvmScheme(signer, schemeConfig));
     }
 
     client.registerPolicy(
       buildPaymentPolicy({
         maxAmountAtomic,
-        allowedNetworks: new Set(allowedNetworks),
+        allowedNetworks: new Set(allowedNetworks.map(normalizeX402Network)),
         allowedAssets: new Set(allowedAssets),
         ...(allowedPayTo !== undefined ? { allowedPayTo: new Set(allowedPayTo) } : {}),
       }),

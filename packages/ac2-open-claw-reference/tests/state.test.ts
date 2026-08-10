@@ -16,28 +16,7 @@ import {
   setConnectionIdentity,
   setSessionCookie,
   touchConnection,
-} from '../src/identity/state.js';
-import { replayConversationHistory, replayConversationList } from '../src/index.js';
-
-/** Minimal transport spy capturing the frames sent to the controller. */
-function transportSpy() {
-  const sent: string[] = [];
-  return {
-    sent,
-    transport: {
-      isOpen: true,
-      send: (payload: string) => {
-        sent.push(payload);
-      },
-    },
-  };
-}
-
-/** Parse a single STX-prefixed control frame into its JSON object. */
-function parseControlFrame(raw: string): any {
-  expect(raw.charCodeAt(0)).toBe(0x02);
-  return JSON.parse(raw.slice(1));
-}
+} from '@algorandfoundation/ac2-cli/identity';
 
 /**
  * The state module persists to `${OPENCLAW_STATE_DIR}/ac2-state.json`. Point it
@@ -144,112 +123,6 @@ describe('multi-conversation (thid) history', () => {
     const convo = getConnection('req-1')?.conversations['thread-y'];
     expect(convo?.title).toBe('Named later');
     expect(convo?.messages).toHaveLength(1);
-  });
-});
-
-describe('conversation restore (control-frame replay)', () => {
-  it('replayConversationList advertises every persisted thread as one frame', () => {
-    recordConversationMessage('req-1', 'thread-a', { role: 'user', text: 'hi A', at: 1 });
-    recordConversationMessage('req-1', 'thread-b', { role: 'user', text: 'hi B', at: 2 });
-
-    const { sent, transport } = transportSpy();
-    replayConversationList(transport, 'req-1');
-
-    expect(sent).toHaveLength(1);
-    const frame = parseControlFrame(sent[0]!);
-    expect(frame.t).toBe('conversations');
-    expect(frame.threads.map((t: any) => t.thid).sort()).toEqual(['thread-a', 'thread-b']);
-    // Titles (seeded from the first user message) ride along for the switcher.
-    const a = frame.threads.find((t: any) => t.thid === 'thread-a');
-    expect(a.title).toBe('hi A');
-  });
-
-  it('replayConversationList sends nothing when the connection has no threads', () => {
-    const { sent, transport } = transportSpy();
-    replayConversationList(transport, 'req-empty');
-    expect(sent).toHaveLength(0);
-  });
-
-  it('replayConversationHistory replays a thread, normalizing agent → assistant', () => {
-    recordConversationMessage('req-1', 'thread-a', { role: 'user', text: 'hello', at: 1 });
-    recordConversationMessage('req-1', 'thread-a', { role: 'agent', text: 'hi there', at: 2 });
-
-    const { sent, transport } = transportSpy();
-    replayConversationHistory(transport, 'req-1', 'thread-a');
-
-    expect(sent).toHaveLength(1);
-    const frame = parseControlFrame(sent[0]!);
-    expect(frame.t).toBe('history');
-    expect(frame.thid).toBe('thread-a');
-    expect(frame.messages).toEqual([
-      { role: 'user', text: 'hello', at: 1 },
-      { role: 'assistant', text: 'hi there', at: 2 },
-    ]);
-  });
-
-  it('replayConversationHistory sends nothing for an unknown / empty thread', () => {
-    ensureConversation('req-1', 'thread-empty');
-    const { sent, transport } = transportSpy();
-    replayConversationHistory(transport, 'req-1', 'thread-empty');
-    replayConversationHistory(transport, 'req-1', 'thread-missing');
-    expect(sent).toHaveLength(0);
-  });
-
-  it('both replays no-op without a requestId', () => {
-    const { sent, transport } = transportSpy();
-    replayConversationList(transport, undefined);
-    replayConversationHistory(transport, undefined, 'thread-a');
-    expect(sent).toHaveLength(0);
-  });
-
-  it('replayConversationHistory replays tool entries verbatim', () => {
-    recordConversationMessage('req-1', 'thread-a', { role: 'user', text: 'run ls', at: 1 });
-    recordToolActivity('req-1', 'thread-a', {
-      id: 'tool-1',
-      name: 'exec',
-      command: 'ls -la',
-      output: 'a\nb',
-    });
-
-    const { sent, transport } = transportSpy();
-    replayConversationHistory(transport, 'req-1', 'thread-a');
-
-    const frame = parseControlFrame(sent[0]!);
-    expect(frame.t).toBe('history');
-    expect(frame.messages).toContainEqual({ role: 'user', text: 'run ls', at: 1 });
-    const tool = frame.messages.find((m: any) => m.role === 'tool');
-    expect(tool).toMatchObject({
-      role: 'tool',
-      id: 'tool-1',
-      name: 'exec',
-      command: 'ls -la',
-      output: 'a\nb',
-    });
-  });
-
-  it('replayConversationHistory replays background-task cards with their status/result', () => {
-    recordTaskActivity('req-1', 'thread-a', {
-      id: 'task:task-research',
-      title: 'Weather research',
-      prompt: 'research the weather API',
-      status: 'completed',
-      result: 'It is sunny.',
-    });
-
-    const { sent, transport } = transportSpy();
-    replayConversationHistory(transport, 'req-1', 'thread-a');
-
-    const frame = parseControlFrame(sent[0]!);
-    expect(frame.t).toBe('history');
-    const task = frame.messages.find((m: any) => m.role === 'task');
-    expect(task).toMatchObject({
-      role: 'task',
-      id: 'task:task-research',
-      title: 'Weather research',
-      prompt: 'research the weather API',
-      status: 'completed',
-      result: 'It is sunny.',
-    });
   });
 });
 

@@ -16,9 +16,8 @@ import {
   buildX402FetchTool,
   buildGitSignTool,
 } from './tools/index.js';
-import { registerSubagentHooks } from './channel/subagent-hooks.js';
 import { cmdSetup, readChannelStatus } from './setup/config.js';
-import { listConnections } from './identity/state.js';
+import { connectControl } from '@algorandfoundation/ac2-cli/control';
 
 const MANIFEST_DESCRIPTION =
   getToolPluginMetadata(pluginManifest)?.description ??
@@ -31,27 +30,39 @@ function setActive(api: OpenClawApi): void {
 
 let cliMetadataRegistered = false;
 
+/**
+ * Result of an `openclaw ac2 <sub>` invocation. `keepAlive` holds the shell
+ * process open while a pairing cycle is actually pending — a command that has
+ * nothing to wait for (e.g. `pair` against an already-connected wallet)
+ * returns without it and the shell exits, so the "Waiting for controller to
+ * pair..." banner below is only ever printed when that is true.
+ */
+interface Ac2CommandResult {
+  text: string;
+  keepAlive?: boolean;
+}
+
 /** Dynamically import the `ac2` CLI command (keeps the transport out of cold start). */
 async function runAc2CommandHandler(
   api: OpenClawApi,
   ctx: { args?: string; isCli?: boolean },
-): Promise<{ text: string; keepAlive?: boolean }> {
+): Promise<Ac2CommandResult> {
   const { buildAc2Command } = await import('./cli/index.js');
   const command = buildAc2Command(api) as {
-    handler: (c: {
-      args?: string;
-      isCli?: boolean;
-    }) => Promise<{ text: string; keepAlive?: boolean }>;
+    handler: (c: { args?: string; isCli?: boolean }) => Promise<Ac2CommandResult>;
   };
   return command.handler(ctx);
 }
 
-/** `/ac2` slash command — read-only status / help. Pairing lives on the shell CLI. */
-function runAc2SlashCommand(ctx: { args?: string }): { text: string } {
+/**
+ * `/ac2` slash command — read-only status / help. Pairing lives on the shell
+ * CLI. Never auto-starts the AC2 daemon: this is a diagnostic surface, so a
+ * daemon that isn't running is reported plainly rather than spun up.
+ */
+async function runAc2SlashCommand(ctx: { args?: string }): Promise<{ text: string }> {
   const sub = (ctx.args ?? '').trim().split(/\s+/).filter(Boolean)[0]?.toLowerCase();
 
   if (sub === 'status') {
-    const active = sessionManager.getActive();
     const lines = ['AC2 channel status', ''];
     try {
       const channelStatus = readChannelStatus();
@@ -66,19 +77,36 @@ function runAc2SlashCommand(ctx: { args?: string }): { text: string } {
     } catch {
       // config-derived readiness read is best-effort
     }
-    lines.push(`Online: ${active ? 'yes' : 'no'}`);
-    if (active) {
-      lines.push(`Agent DID:      ${active.agentDid}`);
-      lines.push(`Controller DID: ${active.controllerDid}`);
-      if (active.requestId) lines.push(`Connection:     ${active.requestId}`);
-    }
-    let known = 0;
+
+    // The daemon (not this process) owns the live wallet connection now, so
+    // "online" is asked of it directly instead of this process's own
+    // `sessionManager` — a wallet can be connected even when no `pair`
+    // command is currently running here.
+    let client;
     try {
-      known = listConnections().length;
+      client = await connectControl({ timeoutMs: 500 });
     } catch {
-      // persisted-state read is best-effort
+      client = undefined;
     }
-    lines.push(`Known connections: ${known}`);
+    if (!client) {
+      lines.push('Daemon: not running (run `openclaw ac2 pair` to start it)');
+      return { text: lines.join('\n') };
+    }
+    try {
+      const status = await client.request('daemon.status', {});
+      const { connections } = await client.request('connections.list', {});
+      lines.push(`Daemon: running (pid ${status.pid})`);
+      lines.push(`Online: ${status.connection.state === 'connected' ? 'yes' : 'no'}`);
+      if (status.connection.state === 'connected') {
+        const active = connections.find((c) => c.requestId === status.connection.requestId);
+        if (active?.agentDid) lines.push(`Agent DID:      ${active.agentDid}`);
+        lines.push(`Controller DID: ${status.connection.controllerDid ?? '(unknown)'}`);
+        if (status.connection.requestId) lines.push(`Connection:     ${status.connection.requestId}`);
+      }
+      lines.push(`Known connections: ${connections.length}`);
+    } finally {
+      client.close();
+    }
     return { text: lines.join('\n') };
   }
 
@@ -115,7 +143,7 @@ function registerCliMetadata(api: OpenClawApi): void {
     description: 'AC2 channel status & help (pairing runs via `openclaw ac2`).',
     acceptsArgs: true,
     requireAuth: false,
-    handler(ctx: { args?: string }): { text: string } {
+    handler(ctx: { args?: string }): Promise<{ text: string }> {
       return runAc2SlashCommand(ctx);
     },
   };
@@ -224,10 +252,6 @@ function registerFull(api: OpenClawApi): void {
   } catch (err) {
     console.error(`[${PLUGIN_ID}] registerTool failed: ${err}`);
   }
-  // Subscribe to the host's in-process sub-agent lifecycle hooks so background
-  // tasks report a reliable completion message even when the host's own
-  // announce/direct delivery cannot reach a threaded conversation.
-  registerSubagentHooks(api);
 }
 
 /** The bundled channel entry. */

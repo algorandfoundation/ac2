@@ -1,8 +1,6 @@
-/** Conversation multiplexing: thread tracking, parsing, and replay helpers. */
+/** Conversation multiplexing: session-key + route resolution for the ac2 channel. */
 
 import { CHANNEL_ID } from '../runtime.js';
-import { listConversations } from '../identity/state.js';
-import { sendStreamControl, type Sendable } from './stream.js';
 
 export const DEFAULT_THID = 'default';
 
@@ -25,35 +23,21 @@ export function buildAc2SessionKey(controllerDid: string, thid?: string): string
     : base;
 }
 
-const activeThreadByConnection = new Map<string, string>();
-
-function connectionThreadKey(controllerDid: string, requestId?: string): string {
-  return requestId ?? controllerDid;
-}
-
-export function setActiveConversation(
-  controllerDid: string,
-  thid: string,
-  requestId?: string,
-): void {
-  activeThreadByConnection.set(connectionThreadKey(controllerDid, requestId), thid);
-}
-
-export function clearActiveConversation(
-  controllerDid: string,
-  thid: string,
-  requestId?: string,
-): void {
-  const key = connectionThreadKey(controllerDid, requestId);
-  if (activeThreadByConnection.get(key) === thid) {
-    activeThreadByConnection.delete(key);
-  }
-}
-
-export function getActiveConversation(controllerDid: string, requestId?: string): string {
-  return (
-    activeThreadByConnection.get(connectionThreadKey(controllerDid, requestId)) ?? DEFAULT_THID
-  );
+/**
+ * Resolve the "active" conversation thread for a controller connection.
+ *
+ * The daemon's `openclaw-gateway` adapter now owns the whole run/reply
+ * lifecycle (including which thread a turn belongs to) — this plugin never
+ * sees `ac2/ConversationOpen`/`Close` frames anymore (the handlers that used
+ * to track them lived in `ac2-command.ts` and were removed), so there is no
+ * longer anything to set an "active" thread FROM. Both parameters are kept
+ * (unused) purely so this stays a drop-in replacement at every call site in
+ * `channel-object.ts` — collapsing to the default thread is the correct
+ * behavior until/unless a thread is resolved some other way (e.g. from the
+ * outbound route).
+ */
+export function getActiveConversation(_controllerDid: string, _requestId?: string): string {
+  return DEFAULT_THID;
 }
 
 /** Return shape of `messaging.resolveSessionConversation(...)`. */
@@ -122,91 +106,3 @@ export function resolveAc2OutboundSessionRoute(params: {
   };
 }
 
-/** Parse an inbound chat frame into `{ thid, text, explicitThid }`. */
-export function parseInboundChat(raw: string): {
-  thid: string;
-  text: string;
-  explicitThid: boolean;
-} {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return { thid: DEFAULT_THID, text: '', explicitThid: false };
-  if (trimmed[0] !== '{') return { thid: DEFAULT_THID, text: raw, explicitThid: false };
-  try {
-    const parsed = JSON.parse(trimmed) as Record<string, any>;
-    const hasThid = typeof parsed['thid'] === 'string' && parsed['thid'].length > 0;
-    const thid = hasThid ? (parsed['thid'] as string) : DEFAULT_THID;
-    const body = (parsed['body'] ?? {}) as Record<string, any>;
-    const text =
-      typeof body['content'] === 'string'
-        ? (body['content'] as string)
-        : typeof body['text'] === 'string'
-          ? (body['text'] as string)
-          : typeof parsed['text'] === 'string'
-            ? (parsed['text'] as string)
-            : raw;
-    return { thid, text, explicitThid: hasThid };
-  } catch {
-    return { thid: DEFAULT_THID, text: raw, explicitThid: false };
-  }
-}
-
-/** Replay persisted threads as a `conversations` control frame. */
-export function replayConversationList(transport: Sendable, requestId: string | undefined): void {
-  if (!requestId) return;
-  const conversations = listConversations(requestId);
-  if (conversations.length === 0) return;
-  sendStreamControl(transport, {
-    t: 'conversations',
-    threads: conversations.map((c) => ({
-      thid: c.thid,
-      ...(c.title !== undefined ? { title: c.title } : {}),
-      updatedAt: c.updatedAt,
-    })),
-  });
-}
-
-/** Replay one thread's persisted history as a `history` control frame. */
-export function replayConversationHistory(
-  transport: Sendable,
-  requestId: string | undefined,
-  thid: string,
-): void {
-  if (!requestId) return;
-  const conversation = listConversations(requestId).find((c) => c.thid === thid);
-  if (!conversation || conversation.messages.length === 0) return;
-  sendStreamControl(transport, {
-    t: 'history',
-    thid,
-    ...(conversation.title !== undefined ? { title: conversation.title } : {}),
-    messages: conversation.messages.map((m) => {
-      if (m.role === 'tool') {
-        return {
-          role: 'tool' as const,
-          text: '',
-          at: m.at,
-          ...(m.id !== undefined ? { id: m.id } : {}),
-          ...(m.tool !== undefined ? { name: m.tool } : {}),
-          ...(m.command !== undefined ? { command: m.command } : {}),
-          ...(m.output !== undefined ? { output: m.output } : {}),
-        };
-      }
-      if (m.role === 'task') {
-        return {
-          role: 'task' as const,
-          text: '',
-          at: m.at,
-          ...(m.id !== undefined ? { id: m.id } : {}),
-          ...(m.title !== undefined ? { title: m.title } : {}),
-          ...(m.prompt !== undefined ? { prompt: m.prompt } : {}),
-          ...(m.status !== undefined ? { status: m.status } : {}),
-          ...(m.result !== undefined ? { result: m.result } : {}),
-        };
-      }
-      return {
-        role: m.role === 'user' ? ('user' as const) : ('assistant' as const),
-        text: m.text,
-        at: m.at,
-      };
-    }),
-  });
-}

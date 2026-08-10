@@ -1,3 +1,17 @@
+# [ac2-sdk@1.0.0-canary.5](https://github.com/algorandfoundation/ac2/compare/ac2-sdk@1.0.0-canary.4...ac2-sdk@1.0.0-canary.5) (2026-08-07)
+
+
+### Bug Fixes
+
+* always retry connections with backoff and improve debug logs ([c7bce44](https://github.com/algorandfoundation/ac2/commit/c7bce44c76a7105bb1cb1e868b1a5cacb7514007))
+
+# [ac2-sdk@1.0.0-canary.4](https://github.com/algorandfoundation/ac2/compare/ac2-sdk@1.0.0-canary.3...ac2-sdk@1.0.0-canary.4) (2026-08-06)
+
+
+### Features
+
+* ac2-cli and agent runtime isolation ([98ac62f](https://github.com/algorandfoundation/ac2/commit/98ac62f05080d227ff36aad01c41f1b04bd01cac))
+
 # [ac2-sdk@1.0.0-canary.3](https://github.com/algorandfoundation/ac2/compare/ac2-sdk@1.0.0-canary.2...ac2-sdk@1.0.0-canary.3) (2026-07-27)
 
 

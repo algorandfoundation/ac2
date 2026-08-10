@@ -1,30 +1,34 @@
 /**
  * `@ac2/ac2-open-claw-reference` programmatic barrel. The OpenClaw host entry
  * lives in `./entry.js`; this module re-exports it alongside the session,
- * channel, tool, CLI, and provider domains for tests and embedded consumers.
+ * channel, tool, and CLI domains for tests and embedded consumers.
+ *
+ * The connection layer (Liquid Auth / in-memory providers, identity + keystore
+ * persistence, wallet bootstrap) lives in `@algorandfoundation/ac2-cli` and is
+ * imported from there directly — this barrel deliberately does not re-export it.
  */
 
 export {
   signFlow,
   capabilitiesFlow,
-  runAc2Channel,
-  renderPairingQr,
-  renderPairingQr as renderQr,
+  resolveSign,
+  resolveCapabilities,
+  resolveWalletAccount,
   defineToolPlugin,
   getToolPluginMetadata,
   SessionManager,
   NoActiveSessionError,
-  BootstrapError,
-  bootstrapAgentIdentity,
   sessionManager,
   type SignParams,
   type SignResult,
   type SignDeps,
-  type ChannelDeps,
+  type ResolveSignDeps,
+  type ResolveCapabilitiesDeps,
+  type ResolveWalletAccountDeps,
+  type ResolvedWalletAccount,
   type ActiveSession,
   type CapabilitiesResult,
   type ToolContext,
-  type ChannelContext,
   type DefineToolPluginOptions,
   type DefinedToolPluginEntry,
   type ToolPluginExecutionContext,
@@ -34,51 +38,16 @@ export {
 export {
   buildChannelObject,
   AC2_MEDIA_SOURCE_PARAMS,
-  setActiveConversation,
-  clearActiveConversation,
+  getActiveConversation,
   resolveAc2SessionConversation,
   resolveAc2OutboundSessionRoute,
   buildAc2SessionKey,
-  routeInboundToAgent,
-  classifyAgentError,
-  replayConversationList,
-  replayConversationHistory,
-  deriveTaskThid,
-  isTaskThid,
-  registerTask,
-  attachSpawnResult,
-  taskDisplayTitle,
-  taskCardId,
-  getTaskByThid,
-  findTaskByRun,
-  findPendingTaskForParent,
-  markTaskResult,
-  listTasks,
-  resetTasks,
-  TASK_THREAD_PREFIX,
-  emitTaskCardUpdate,
-  registerSubagentHooks,
-  handleSubagentSpawned,
-  handleSubagentEnded,
-  resetSubagentHooksRegistration,
-  watchTaskCompletion,
-  resetTaskWatchers,
-  subagentPolling,
-  readChildResultText,
-  readChildSessionStatus,
-  discoverChildSessionKey,
-  describeSubagentCandidates,
-  sendTaskCard,
-  type Ac2AgentError,
+  DEFAULT_THID,
   type Ac2MediaSourceParams,
   type Ac2SessionConversation,
   type Ac2OutboundSessionRoute,
-  type Ac2Task,
-  type Ac2TaskStatus,
-  type Ac2TaskCardStatus,
-  type ChildSessionStatus,
 } from './channel/index.js';
-export { buildAc2Command } from './cli/index.js';
+export { buildAc2Command, renderPairingQr, renderPairingQr as renderQr } from './cli/index.js';
 export {
   buildSignTool,
   buildCapabilitiesTool,
@@ -124,21 +93,6 @@ export {
   type X402PaymentContext,
   type X402PaymentSelection,
 } from './x402/index.js';
-export type {
-  LiquidAuthChannelProviderOptions,
-  LiquidAuthPairingHandle,
-  PresenceResult,
-  PresenceSocket,
-} from './providers/liquid-auth.js';
-export async function loadLiquidAuthChannelProvider(): Promise<
-  typeof import('./providers/liquid-auth.js')
-> {
-  return import('./providers/liquid-auth.js');
-}
-export {
-  InMemoryChannelProvider,
-  type InMemoryChannelProviderOptions,
-} from './providers/in-memory.js';
 export type {
   Ac2ChannelProvider,
   Ac2PairedChannel,

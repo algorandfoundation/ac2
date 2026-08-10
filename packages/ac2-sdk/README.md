@@ -10,7 +10,11 @@ The SDK is transport-agnostic. The same `Ac2Client` runs over WebRTC DataChannel
 npm install @algorandfoundation/ac2-sdk
 ```
 
-Zero runtime peer dependencies. Works in Node >= 18 and modern browsers.
+The core (`.`, `./schema`, `./protocol`, `./transport`, `./signaling`) and the
+`./providers/in-memory` channel provider have zero runtime peer dependencies
+and work in Node >= 18 and modern browsers. `./providers/liquid-auth` is
+Node-only and pulls in three heavy `optionalDependencies` — see
+[Channel providers](#channel-providers) below.
 
 ## At a glance
 
@@ -173,6 +177,59 @@ const outcome = await client.requestSignature({
 });
 ```
 
+## Channel providers
+
+The SDK ships two concrete `Ac2ChannelProvider` implementations (see [EXTENDING.md](./EXTENDING.md#signaling-providers) for the interface) behind their own subpaths, so importing the core never pulls in a provider's dependencies:
+
+- `@algorandfoundation/ac2-sdk/providers/in-memory` — `InMemoryChannelProvider`. No dependencies; pairs two in-process transports directly. Useful for tests and demos.
+- `@algorandfoundation/ac2-sdk/providers/liquid-auth` — `LiquidAuthChannelProvider`. Bringup over [Liquid Auth](https://github.com/algorandfoundation/liquid-auth) + WebRTC. Node-only.
+
+`LiquidAuthChannelProvider` needs three Node-only packages — `@roamhq/wrtc` (WebRTC bindings), `socket.io-client`, and `@algorandfoundation/liquid-client` — declared as `optionalDependencies` on the SDK. They are loaded via dynamic `import()` only when `startPairing()` actually runs, so:
+
+- Every other entry point (`.`, `./schema`, `./protocol`, `./transport`, `./signaling`, `./providers/in-memory`) works even when none of them are installed (e.g. `npm install --no-optional`, or a bundler that dropped optional deps).
+- If you only need `LiquidAuthChannelProvider` for pairing, install the SDK normally (`optionalDependencies` are installed by default) or add the three packages yourself.
+- A missing package fails `startPairing()` with a clear message naming the exact package to install, instead of a raw `ERR_MODULE_NOT_FOUND`.
+
+```ts
+import { LiquidAuthChannelProvider } from '@algorandfoundation/ac2-sdk/providers/liquid-auth';
+
+const provider = new LiquidAuthChannelProvider({
+  origin: 'https://debug.liquidauth.com',
+  // Optional: persist the signaling session cookie across restarts. When
+  // omitted, the provider keeps it in memory for its own lifetime only — it
+  // still works, it just won't survive a restart. The SDK has no notion of
+  // "application state"; the caller adapts its own persistence to this shape.
+  sessionCookie: {
+    get: (requestId) => myStore.get(requestId),
+    set: (requestId, cookie) => myStore.set(requestId, cookie),
+  },
+});
+
+const handle = await provider.startPairing();
+// Render `handle.pairing.qrPayload` however you like (QR code, deep link,
+// copyable URL, ...) — the provider does not render to a terminal or any
+// other UI; that is entirely the caller's responsibility.
+const { transport } = await handle.connect();
+```
+
+## Runtime adapters
+
+`@algorandfoundation/ac2-sdk/runtime` is the contract a **runtime adapter** implements to plug an agent runtime into the AC2 daemon (`@algorandfoundation/ac2-cli`). The daemon owns the wallet connection; an adapter is handed inbound frames and a small host to send outbound ones, without needing to know anything about pairing, transports, or the control socket:
+
+```ts
+import type { CreateRuntimeAdapter } from '@algorandfoundation/ac2-sdk/runtime';
+
+export const createRuntimeAdapter: CreateRuntimeAdapter = (host, config) => ({
+  id: 'my-adapter',
+  async handleInbound(message) {
+    host.log(`got ${message.payload}`);
+    await host.send('ack');
+  },
+});
+```
+
+Publish that as an npm package and point the daemon at it (`AC2_RUNTIME=my-adapter-package`, or the `runtime.adapter` daemon option) — no changes to the daemon itself are needed. The daemon resolves adapters by short built-in name first (`socket`, the default, wraps the daemon's pre-existing control-socket routing) and falls back to `import()`-ing the string as an npm specifier otherwise. See the module JSDoc in `src/runtime/index.ts` for the full lifecycle (`start` → `onConnected` → `handleInbound` → `onDisconnected` → `stop`) and the `locked` rule.
+
 ## Spec alignment
 
 The SDK targets DIDComm v2 envelopes (per the AC2 spec's Data Model). Two guarantees worth calling out:
@@ -185,6 +242,7 @@ Streaming (raw bytes over a side channel correlated by `thid`) is intentionally 
 ## Documentation
 
 - [EXTENDING.md](./EXTENDING.md): package layout, subpath exports, custom transports, custom message types, signaling providers.
+- [`@algorandfoundation/ac2-cli`](../ac2-cli/README.md): the AC2 service that owns a wallet connection for you, with its [architecture](../ac2-cli/ARCHITECTURE.md) and [control-socket protocol](../ac2-cli/PROTOCOL.md).
 - [CONTRIBUTING.md](../CONTRIBUTING.md): repository structure, build, test, and release workflow.
 
 ## License

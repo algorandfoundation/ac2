@@ -1,6 +1,6 @@
 {
   "name": "@algorandfoundation/ac2-sdk",
-  "version": "1.0.0-canary.3",
+  "version": "1.0.0-canary.5",
   "description": "TypeScript SDK for the AC2 (Agentic Communication and Control) protocol.",
   "keywords": [
     "ac2",
@@ -54,6 +54,18 @@
     "./signaling": {
       "types": "./dist/signaling/index.d.ts",
       "default": "./dist/signaling/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "default": "./dist/runtime/index.js"
+    },
+    "./providers/in-memory": {
+      "types": "./dist/providers/in-memory.d.ts",
+      "default": "./dist/providers/in-memory.js"
+    },
+    "./providers/liquid-auth": {
+      "types": "./dist/providers/liquid-auth.d.ts",
+      "default": "./dist/providers/liquid-auth.js"
     }
   },
   "scripts": {
@@ -70,6 +82,11 @@
   "release": null,
   "dependencies": {
     "ajv": "^8.17.1"
+  },
+  "optionalDependencies": {
+    "@algorandfoundation/liquid-client": "1.0.0-canary.8",
+    "@roamhq/wrtc": "^0.10.0",
+    "socket.io-client": "^4.7.5"
   },
   "devDependencies": {
     "@algorandfoundation/package-releaser": "workspace:*",

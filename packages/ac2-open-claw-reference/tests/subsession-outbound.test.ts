@@ -1,12 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { Ac2Transport } from '@algorandfoundation/ac2-sdk/transport';
-import {
-  buildChannelObject,
-  sessionManager,
-  registerTask,
-  getTaskByThid,
-  resetTasks,
-} from '../src/index.js';
+import { buildChannelObject, sessionManager } from '../src/index.js';
 
 const STX = '\u0002';
 const CONTROLLER = 'did:key:zStubController';
@@ -23,12 +17,18 @@ interface SendTextChannel {
   };
 }
 
-describe('host-initiated outbound (sub-agent completion delivery)', () => {
+/**
+ * The AC2 daemon's `openclaw-gateway` adapter now owns the whole per-turn
+ * run/reply lifecycle; this plugin's `deliverAgentText` only handles
+ * host-initiated (out-of-turn) sends pushed through the channel adapters
+ * (e.g. `messaging.send.text`). These tests exercise that surviving delivery
+ * route directly against `buildChannelObject()`.
+ */
+describe('host-initiated outbound (agent-driven delivery)', () => {
   const baseSent: string[] = [];
   const controlSent: string[] = [];
 
   beforeEach(() => {
-    resetTasks();
     baseSent.length = 0;
     controlSent.length = 0;
   });
@@ -58,9 +58,8 @@ describe('host-initiated outbound (sub-agent completion delivery)', () => {
     });
   }
 
-  it('flips the matching task card to completed with the result inline', async () => {
+  it('delivers a threaded reply as a finalize control frame over the dedicated stream channel', async () => {
     activate(true);
-    const task = registerTask({ parentThid: 'thread-7', task: 'do research', taskName: 'research' });
 
     const channel = buildChannelObject() as unknown as SendTextChannel;
     await channel.message.send.text({
@@ -69,37 +68,24 @@ describe('host-initiated outbound (sub-agent completion delivery)', () => {
       threadId: 'thread-7',
     });
 
-    // A host-driven completion for a still-running task is delivered as the
-    // self-contained task card flipping to `completed` with the result inline —
-    // NOT a separate finalize reply bubble.
+    // A dedicated `ac2-stream` channel is preferred for host-initiated sends,
+    // exactly like it is for the finalize path the daemon drives per-turn.
     expect(baseSent).toHaveLength(0);
     expect(controlSent).toHaveLength(1);
-    const frame = JSON.parse(controlSent[0]!.slice(1));
     expect(controlSent[0]!.startsWith(STX)).toBe(true);
+    const frame = JSON.parse(controlSent[0]!.slice(1));
     expect(frame).toMatchObject({
-      t: 'task',
+      t: 'finalize',
       thid: 'thread-7',
-      status: 'completed',
-      result: 'here is the research result',
+      text: 'here is the research result',
     });
-
-    // The completion announce flips the pending task to completed.
-    expect(getTaskByThid(task.taskThid)?.status).toBe('completed');
-    expect(getTaskByThid(task.taskThid)?.resultText).toBe('here is the research result');
   });
 
-  it('flips the task card over the main transport when no separate stream channel exists', async () => {
+  it('delivers a threaded reply as a raw transport write when no control channel exists', async () => {
     // Regression: with a single DataChannel (no dedicated `ac2-stream`), the
-    // session has no `controlTransport`. The completion for a still-running task
-    // MUST still be emitted as a `t:'task'` control frame over the main transport
-    // so the card flips in place — NOT downgraded to a raw text write, which left
-    // the card stuck `running` and posted a disconnected reply bubble.
+    // session has no `controlTransport` — the send must still reach the
+    // wallet over the main transport rather than being silently dropped.
     activate(false);
-    const task = registerTask({
-      parentThid: 'thread-7',
-      task: 'do research',
-      taskName: 'research',
-    });
 
     const channel = buildChannelObject() as unknown as SendTextChannel;
     await channel.message.send.text({
@@ -109,16 +95,7 @@ describe('host-initiated outbound (sub-agent completion delivery)', () => {
     });
 
     expect(controlSent).toHaveLength(0);
-    expect(baseSent).toHaveLength(1);
-    expect(baseSent[0]!.startsWith(STX)).toBe(true);
-    const frame = JSON.parse(baseSent[0]!.slice(1));
-    expect(frame).toMatchObject({
-      t: 'task',
-      thid: 'thread-7',
-      status: 'completed',
-      result: 'here is the research result',
-    });
-    expect(getTaskByThid(task.taskThid)?.status).toBe('completed');
+    expect(baseSent).toEqual(['here is the research result']);
   });
 
   it('falls back to a raw transport write for untracked agent text when no control channel exists', async () => {

@@ -4,12 +4,22 @@ import { join } from 'node:path';
 
 import qrcode from 'qrcode-terminal';
 import { Ac2Client } from '@algorandfoundation/ac2-sdk';
-import { isValidAddress } from '@algorandfoundation/algokit-utils/common';
 import { resolveConfig, safeLog, type OpenClawApi } from '../runtime.js';
 import { readChannelStatus } from '../setup/config.js';
-import { BootstrapError, bootstrapAgentIdentity } from '../session/bootstrap.js';
-import type { ChannelContext } from '../session/contracts.js';
 import { sessionManager } from '../session/manager.js';
+import type { Sendable } from '../channel/stream.js';
+import { listConversations } from '@algorandfoundation/ac2-cli/identity';
+import {
+  connectAgentSession,
+  connectControl,
+  createDaemonStreamSendable,
+  createDaemonTransport,
+  resolveLogFilePath,
+  type AgentSession,
+  type ControlClient,
+  type ControlEvents,
+} from '@algorandfoundation/ac2-cli/control';
+import { sendNotice } from '../channel/index.js';
 import { ensureGitSignBridge, gitSignSocketPath, resolveAc2StateDir } from '../git/bridge.js';
 import { toAuthorizedKeyLine } from '../git/sshsig.js';
 import {
@@ -24,33 +34,6 @@ import {
   resolveWalletSigningPublicKey,
   writeGitSigningAssets,
 } from '../git/config.js';
-import {
-  clearAc2State,
-  ensureConversation,
-  listConnections,
-  listConversations,
-  loadAc2State,
-  saveAc2State,
-  setConnectionIdentity,
-  touchConnection,
-} from '../identity/state.js';
-import { normalizeDidKey, resolveStableControllerDid } from '../identity/did.js';
-import { decideControllerBinding } from '../identity/binding.js';
-import {
-  clearAgentIdentities,
-  hasAgentIdentity,
-  recordAgentIdentity,
-} from '../identity/keystore.js';
-import {
-  DEFAULT_THID,
-  clearActiveConversation,
-  replayConversationHistory,
-  replayConversationList,
-  routeInboundToAgent,
-  sendNotice,
-  setActiveConversation,
-  warmUpAgent,
-} from '../channel/index.js';
 
 /**
  * Banner notice shown when the wallet has not granted the agent an identity
@@ -74,47 +57,31 @@ const CONTROLLER_LOCKED_NOTICE =
   'automatically. To let this wallet take over, the operator must clear the ' +
   'agent keys on the server (`ac2 forget`).';
 
-const NODE_MODULE_LOAD_ERROR_CODES = new Set(['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND']);
 const ROAMHQ_WRTC_PACKAGE_PATTERN = /@roamhq\/wrtc(?:-[a-z0-9-]+)?/i;
 
 /**
- * Decide whether to seed the *stable* connection id from a freshly-minted
- * Liquid Auth `requestId`.
+ * Detect a "missing `@roamhq/wrtc`" failure reported by the AC2 daemon while
+ * starting a Liquid Auth pairing cycle.
  *
- * The Liquid Auth `requestId` is a one-shot pairing nonce: once a wallet has
- * linked and the WebRTC session has been established, that same id can no
- * longer be re-linked. We therefore let the provider mint a fresh `requestId`
- * on every pairing cycle, but keep a single stable connection id — seeded from
- * the very first pairing — to key on-disk persistence (identity, conversation
- * history). Only seed it when one is not already persisted, so reconnects never
- * rotate the connection id (and never orphan its history).
+ * The daemon (not this plugin) is the process that actually loads WebRTC now,
+ * so this failure arrives here as a `ControlRequestError` from
+ * `session.startPairing()` — the daemon's original NodeJS error (with its
+ * `code`, e.g. `ERR_MODULE_NOT_FOUND`) never crosses the control socket: the
+ * protocol normalizes every daemon-side failure to a generic error code and
+ * keeps only the message text (see `control/server.ts`'s `toErrorMessage`).
+ * Matching is therefore message-only.
  */
-export function shouldSeedConnectionId(
-  persistedConnectionId: string | undefined,
-  usedRequestId: unknown,
-): usedRequestId is string {
-  return (
-    (persistedConnectionId === undefined || persistedConnectionId.length === 0) &&
-    typeof usedRequestId === 'string' &&
-    usedRequestId.length > 0
-  );
-}
-
 export function isMissingWebRtcError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
 
   const message = err.message;
-  const code = (err as { code?: unknown }).code;
-  const isNodeModuleLoadError =
-    typeof code === 'string' &&
-    NODE_MODULE_LOAD_ERROR_CODES.has(code) &&
-    ROAMHQ_WRTC_PACKAGE_PATTERN.test(message);
-
-  const isMissingWrtcBinary =
+  const looksLikeModuleLoadFailure =
+    /cannot find (package|module)/i.test(message) && ROAMHQ_WRTC_PACKAGE_PATTERN.test(message);
+  const looksLikeMissingBinary =
     message.startsWith('Could not find wrtc binary on any of the paths:') &&
     ROAMHQ_WRTC_PACKAGE_PATTERN.test(message);
 
-  return isNodeModuleLoadError || isMissingWrtcBinary;
+  return looksLikeModuleLoadFailure || looksLikeMissingBinary;
 }
 
 function webRtcUnavailableInstructions(): string {
@@ -122,11 +89,14 @@ function webRtcUnavailableInstructions(): string {
     'AC2 pairing could not load the @roamhq/wrtc WebRTC module for this platform.',
     '',
     '@roamhq/wrtc ships prebuilt binaries, so this usually means the matching',
-    'platform package was not installed. Refresh the npm-installed plugin to fetch it:',
+    'platform package was not installed on the machine running the AC2 daemon.',
+    'Refresh the daemon (reinstalls `@algorandfoundation/ac2-cli` and its',
+    'platform-specific optional dependencies):',
     '',
     '```bash',
-    'openclaw plugins update ac2',
-    'openclaw plugins enable ac2',
+    'ac2 service stop',
+    'npm install -g @algorandfoundation/ac2-cli@latest',
+    'ac2 service start',
     '```',
     '',
     'If this persists, this platform may not have a published @roamhq/wrtc prebuilt binary.',
@@ -148,6 +118,95 @@ export function tokenizeArgs(raw: string): string[] {
   return tokens;
 }
 
+/** Shown when `pair` could not reach the daemon, even after trying to auto-start it. */
+function daemonUnreachableText(err: unknown): string {
+  const reason = err instanceof Error ? err.message : String(err);
+  return [
+    'Could not reach the AC2 daemon (auto-start was attempted and failed).',
+    '',
+    `Reason: ${reason}`,
+    '',
+    'Start it manually and check the log for details:',
+    '  ac2 service start',
+    `  ${resolveLogFilePath()}`,
+  ].join('\n');
+}
+
+/** Render a Liquid Auth pairing payload as a QR + raw URL invitation. */
+async function buildInvitationText(pairing: { qrPayload: string }): Promise<string> {
+  const qr = await new Promise<string>((resolve) => {
+    qrcode.generate(pairing.qrPayload, { small: true }, (rendered) => resolve(rendered));
+  });
+  return [
+    'AC2 Pairing Invitation',
+    '',
+    qr,
+    '',
+    `Pairing URL: ${pairing.qrPayload}`,
+    '',
+    'Scan the QR code with your AC2 Controller. The channel will activate once paired.',
+  ].join('\n');
+}
+
+/**
+ * Render the invitation of the pairing cycle the daemon ALREADY owns.
+ *
+ * `daemon.status` exposes it read-only, so this never starts (or restarts) a
+ * cycle — which is what makes it safe to show a scannable code even while a
+ * wallet is connected: the daemon keeps the cycle and its `requestId` armed so
+ * the wallet can re-link without a fresh cycle being minted here. Returns
+ * `undefined` when no cycle is armed yet, or when the status read fails
+ * (purely cosmetic, never fatal).
+ */
+async function renderCurrentInvitation(session: AgentSession): Promise<string | undefined> {
+  try {
+    const status = await session.status();
+    if (!status.pairing) return undefined;
+    return await buildInvitationText(status.pairing);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Reconstruct the equivalent of a `connection.connected` event from a session
+ * that was ALREADY connected at `agent.hello` time — there is no event to
+ * wait on in that case, since it fired (for a different control-socket
+ * client) before this process even started.
+ */
+function synthesizeConnectedEvent(session: AgentSession): ControlEvents['connection.connected'] | null {
+  const conn = session.connection;
+  // A connected snapshot always carries its requestId; the null-check keeps the
+  // (wider) snapshot type and the (narrower) event type honest.
+  if (conn.state !== 'connected' || conn.requestId === null) return null;
+  return {
+    requestId: conn.requestId,
+    controllerDid: conn.controllerDid,
+    walletAddress: conn.walletAddress,
+    locked: conn.locked,
+    identityGranted: session.identity !== null,
+    agentDid: session.identity?.agentDid ?? null,
+  };
+}
+
+/** Connect to the daemon control socket read-only; `undefined` if it isn't running. */
+async function connectReadOnly(): Promise<ControlClient | undefined> {
+  try {
+    return await connectControl({ timeoutMs: 500 });
+  } catch {
+    return undefined;
+  }
+}
+
+function daemonNotRunningText(): string {
+  return [
+    'AC2 daemon is not running (this is a read-only command, so it was not auto-started).',
+    '',
+    'Start it with: ac2 service start',
+    `Log file: ${resolveLogFilePath()}`,
+  ].join('\n');
+}
+
 export function buildAc2Command(api: OpenClawApi): unknown {
   return {
     name: 'ac2',
@@ -165,7 +224,6 @@ export function buildAc2Command(api: OpenClawApi): unknown {
 
       if (sub === 'status') {
         const channelStatus = readChannelStatus();
-        const active = sessionManager.getActive();
         const lines = [
           'Channel: ac2',
           `Config: ${channelStatus.configPath}`,
@@ -174,59 +232,89 @@ export function buildAc2Command(api: OpenClawApi): unknown {
           `Bound to agent: ${channelStatus.bound ? 'yes' : 'no'}`,
           `Ready: ${channelStatus.ready ? 'yes' : 'no'}`,
           `Liquid Auth server: ${channelStatus.liquidAuthServer} (${channelStatus.liquidAuthServerSource})`,
-          `Online: ${active ? 'yes' : 'no'}`,
         ];
-        if (active) {
-          lines.push(`Agent DID: ${active.agentDid}`);
-          lines.push(`Controller DID: ${active.controllerDid}`);
-          if (active.requestId) lines.push(`Connection: ${active.requestId}`);
-          if (active.locked) {
-            lines.push(
-              'Locked: yes (a different wallet is connecting; run `ac2 forget` to re-register)',
-            );
-          }
+
+        const client = await connectReadOnly();
+        if (!client) {
+          lines.push('', daemonNotRunningText());
+          return { text: lines.join('\n') };
         }
-        const connections = listConnections();
-        lines.push(`Known connections: ${connections.length}`);
+        try {
+          const status = await client.request('daemon.status', {});
+          const { connections } = await client.request('connections.list', {});
+          lines.push(`Daemon: running (pid ${status.pid})`);
+          lines.push(`Daemon service DID: ${status.serviceDid ?? '(none yet)'}`);
+          lines.push(`Online: ${status.connection.state === 'connected' ? 'yes' : 'no'}`);
+          if (status.connection.state === 'connected') {
+            const active = connections.find((c) => c.requestId === status.connection.requestId);
+            if (active?.agentDid) lines.push(`Agent DID: ${active.agentDid}`);
+            lines.push(`Controller DID: ${status.connection.controllerDid ?? '(unknown)'}`);
+            if (status.connection.requestId) lines.push(`Connection: ${status.connection.requestId}`);
+            if (status.connection.locked) {
+              lines.push(
+                'Locked: yes (a different wallet is connecting; run `ac2 forget` to re-register)',
+              );
+            }
+          }
+          lines.push(`Known connections: ${connections.length}`);
+        } finally {
+          client.close();
+        }
         return { text: lines.join('\n') };
       }
 
       if (sub === 'connections') {
-        const connections = listConnections();
-        if (connections.length === 0) {
-          return { text: 'No connections recorded yet.' };
-        }
-        const active = sessionManager.getActive();
-        const lines: string[] = [`AC2 connections (${connections.length}):`, ''];
-        for (const conn of connections) {
-          const isActive = active?.requestId === conn.requestId;
-          lines.push(`• ${conn.requestId}${isActive ? '  [active]' : ''}`);
-          if (conn.identity) {
-            lines.push(`    agent DID:      ${conn.identity.agentDid}`);
-            lines.push(`    controller DID: ${conn.identity.controllerDid}`);
-            lines.push(`    public key:     ${conn.identity.publicKey}`);
-            lines.push(
-              `    has material:   ${hasAgentIdentity(conn.identity.agentDid) ? 'yes (keystore)' : 'no'}`,
-            );
-          } else {
-            lines.push('    (no identity granted yet)');
+        const client = await connectReadOnly();
+        if (!client) return { text: daemonNotRunningText() };
+        try {
+          const { connections } = await client.request('connections.list', {});
+          if (connections.length === 0) {
+            return { text: 'No connections recorded yet.' };
           }
-          const conversations = listConversations(conn.requestId);
-          lines.push(`    conversations:  ${conversations.length}`);
-          for (const convo of conversations) {
-            const title = convo.title ?? '(untitled)';
-            lines.push(`      - ${convo.thid}: "${title}" (${convo.messages.length} msgs)`);
+          const status = await client.request('daemon.status', {});
+          const activeRequestId =
+            status.connection.state === 'connected' ? status.connection.requestId : null;
+          const lines: string[] = [`AC2 connections (${connections.length}):`, ''];
+          for (const conn of connections) {
+            const isActive = activeRequestId === conn.requestId;
+            lines.push(`• ${conn.requestId}${isActive ? '  [active]' : ''}`);
+            if (conn.agentDid) {
+              lines.push(`    agent DID:      ${conn.agentDid}`);
+              lines.push(`    controller DID: ${conn.controllerDid}`);
+            } else {
+              lines.push('    (no identity granted yet)');
+            }
+            // Conversation history still lives in the shared AC2 state dir
+            // (see the `channel/conversation.ts` import below) — both the
+            // daemon and this plugin write it. Follow-up: move it behind a
+            // `connections.*` control method so the plugin never touches the
+            // state dir directly.
+            const conversations = listConversations(conn.requestId);
+            lines.push(`    conversations:  ${conversations.length}`);
+            for (const convo of conversations) {
+              const title = convo.title ?? '(untitled)';
+              lines.push(`      - ${convo.thid}: "${title}" (${convo.messages.length} msgs)`);
+            }
+            lines.push('');
           }
-          lines.push('');
+          return { text: lines.join('\n').trimEnd() };
+        } finally {
+          client.close();
         }
-        return { text: lines.join('\n').trimEnd() };
       }
 
       if (sub === 'forget') {
         sessionManager.clearActive();
-        clearAc2State();
-        clearAgentIdentities();
-        return { text: 'Pairing record cleared.' };
+        const client = await connectReadOnly();
+        if (!client) {
+          return { text: `${daemonNotRunningText()}\n\nNothing to forget locally.` };
+        }
+        try {
+          await client.request('connections.forget', { all: true });
+          return { text: 'Pairing record cleared.' };
+        } finally {
+          client.close();
+        }
       }
 
       if (sub === 'github-key') {
@@ -314,7 +402,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
             ...header,
             `Applied ${entries.length} git config setting(s) to ${where}:`,
             '',
-            ...entries.map(([k]) => `  \u2713 ${k}`),
+            ...entries.map(([k]) => `  ✓ ${k}`),
             ...(parsed.pat
               ? ['', '`git push` will authenticate over HTTPS with the stored token.']
               : []),
@@ -330,486 +418,212 @@ export function buildAc2Command(api: OpenClawApi): unknown {
       if (sub === 'pair') {
         const cfg = resolveConfig(api);
 
-        // Warm up the runtime while the user is scanning the QR.
-        await warmUpAgent(api, '__warmup__');
+        /**
+         * Commit new pairings to the AC2 daemon's built-in `openclaw-gateway`
+         * runtime adapter instead of the legacy `socket` adapter, so the
+         * daemon drives the whole run/reply lifecycle over the gateway and
+         * pushes replies to the wallet itself.
+         *
+         * (a) `ensureDaemonRunning`/`connectAgentSession` below auto-start the
+         *     daemon by spawning `node <cli> service run` with `env: process.env`
+         *     (see ac2-cli's `control/agent.ts`), so a freshly spawned daemon
+         *     inherits this env var directly — nothing else needs to change here.
+         * (b) The actual gateway connection (`OPENCLAW_GATEWAY_URL` /
+         *     `OPENCLAW_GATEWAY_PORT` / `OPENCLAW_GATEWAY_TOKEN`) is resolved by
+         *     the daemon's `openclaw-gateway` adapter from ITS OWN inherited
+         *     env/defaults. There is no host-API gateway lookup in this plugin
+         *     to wire up — do not invent one.
+         * (c) This ONLY takes effect on a freshly auto-started daemon: an
+         *     ALREADY-running daemon keeps whatever adapter it was started
+         *     with (auto-start only spawns a process when none is running).
+         *     If the daemon was started before this change (or with
+         *     `AC2_RUNTIME=socket`), stop it first (`ac2 service stop`) and
+         *     re-run `pair` so the new daemon picks up the gateway adapter.
+         * (d) Operators can opt back out at any time with `AC2_RUNTIME=socket`
+         *     set before the daemon starts, to roll back to the legacy
+         *     in-process-routed adapter.
+         */
+        process.env['AC2_RUNTIME'] ??= 'openclaw-gateway';
 
-        const origin = cfg.liquidAuthServer ?? 'https://debug.liquidauth.com';
-        const startPairingCycle = async (): Promise<{
-          pairing: import('@algorandfoundation/ac2-sdk/signaling').Ac2PairingInfo;
-          connect: () => Promise<import('@algorandfoundation/ac2-sdk/signaling').Ac2PairedChannel>;
-          /** Whether the provider's persistent signaling socket is still live. */
-          isSignalingAlive: () => boolean;
-          /** Fully tear down the provider's signaling socket + peer. */
-          dispose: () => Promise<void>;
-          qrString: string;
-        }> => {
-          // Reuse the persisted Liquid Auth requestId across pairing cycles so
-          // a previously-paired wallet can reconnect without re-running its
-          // FIDO2 passkey assertion — mirroring the debug app, which keeps a
-          // stable requestId and just renegotiates. The signaling server now
-          // supports reconnecting on the same requestId (presence + `auth`
-          // re-announce + an always-waiting `link`), so the id is no longer a
-          // one-shot nonce: the wallet remembers the requestId it authenticated
-          // for and re-links to it, and the server re-announces the wallet's
-          // `auth` so this offer side resolves and both peers just renegotiate
-          // the WebRTC session (no new passkey). On the very first pairing there
-          // is nothing persisted yet, so the provider mints a fresh id which is
-          // then seeded as the stable connection id (see `shouldSeedConnectionId`)
-          // and reused on every subsequent cycle.
-          const persistedConnectionId = loadAc2State().requestId;
-          const { LiquidAuthChannelProvider } = await import('../providers/liquid-auth.js');
-          const provider: import('@algorandfoundation/ac2-sdk/signaling').Ac2ChannelProvider =
-            new LiquidAuthChannelProvider({
-              origin,
-              ...(persistedConnectionId ? { requestId: persistedConnectionId } : {}),
-            });
-          // Cast to surface the LiquidAuth provider's optional persistent-
-          // signaling lifecycle hooks (the base `Ac2ChannelProvider` return
-          // type omits them). Optional so any other provider still works.
-          const handle = (await provider.startPairing({
-            timeoutMs: cfg.defaultTimeoutMs ?? 120_000,
-          })) as import('@algorandfoundation/ac2-sdk/signaling').Ac2PairingHandle & {
-            isSignalingAlive?(): boolean;
-            dispose?(): Promise<void>;
-          };
-          const usedRequestId = handle.pairing.metadata?.['requestId'];
-          if (shouldSeedConnectionId(persistedConnectionId, usedRequestId)) {
-            saveAc2State({ requestId: usedRequestId });
-          }
-          const qr = await new Promise<string>((resolve) => {
-            qrcode.generate(handle.pairing.qrPayload, { small: true }, (rendered) => {
-              resolve(rendered);
-            });
+        const timeoutOpt =
+          cfg.defaultTimeoutMs !== undefined ? { timeoutMs: cfg.defaultTimeoutMs } : {};
+
+        let session: AgentSession;
+        try {
+          session = await connectAgentSession({
+            agent: 'openclaw',
+            host: 'openclaw',
+            autoStart: true,
+            ...timeoutOpt,
           });
-          return {
-            pairing: handle.pairing,
-            connect: handle.connect,
-            // Fall back gracefully for providers that don't expose the optional
-            // persistent-signaling lifecycle hooks (e.g. an in-memory provider):
-            // treat signaling as never-reusable so the loop always rebuilds.
-            isSignalingAlive: () => handle.isSignalingAlive?.() ?? false,
-            dispose: () => handle.dispose?.() ?? Promise.resolve(),
-            qrString: qr,
-          };
+        } catch (err) {
+          return { text: daemonUnreachableText(err) };
+        }
+
+        // Serve the git-signing bridge for the whole command's lifetime, not
+        // just while a session is active: an idle bridge answers
+        // `no_active_session` (clear, actionable) instead of leaving a dead
+        // socket that makes the `ac2-ssh-sign` shim fail with "cannot reach
+        // the bridge" after a gateway restart. Idempotent — safe to call again
+        // once the session activates.
+        ensureGitSignBridge(cfg, { manager: sessionManager });
+
+        // A single control-socket transport/client for the WHOLE command's
+        // lifetime: unlike the old embedded path, the daemon owns reconnects,
+        // so `transport`/`client` are never rebuilt across a wallet drop —
+        // only `sessionManager`'s active session flips on `connection.*`.
+        const transport = createDaemonTransport(session);
+        // Wallets that negotiated no `ac2-stream` DataChannel make every
+        // stream-channel send undeliverable; re-send those frames on the main
+        // transport so control frames (notices, replays, previews) are never
+        // silently dropped — the embedded path had the same fallback, it just
+        // knew up front whether a stream channel existed.
+        const streamSendable = createDaemonStreamSendable(session, {
+          onUndeliverable: (payload) => transport.send(payload),
+        });
+        const client = new Ac2Client(transport);
+
+        // Prefer the dedicated stream channel for surfacing notices, exactly
+        // like the delivery path in `channel-object.ts` does — it carries
+        // control frames (preview/finalize/notice/…) separately from the main
+        // AC2 protocol transport.
+        const replySendable = (): Sendable => (streamSendable.isOpen ? streamSendable : transport);
+
+        const activate = (event: ControlEvents['connection.connected']): void => {
+          const controllerDid = event.controllerDid ?? 'did:key:zAc2Controller';
+          const agentDid = event.agentDid ?? 'did:ac2:agent';
+          const requestId = event.requestId ?? undefined;
+          const walletAddress = event.walletAddress ?? undefined;
+
+          sessionManager.setActive({
+            transport,
+            client,
+            controllerDid,
+            agentDid,
+            identityGranted: event.identityGranted,
+            locked: event.locked,
+            controlTransport: streamSendable,
+            ...(walletAddress !== undefined ? { walletAddress } : {}),
+            ...(requestId !== undefined ? { requestId } : {}),
+          });
+          safeLog(
+            api,
+            'info',
+            `[ac2] Channel paired and active. agentDid=${agentDid} controllerDid=${controllerDid}`,
+          );
+
+          const reply = replySendable();
+          if (event.locked) {
+            // A foreign wallet is locked out: surface a banner only (no chat
+            // message). The daemon's `openclaw-gateway` adapter is the one
+            // deciding whether to route this connection's turns to the
+            // agent — this plugin only surfaces the banner here.
+            sendNotice(reply, {
+              code: 'controller_locked',
+              level: 'warning',
+              title: 'New wallet not registered',
+              text: CONTROLLER_LOCKED_NOTICE,
+            });
+          } else {
+            if (!event.identityGranted) {
+              // Not registered (no identity granted yet): surface a banner
+              // only (no chat message). The wallet uses this code to block
+              // new messages until an identity is granted.
+              sendNotice(reply, {
+                code: 'identity_missing',
+                level: 'warning',
+                title: 'Not registered',
+                text: NO_IDENTITY_NOTICE,
+              });
+            }
+          }
         };
 
-        const buildInvitationText = (
-          pairing: import('@algorandfoundation/ac2-sdk/signaling').Ac2PairingInfo,
-          qrString: string,
-        ): string =>
-          [
-            'AC2 Pairing Invitation',
-            '',
-            qrString,
-            '',
-            `Pairing URL: ${pairing.qrPayload}`,
-            '',
-            'Scan the QR code with your AC2 Controller. The channel will activate once paired.',
-          ].join('\n');
+        session.on('connection.connected', activate);
+        session.on('connection.disconnected', (event) => {
+          safeLog(
+            api,
+            'info',
+            `[ac2] Wallet disconnected (${event.reason}). The daemon owns reconnect — waiting for ` +
+              'the next connection.',
+          );
+          sessionManager.clearActive();
+        });
 
-        let firstCycle: Awaited<ReturnType<typeof startPairingCycle>>;
+        const already = synthesizeConnectedEvent(session);
+        if (already) {
+          /**
+           * Already paired AND connected: there is nothing for this command to
+           * do, so report the live session and EXIT instead of holding the
+           * shell open. Holding would be pointless — the daemon owns the
+           * connection, its reconnects and (under the `openclaw-gateway`
+           * adapter) the whole run/reply lifecycle, so this process is not
+           * required for the wallet to keep working.
+           *
+           * Deliberately no `activate(...)` here: the local `sessionManager`
+           * (and the notice frames it would push) only live as long as this
+           * process, which is about to exit — and the daemon already surfaces
+           * lock/identity state to the wallet itself. The lock hint below is
+           * printed for the operator instead.
+           */
+          const lines = [
+            'AC2 daemon already has an active wallet connection — session is active.',
+            '',
+            `Controller DID: ${already.controllerDid ?? '(unknown)'}`,
+          ];
+          if (already.agentDid) lines.push(`Agent DID:      ${already.agentDid}`);
+          if (already.walletAddress) lines.push(`Wallet:         ${already.walletAddress}`);
+          if (already.locked) {
+            lines.push(
+              '',
+              'Locked: a different wallet is connected — run `openclaw ac2 forget` to re-register.',
+            );
+          }
+          // Show the live invitation anyway: `pair` is the command an operator
+          // reaches for to get a code, and the daemon keeps its cycle armed
+          // while connected, so there is always something scannable to render.
+          const invitation = await renderCurrentInvitation(session);
+          if (invitation) lines.push('', invitation);
+          lines.push(
+            '',
+            'Nothing to do — the daemon owns this connection. Use `openclaw ac2 status` to inspect it,',
+            'or `openclaw ac2 forget` to drop the pairing and re-pair.',
+          );
+          // Release the control socket so the process can exit immediately: no
+          // `keepAlive`, since there is no pairing to wait for.
+          await session.close();
+          return { text: lines.join('\n') };
+        }
+
+        let pairing: { requestId: string; qrPayload: string; origin: string };
         try {
-          firstCycle = await startPairingCycle();
+          pairing = await session.startPairing(timeoutOpt);
         } catch (err) {
           if (isMissingWebRtcError(err)) {
             return { text: webRtcUnavailableInstructions() };
           }
-          throw err;
+          const reason = err instanceof Error ? err.message : String(err);
+          return {
+            text: [
+              'AC2 daemon rejected the pairing request.',
+              '',
+              `Reason: ${reason}`,
+              '',
+              `Check the daemon log for details: ${resolveLogFilePath()}`,
+            ].join('\n'),
+          };
         }
 
-        const context: ChannelContext = {
-          logger: {
-            info: (m) => safeLog(api, 'info', m),
-            error: (m) => safeLog(api, 'error', m),
-          },
-          async receive(text) {
-            // Routing happens in `transport.onRawMessage` below.
-            safeLog(api, 'info', `Received chat from wallet: ${text}`);
-          },
-          onOutput(_handler) {
-            // Outbound is wired by the channel object's `sendText`.
-          },
-        };
+        // A rebuilt pairing cycle (e.g. after a signaling-server outage) mints
+        // a fresh QR — re-render it so the operator can rescan.
+        session.on('connection.pairing', (p) => {
+          void (async () => {
+            // eslint-disable-next-line no-console
+            console.log('\n' + (await buildInvitationText(p)));
+          })();
+        });
 
-        const runConnectedSession = async (
-          connect: () => Promise<import('@algorandfoundation/ac2-sdk/signaling').Ac2PairedChannel>,
-        ): Promise<void> => {
-          let paired: import('@algorandfoundation/ac2-sdk/signaling').Ac2PairedChannel | undefined;
-          try {
-            const connected = await connect();
-            paired = connected;
-            const { transport, streamChannel: streamTransport } = connected;
-            const client = new Ac2Client(transport);
-
-            const connectionRequestId = loadAc2State().requestId;
-            if (connectionRequestId) touchConnection(connectionRequestId);
-
-            const peerDidOpt =
-              connected.peer?.did !== undefined ? { peerDid: connected.peer.did } : {};
-            const timeoutOpt =
-              cfg.defaultTimeoutMs !== undefined ? { timeoutMs: cfg.defaultTimeoutMs } : {};
-
-            // Prefer the wallet from the Liquid Auth `link` response as `controllerDid`.
-            const connectedAccount =
-              typeof connected.peer?.['wallet'] === 'string'
-                ? (connected.peer['wallet'] as string)
-                : undefined;
-            const walletAddress =
-              connectedAccount !== undefined && isValidAddress(connectedAccount)
-                ? connectedAccount
-                : undefined;
-            const connectedAccountDid =
-              connectedAccount !== undefined
-                ? normalizeDidKey(`did:key:${connectedAccount}`)
-                : connected.peer?.did !== undefined
-                  ? normalizeDidKey(connected.peer.did)
-                  : undefined;
-
-            // Reuse a stored identity for this connection, otherwise bootstrap.
-            const storedIdentity =
-              (connectionRequestId
-                ? loadAc2State().connections?.[connectionRequestId]?.identity
-                : undefined) ?? loadAc2State().identity;
-            // The controller this agent install is already registered to (the
-            // first wallet that ever granted it an identity). A *different*
-            // controller must not be able to take over — see `decideControllerBinding`.
-            const boundControllerDid = loadAc2State().identity?.controllerDid
-              ? normalizeDidKey(loadAc2State().identity!.controllerDid)
-              : undefined;
-            const bindingDecision = decideControllerBinding({
-              boundControllerDid,
-              connectedAccountDid,
-              hasStoredIdentity: storedIdentity !== undefined,
-            });
-            // Placeholders — overridden on a granted identity, else session goes active
-            // with `identityGranted = false` so the agent can explain.
-            let agentDid = 'did:ac2:agent';
-            let controllerDid = connectedAccountDid ?? 'did:key:zAc2Controller';
-            let identityGranted = true;
-            let locked = false;
-            if (bindingDecision === 'locked') {
-              // A different wallet is connecting to an already-registered agent.
-              // Refuse the takeover: do NOT reuse the bound identity and do NOT
-              // bootstrap a fresh one. Route the (blocked) session under the
-              // foreign controller's own DID so nothing can touch the bound
-              // controller's OpenClaw session/context.
-              locked = true;
-              identityGranted = false;
-              controllerDid = connectedAccountDid ?? 'did:key:zAc2Controller';
-              safeLog(
-                api,
-                'warn',
-                `[ac2] Refusing controller ${connectedAccountDid} — agent is already registered ` +
-                `to ${boundControllerDid}. Operator must clear keys (\`ac2 forget\`) to re-register.`,
-              );
-            } else if (bindingDecision === 'reuse' && storedIdentity) {
-              ({ agentDid } = storedIdentity);
-              // Anchor the session key (`ac2:<controllerDid>:<thid>`) to the
-              // identity bound at grant time so a presence-only reconnect —
-              // which may omit the wallet address and fall back to a
-              // differently-encoded peer DID — cannot rotate `controllerDid`
-              // and make the agent reload a different, empty OpenClaw session
-              // (i.e. "forget" the thread's context).
-              controllerDid = resolveStableControllerDid({
-                storedControllerDid: storedIdentity.controllerDid,
-                connectedAccountDid,
-              });
-              if (
-                connectedAccountDid !== undefined &&
-                connectedAccountDid !== storedIdentity.controllerDid
-              ) {
-                safeLog(
-                  api,
-                  'warn',
-                  `[ac2] linked account ${connectedAccountDid} differs from the granted ` +
-                  `controller ${storedIdentity.controllerDid}; keeping the granted identity ` +
-                  'to preserve conversation context.',
-                );
-              }
-              // Migrate legacy plaintext material into the keystore.
-              if (storedIdentity.material && !hasAgentIdentity(agentDid)) {
-                await recordAgentIdentity({
-                  agentDid,
-                  publicKey: storedIdentity.publicKey,
-                  material: storedIdentity.material,
-                });
-              }
-              safeLog(api, 'info', '[ac2] Reusing persisted agent identity.');
-            } else {
-              let bootstrapped: Awaited<ReturnType<typeof bootstrapAgentIdentity>> | undefined;
-              try {
-                bootstrapped = await bootstrapAgentIdentity(client, {
-                  ...peerDidOpt,
-                  ...timeoutOpt,
-                });
-              } catch (err) {
-                if (err instanceof BootstrapError) {
-                  identityGranted = false;
-                  safeLog(
-                    api,
-                    'warn',
-                    `[ac2] No agent identity granted: ${err.message}. Keeping channel open to explain.`,
-                  );
-                } else {
-                  throw err;
-                }
-              }
-              if (bootstrapped) {
-                agentDid = bootstrapped.agentDid;
-                // Refuse to bind on a `KeyResponse.from` mismatch — a spoofed `from`
-                // is a security failure, not a missing identity.
-                if (
-                  connectedAccountDid !== undefined &&
-                  bootstrapped.controllerDid !== connectedAccountDid
-                ) {
-                  throw new BootstrapError(
-                    `[ac2-open-claw] KeyResponse.from (${bootstrapped.controllerDid}) does not match ` +
-                    `the linked account (${connectedAccountDid}); refusing to grant identity.`,
-                  );
-                }
-                controllerDid = connectedAccountDid ?? bootstrapped.controllerDid;
-                const material = bootstrapped.response.body.material;
-                if (material !== undefined) {
-                  await recordAgentIdentity({
-                    agentDid,
-                    publicKey: bootstrapped.response.body.public_key,
-                    material,
-                  });
-                }
-                const grantedIdentity = {
-                  agentDid,
-                  controllerDid,
-                  publicKey: bootstrapped.response.body.public_key,
-                };
-                if (connectionRequestId) {
-                  setConnectionIdentity(connectionRequestId, grantedIdentity);
-                } else {
-                  saveAc2State({ identity: grantedIdentity });
-                }
-              }
-            }
-            // Adapter to give `streamChannel` a `send` + `isOpen` surface.
-            const streamSendable = streamTransport
-              ? {
-                send: (payload: string) => streamTransport.send(payload),
-                get isOpen() {
-                  return streamTransport.readyState === 'open';
-                },
-              }
-              : undefined;
-            const controlSendable = streamSendable ?? transport;
-
-            sessionManager.setActive({
-              transport,
-              client,
-              controllerDid,
-              agentDid,
-              identityGranted,
-              locked,
-              // The stream control surface used by host-initiated outbound sends
-              // (e.g. sub-agent completion announces) to emit thread-scoped
-              // `finalize` frames instead of raw, thread-less transport writes.
-              ...(streamSendable ? { controlTransport: streamSendable } : {}),
-              ...(walletAddress ? { walletAddress } : {}),
-              ...(connectionRequestId ? { requestId: connectionRequestId } : {}),
-            });
-            // Serve git SSH-signing requests (`ac2-ssh-sign` shim) while a
-            // session is active. Idempotent across reconnect cycles.
-            ensureGitSignBridge(cfg);
-            safeLog(
-              api,
-              'info',
-              `[ac2] Channel paired and active. agentDid=${agentDid} controllerDid=${controllerDid}`,
-            );
-
-            client.updateHandlers({
-              'ac2/ConversationOpen': (msg) => {
-                const openThid =
-                  typeof (msg.body as any)?.thid === 'string' && (msg.body as any).thid.length > 0
-                    ? ((msg.body as any).thid as string)
-                    : msg.thid;
-                if (!openThid) return;
-                const title =
-                  typeof (msg.body as any)?.title === 'string'
-                    ? ((msg.body as any).title as string)
-                    : undefined;
-                setActiveConversation(controllerDid, openThid, connectionRequestId);
-                if (connectionRequestId) ensureConversation(connectionRequestId, openThid, title);
-                safeLog(
-                  api,
-                  'info',
-                  `[ac2] Conversation opened (thid=${openThid}${title ? `, title="${title}"` : ''}).`,
-                );
-                replayConversationHistory(controlSendable, connectionRequestId, openThid);
-              },
-              'ac2/ConversationClose': (msg) => {
-                const closeThid =
-                  typeof (msg.body as any)?.thid === 'string' && (msg.body as any).thid.length > 0
-                    ? ((msg.body as any).thid as string)
-                    : msg.thid;
-                if (!closeThid) return;
-                clearActiveConversation(controllerDid, closeThid, connectionRequestId);
-                safeLog(api, 'info', `[ac2] Conversation closed (thid=${closeThid}).`);
-              },
-            });
-
-            if (locked) {
-              // A foreign wallet is locked out: surface a banner only (no chat
-              // message), and DO NOT replay the bound controller's history to
-              // it. Routing is also blocked below, so the agent never sees its
-              // messages.
-              sendNotice(controlSendable, {
-                code: 'controller_locked',
-                level: 'warning',
-                title: 'New wallet not registered',
-                text: CONTROLLER_LOCKED_NOTICE,
-              });
-            } else {
-              // Replay threads + default-thread history for reconnecting controllers.
-              replayConversationList(controlSendable, connectionRequestId);
-              replayConversationHistory(controlSendable, connectionRequestId, DEFAULT_THID);
-
-              if (!identityGranted) {
-                // Not registered (no identity granted yet): surface a banner
-                // only (no chat message). The wallet uses this code to block
-                // new messages until an identity is granted.
-                sendNotice(controlSendable, {
-                  code: 'identity_missing',
-                  level: 'warning',
-                  title: 'Not registered',
-                  text: NO_IDENTITY_NOTICE,
-                });
-              }
-            }
-
-            if (streamTransport) {
-              streamTransport.onmessage = async (event: { data: unknown }) => {
-                const raw = event.data;
-                if (typeof raw === 'string' && raw.trim().length > 0) {
-                  const active = sessionManager.getActive()!;
-                  // A locked (foreign-wallet) session never reaches the agent —
-                  // re-surface the lock notice instead of routing its messages.
-                  if (active.locked) {
-                    sendNotice(streamSendable!, {
-                      code: 'controller_locked',
-                      level: 'warning',
-                      title: 'New wallet not registered',
-                      text: CONTROLLER_LOCKED_NOTICE,
-                    });
-                    return;
-                  }
-                  await routeInboundToAgent(
-                    api,
-                    raw,
-                    streamSendable!,
-                    active.controllerDid,
-                    active.requestId,
-                  );
-                }
-              };
-            }
-            transport.onRawMessage?.(async (text: string) => {
-              const active = sessionManager.getActive()!;
-              if (active.locked) {
-                sendNotice(streamSendable ?? transport, {
-                  code: 'controller_locked',
-                  level: 'warning',
-                  title: 'New wallet not registered',
-                  text: CONTROLLER_LOCKED_NOTICE,
-                });
-                return;
-              }
-              await routeInboundToAgent(
-                api,
-                text,
-                streamSendable ?? transport,
-                active.controllerDid,
-                active.requestId,
-              );
-            });
-
-            await new Promise<void>((resolve) => {
-              transport.onClose(() => resolve());
-              transport.onError(() => resolve());
-              if (streamTransport) (streamTransport as any).onclose = () => resolve();
-            });
-          } catch (err) {
-            safeLog(api, 'error', `[ac2] Pairing failed: ${err}`);
-          } finally {
-            sessionManager.clearActive();
-            if (paired) await paired.close();
-          }
-        };
-
-        void (async () => {
-          let cycle = firstCycle;
-          // Re-pairing loop. After a dropped DataChannel there are two cases:
-          //
-          //  1. The signaling socket is STILL connected (the common case when
-          //     the wallet is simply reopened): keep it and re-arm `connect()`
-          //     on the SAME handle. The provider answers the returning wallet's
-          //     fresh offer in place, so we stay in the requestId room (no
-          //     presence churn) and the controller rejoins automatically — no
-          //     QR rescan, no manual "Reconnect". Mirrors the wallet, which
-          //     keeps its socket and just re-runs `peer()` on reconnect.
-          //
-          //  2. The signaling socket itself died (network/server outage): tear
-          //     the handle down and rebuild a fresh pairing cycle, re-rendering
-          //     the QR, with capped exponential backoff so a transient outage
-          //     self-heals.
-          // eslint-disable-next-line no-constant-condition
-          while (true) {
-            await runConnectedSession(cycle.connect);
-
-            if (cycle.isSignalingAlive()) {
-              safeLog(
-                api,
-                'info',
-                '[ac2] Controller link dropped — signaling still connected; awaiting the wallet to re-link on the same session (no rescan needed).',
-              );
-              // Loop straight back to `runConnectedSession(cycle.connect)`,
-              // which re-arms the answer on the live socket.
-              continue;
-            }
-
-            safeLog(
-              api,
-              'info',
-              '[ac2] Signaling connection lost — rebuilding pairing. Scan the QR code again.',
-            );
-            // Best-effort: drop the dead handle before replacing it.
-            try {
-              await cycle.dispose();
-            } catch {
-              // Already torn down; ignore.
-            }
-            // Retry with capped exponential backoff instead of giving up: a
-            // transient signaling-server/network outage should self-heal so
-            // pairing resumes automatically once conditions improve.
-            let backoffMs = 2_000;
-            // eslint-disable-next-line no-constant-condition
-            while (true) {
-              try {
-                cycle = await startPairingCycle();
-                console.log('\n' + buildInvitationText(cycle.pairing, cycle.qrString));
-                break;
-              } catch (err) {
-                safeLog(
-                  api,
-                  'warn',
-                  `[ac2] Failed to restart pairing; retrying in ${backoffMs}ms: ${err}`,
-                );
-                await new Promise((resolve) => setTimeout(resolve, backoffMs));
-                backoffMs = Math.min(backoffMs * 2, 30_000);
-              }
-            }
-          }
-        })();
-
-        return {
-          text: buildInvitationText(firstCycle.pairing, firstCycle.qrString),
-          keepAlive: true,
-        };
+        return { text: await buildInvitationText(pairing), keepAlive: true };
       }
 
       return {

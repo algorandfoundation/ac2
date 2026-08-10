@@ -24,6 +24,8 @@
 
 import type { Ac2Transport, RtcDataChannelLike } from '../transport/index.js';
 
+export { extractEd25519PublicKey, normalizeDidKey, publicKeyToDidKey } from './did.js';
+
 /**
  * Free-form pairing payload a provider hands back to the caller so the
  * caller can render whatever UX the provider expects (QR code, copyable

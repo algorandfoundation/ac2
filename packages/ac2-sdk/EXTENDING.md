@@ -4,15 +4,17 @@ This guide covers the SDK's extension surface: subpath layout, custom transports
 
 ## Package layout
 
-The SDK exposes one top-level entry and four subpaths, each importable independently.
+The SDK exposes one top-level entry and six subpaths, each importable independently.
 
-| Import                                  | What you get                                                                                                        |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `@algorandfoundation/ac2-sdk`           | Namespace barrel re-exporting `schema`, `protocol`, `transport`, `signaling`, plus `Ac2Client` / `Ac2ClientOptions` |
-| `@algorandfoundation/ac2-sdk/schema`    | Pure types, type guards, decoding, JSON-schema validation                                                           |
-| `@algorandfoundation/ac2-sdk/protocol`  | `Ac2Client`, low-level message factories (`createSigningRequest`, ...), reply builders, type-keyed `handleMessage`  |
-| `@algorandfoundation/ac2-sdk/transport` | `Ac2Transport` interface plus `rtcDataChannelTransport` and `createInMemoryTransportPair`                           |
-| `@algorandfoundation/ac2-sdk/signaling` | `Ac2ChannelProvider` interface for bringup adapters (Liquid Auth, DIDCommRTC, ...)                                  |
+| Import                                          | What you get                                                                                                        |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `@algorandfoundation/ac2-sdk`                   | Namespace barrel re-exporting `schema`, `protocol`, `transport`, `signaling`, plus `Ac2Client` / `Ac2ClientOptions` |
+| `@algorandfoundation/ac2-sdk/schema`            | Pure types, type guards, decoding, JSON-schema validation                                                           |
+| `@algorandfoundation/ac2-sdk/protocol`          | `Ac2Client`, low-level message factories (`createSigningRequest`, ...), reply builders, type-keyed `handleMessage`  |
+| `@algorandfoundation/ac2-sdk/transport`         | `Ac2Transport` interface plus `rtcDataChannelTransport` and `createInMemoryTransportPair`                           |
+| `@algorandfoundation/ac2-sdk/signaling`         | `Ac2ChannelProvider` interface for bringup adapters, plus `did:key` normalization helpers                           |
+| `@algorandfoundation/ac2-sdk/providers/in-memory`  | `InMemoryChannelProvider` — no dependencies, pairs two in-process transports (tests/demos)                       |
+| `@algorandfoundation/ac2-sdk/providers/liquid-auth`| `LiquidAuthChannelProvider` — Node-only, optional-dependency bringup over Liquid Auth + WebRTC (see README)       |
 
 ESM consumers should prefer the subpaths (better tree-shaking). CJS consumers can reach every symbol through the namespace barrel:
 
@@ -103,4 +105,4 @@ interface Ac2ChannelProvider {
 }
 ```
 
-Concrete providers (Liquid Auth, DIDCommRTC, ...) live outside the core SDK so the core stays runtime-agnostic.
+Two concrete providers ship under `./providers/*` (`InMemoryChannelProvider`, `LiquidAuthChannelProvider` — see the [README](./README.md#channel-providers)); a future DIDCommRTC or WebSocket-relay provider would follow the same pattern. Each provider's own dependencies (if any) stay off the core's subpaths — `LiquidAuthChannelProvider`'s Node-only dependencies are `optionalDependencies` loaded via dynamic `import()`, never pulled in by importing `.`/`./schema`/`./protocol`/`./transport`/`./signaling`.
