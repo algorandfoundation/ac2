@@ -1,3 +1,12 @@
+# [ac2-sdk@1.0.0-canary.6](https://github.com/algorandfoundation/ac2/compare/ac2-sdk@1.0.0-canary.5...ac2-sdk@1.0.0-canary.6) (2026-08-10)
+
+
+### Bug Fixes
+
+* **ac2-sdk:** clamp options-path heartbeatTimeoutMs to the shared 40s floor ([721428e](https://github.com/algorandfoundation/ac2/commit/721428eb43228e002816bc27bde71fc548318173))
+* **ac2-sdk:** re-arm a dropped pairing handshake in place instead of waiting forever ([00107b6](https://github.com/algorandfoundation/ac2/commit/00107b6022b8a3c8e5abdaf2060fcfd75960cba7))
+* refactor connection handling to address stale peer issues. Increase response times for long-running actions like x402 ([c57061c](https://github.com/algorandfoundation/ac2/commit/c57061c9d156bed2828908551ad97fd2160704d0))
+
 # [ac2-sdk@1.0.0-canary.5](https://github.com/algorandfoundation/ac2/compare/ac2-sdk@1.0.0-canary.4...ac2-sdk@1.0.0-canary.5) (2026-08-07)
 
 
