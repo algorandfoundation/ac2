@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.30](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.29...ac2-open-claw-reference@1.0.0-canary.30) (2026-08-11)
+
+
+### Bug Fixes
+
+* ensure runtime adapter is set correctly, handle out of date daemon gracefully. ([34893b9](https://github.com/algorandfoundation/ac2/commit/34893b9b994de500adba9210b970026ba823172b))
+
 # [ac2-open-claw-reference@1.0.0-canary.29](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.28...ac2-open-claw-reference@1.0.0-canary.29) (2026-08-11)
 
 
