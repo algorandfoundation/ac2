@@ -1,3 +1,11 @@
+# [ac2-cli@1.0.0-canary.6](https://github.com/algorandfoundation/ac2/compare/ac2-cli@1.0.0-canary.5...ac2-cli@1.0.0-canary.6) (2026-08-11)
+
+
+### Bug Fixes
+
+* adds versions to cli, add hard stop for daemon, handle gateway closing. ([2b3164a](https://github.com/algorandfoundation/ac2/commit/2b3164af55442db0db00e49517beb665b0f82052))
+* harden keystore startup ([70ea312](https://github.com/algorandfoundation/ac2/commit/70ea312b624777fdca37a0a6e5e1b5a02a6eda95))
+
 # [ac2-cli@1.0.0-canary.5](https://github.com/algorandfoundation/ac2/compare/ac2-cli@1.0.0-canary.4...ac2-cli@1.0.0-canary.5) (2026-08-10)
 
 
