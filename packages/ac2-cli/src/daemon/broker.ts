@@ -195,7 +195,16 @@ export function createConnectionBroker(options: ConnectionBrokerOptions): Connec
     log(`[ac2] service identity ready: ${serviceDidValue}`);
   };
 
-  /** Persist a wallet-issued identity into the injected keystore. Best-effort. */
+  /**
+   * Persist a wallet-issued identity into the injected keystore.
+   *
+   * Hard-fails on a keystore/keychain error: the private material the wallet
+   * grants at bootstrap is delivered exactly once, so acknowledging the grant
+   * while silently dropping the key would leave the daemon claiming an
+   * identity it can never sign with (broken until `ac2 forget` + re-pair).
+   * Callers must fail the session instead — never mark the identity granted
+   * or persist its metadata when this throws.
+   */
   const recordIdentityKey = async (params: {
     agentDid: string;
     publicKey: string;
@@ -212,7 +221,11 @@ export function createConnectionBroker(options: ConnectionBrokerOptions): Connec
         privateKey: ed25519SeedFromBase64(params.material),
       });
     } catch (err) {
-      log(`[ac2] failed to persist identity key: ${(err as Error).message}`);
+      throw new Error(
+        `[ac2] failed to persist the wallet-issued identity key for ${params.agentDid}: ` +
+          `${(err as Error).message} — check that the OS keychain is available and unlocked ` +
+          '(on Linux this requires a running Secret Service such as gnome-keyring).',
+      );
     }
   };
 
@@ -317,7 +330,9 @@ export function createConnectionBroker(options: ConnectionBrokerOptions): Connec
           storedControllerDid: storedIdentity.controllerDid,
           connectedAccountDid,
         });
-        // Migrate legacy plaintext material into the keystore.
+        // Migrate legacy plaintext material into the keystore. A failure here
+        // hard-fails the session (the key would be unusable for signing anyway);
+        // the plaintext material stays in state, so the next session retries.
         if (storedIdentity.material && !hasIdentityKey(storedIdentity.agentDid)) {
           await recordIdentityKey({
             agentDid: storedIdentity.agentDid,
@@ -334,6 +349,10 @@ export function createConnectionBroker(options: ConnectionBrokerOptions): Connec
           const peerDidOpt = paired.peer?.did !== undefined ? { peerDid: paired.peer.did } : {};
           const bootstrapped = await bootstrapAgentIdentity(client, peerDidOpt);
           controllerDid = connectedAccountDid ?? bootstrapped.controllerDid;
+          // Persist the one-time private material FIRST: `recordIdentityKey`
+          // throws on a keystore failure, and only after it succeeds is the
+          // grant acknowledged (metadata persisted + `identityGranted` set).
+          // Reordering this would acknowledge a grant whose key was lost.
           const material = bootstrapped.response.body.material;
           if (material !== undefined) {
             await recordIdentityKey({

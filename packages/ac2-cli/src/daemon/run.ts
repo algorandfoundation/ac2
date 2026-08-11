@@ -45,9 +45,16 @@ import {
   type PersistedConnection,
 } from '../identity/state.js';
 import { createAc2KeyStore, type Ac2KeyStore, type Ac2KeyStoreOptions } from '../keystore/index.js';
+import { AC2_DAEMON_VERSION } from './version.js';
 
-/** The daemon's own protocol/package version, reported in `daemon.status`. */
-export const AC2_DAEMON_VERSION = '1.0.0-canary.1';
+/**
+ * The daemon's own protocol/package version, reported in `daemon.status`.
+ * Re-exported from `./version.js` (resolved from `package.json`) so existing
+ * importers keep working; the value lives in that tiny module so the
+ * version-mismatch check in `control/agent.ts` can read it without importing
+ * the whole daemon runtime.
+ */
+export { AC2_DAEMON_VERSION };
 
 /** Default Liquid Auth origin when none is configured. */
 const DEFAULT_ORIGIN = 'https://debug.liquidauth.com';

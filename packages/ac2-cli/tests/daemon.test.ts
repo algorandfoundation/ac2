@@ -24,13 +24,15 @@ import { InMemoryChannelProvider } from '@algorandfoundation/ac2-sdk/providers/i
 import { connectControl, type ControlClient } from '../src/control/client.js';
 import { CONTROL_PROTOCOL_VERSION, DEFAULT_TARGET_AGENT } from '../src/control/protocol.js';
 import { saveAc2State } from '../src/identity/state.js';
+import { generateAgentKeyMaterial } from './helpers/identity.js';
 import { createKeyStoreFixture } from './helpers/keystore.js';
 
 const ORIGIN = 'https://debug.liquidauth.com';
 /** Wallet controller DID stubbed into every `KeyResponse.from`. */
 const STUB_CONTROLLER_DID = 'did:key:zStubController';
-/** Stub identity public key returned in the bootstrap `KeyResponse`. */
-const STUB_AGENT_PK = Buffer.from('agent-identity-public-key').toString('base64');
+/** Real Ed25519 identity the fake wallet grants in the bootstrap `KeyResponse`. */
+const AGENT_KEY = generateAgentKeyMaterial();
+const STUB_AGENT_PK = AGENT_KEY.publicKey;
 /** Stub signature bytes the fake wallet returns for an approved signing request. */
 const STUB_SIGNATURE = Buffer.from('stub-signature-bytes').toString('base64');
 
@@ -57,7 +59,7 @@ class FakeWalletProvider extends InMemoryChannelProvider {
               body: {
                 status: 'approved',
                 key_type: 'ed25519',
-                material: Buffer.from('stub-material').toString('base64'),
+                material: AGENT_KEY.material,
                 public_key: STUB_AGENT_PK,
               },
             }),
@@ -240,6 +242,10 @@ describe('runDaemon', () => {
 
     await clientA.request('pair.start', {});
     await waitFor(() => wallet?.peerTransport !== undefined);
+    // Speak only once the session is fully connected: the daemon attaches its
+    // raw-message handler after the identity bootstrap completes, and the
+    // in-memory transport drops frames that arrive before a handler exists.
+    await waitForConnected(clientA);
     wallet!.peerTransport!.send('hello from the wallet');
 
     await waitFor(() => aEvents.length > 0);

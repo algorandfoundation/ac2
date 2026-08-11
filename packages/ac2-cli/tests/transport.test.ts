@@ -21,10 +21,13 @@ import { runDaemon, type RunningDaemon } from '../src/daemon/run.js';
 import { InMemoryChannelProvider } from '@algorandfoundation/ac2-sdk/providers/in-memory';
 import { connectAgentSession, type AgentSession } from '../src/control/agent.js';
 import { createDaemonStreamSendable, createDaemonTransport } from '../src/control/transport.js';
+import { generateAgentKeyMaterial } from './helpers/identity.js';
 import { createKeyStoreFixture } from './helpers/keystore.js';
 
 const STUB_CONTROLLER_DID = 'did:key:zStubController';
-const STUB_AGENT_PK = 'AgentIdentityPubKey';
+/** Real Ed25519 identity the fake wallet grants in the bootstrap `KeyResponse`. */
+const AGENT_KEY = generateAgentKeyMaterial();
+const STUB_AGENT_PK = AGENT_KEY.publicKey;
 
 /** Fake wallet: answers the bootstrap `KeyRequest` and records raw frames. */
 class FakeWalletProvider extends InMemoryChannelProvider {
@@ -43,7 +46,7 @@ class FakeWalletProvider extends InMemoryChannelProvider {
               body: {
                 status: 'approved',
                 key_type: 'ed25519',
-                material: 'stub-material',
+                material: AGENT_KEY.material,
                 public_key: STUB_AGENT_PK,
               },
             }),

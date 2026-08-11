@@ -20,6 +20,7 @@ import {
 import { daemonLiveness } from './daemon/liveness.js';
 import { installServiceUnit, uninstallServiceUnit } from './daemon/service-units.js';
 import { runDaemon } from './daemon/run.js';
+import { clearStartupFailure, reportStartupFailure } from './daemon/startup-report.js';
 import { parseCliArgs, type CliFlags } from './cli-args.js';
 import { isDirectInvocation } from './cli-entry.js';
 
@@ -102,7 +103,15 @@ async function serviceRun(flags: CliFlags): Promise<number> {
   } catch {
     // Setting the process title is cosmetic; never fail the daemon over it.
   }
-  const daemon = await runDaemon(serviceRunOptions(flags));
+  // A detached daemon has no channel back to its launcher, so a startup
+  // failure is handed over as a structured report (and a successful start
+  // clears any leftover) — see `daemon/startup-report.ts`. The launcher
+  // (`ensureDaemonRunning`) reads the report instead of parsing the log.
+  const daemon = await runDaemon(serviceRunOptions(flags)).catch(async (err: unknown) => {
+    await reportStartupFailure(err);
+    throw err;
+  });
+  await clearStartupFailure();
   await daemon.closed;
   return 0;
 }

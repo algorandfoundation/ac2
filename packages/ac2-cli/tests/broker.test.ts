@@ -7,7 +7,6 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { generateKeyPairSync } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -19,10 +18,12 @@ import type {
   Ac2PairingHandle,
   Ac2StartPairingOptions,
 } from '@algorandfoundation/ac2-sdk/signaling';
+import type { KeyringBinding } from '@algorandfoundation/keystore-node';
 import { createConnectionBroker, type ConnectionBroker } from '../src/daemon/broker.js';
 import { InMemoryChannelProvider, type InMemoryChannelProviderOptions } from '@algorandfoundation/ac2-sdk/providers/in-memory';
 import { SERVICE_KEY_ID, type Ac2KeyStore } from '../src/keystore/index.js';
-import { saveAc2State } from '../src/identity/state.js';
+import { loadAc2State, saveAc2State } from '../src/identity/state.js';
+import { generateAgentKeyMaterial } from './helpers/identity.js';
 import { createKeyStoreFixture, type KeyStoreFixture } from './helpers/keystore.js';
 import type { ControlEventName, ControlEvents } from '../src/control/protocol.js';
 
@@ -33,15 +34,7 @@ const STUB_CONTROLLER_DID = 'did:key:zStubController';
  * A real Ed25519 keypair the fake wallet grants as the agent identity: the
  * keystore only accepts genuine 32-byte material, exactly as a wallet sends it.
  */
-const AGENT_KEY = ((): { material: string; publicKey: string } => {
-  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-  const pkcs8 = privateKey.export({ format: 'der', type: 'pkcs8' });
-  const spki = publicKey.export({ format: 'der', type: 'spki' });
-  return {
-    material: Buffer.from(pkcs8.subarray(pkcs8.length - 32)).toString('base64'),
-    publicKey: Buffer.from(spki.subarray(spki.length - 32)).toString('base64'),
-  };
-})();
+const AGENT_KEY = generateAgentKeyMaterial();
 
 /** Fake wallet: answers the bootstrap `KeyRequest` and records raw frames. */
 class FakeWalletProvider extends InMemoryChannelProvider {
@@ -321,6 +314,48 @@ describe('createConnectionBroker', () => {
     // Non-extractable, but usable: the daemon can sign as that identity.
     const signature = await keystore.keystore.sign(agentKey!.id, new Uint8Array([1, 2, 3]));
     expect(signature).toHaveLength(64);
+  });
+
+  it('hard-fails the session (never acknowledging the grant) when the identity key cannot be persisted', async () => {
+    // An OS keychain that dies AFTER startup: the service key persists fine,
+    // then every access fails — e.g. the Secret Service daemon went away.
+    const entries = new Map<string, string>();
+    let keychainBroken = false;
+    const flakyKeyring: KeyringBinding = {
+      get: (account) => {
+        if (keychainBroken) throw new Error('Secret Service unreachable');
+        return entries.get(account) ?? null;
+      },
+      set: (account, secret) => {
+        if (keychainBroken) throw new Error('Secret Service unreachable');
+        entries.set(account, secret);
+      },
+      delete: (account) => entries.delete(account),
+    };
+    const store = fixture.create({ keyring: flakyKeyring });
+    const broker = makeBroker(store);
+    await broker.start(); // service key lands while the keychain still works
+    keychainBroken = true;
+
+    await broker.startPairing();
+    await waitFor(() => eventsOf('connection.disconnected').length > 0);
+
+    // The session failed loudly, naming the real cause…
+    const reason = (
+      eventsOf('connection.disconnected')[0]!.data as ControlEvents['connection.disconnected']
+    ).reason;
+    expect(reason).toContain('failed to persist the wallet-issued identity key');
+
+    // …the grant was never acknowledged (no `connected` claiming an identity)…
+    expect(eventsOf('connection.connected')).toHaveLength(0);
+    expect(broker.snapshot().state).not.toBe('connected');
+
+    // …and no identity metadata was persisted, so the next session
+    // re-bootstraps instead of "reusing" an identity whose key was lost.
+    const persisted = loadAc2State();
+    expect(persisted.identity).toBeUndefined();
+    const connections = Object.values(persisted.connections ?? {});
+    expect(connections.every((connection) => connection.identity === undefined)).toBe(true);
   });
 
   it('send() returns delivered:false before a connection exists', async () => {

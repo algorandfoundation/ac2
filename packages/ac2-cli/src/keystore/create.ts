@@ -12,6 +12,7 @@
 import { createNodeKeyStore, type KeyStoreState } from '@algorandfoundation/keystore-node';
 import { Store } from '@tanstack/store';
 import { createDefaultDarwinKeyring } from './darwin-keyring.js';
+import { createHardenedNapiKeyring } from './napi-keyring.js';
 import { migrateLegacyKeystore } from './migrate.js';
 import { resolveKeychainService, resolveKeystoreStateDir, resolveMetadataPath } from './paths.js';
 import type { Ac2KeyStore, Ac2KeyStoreOptions } from './types.js';
@@ -31,12 +32,17 @@ export function createAc2KeyStore(options: Ac2KeyStoreOptions = {}): Ac2KeyStore
   // On macOS the default is a dedicated, self-unlocked AC2 keychain: the login
   // keychain is locked in the headless contexts the daemon runs in (launchd,
   // SSH) and every access there fails with "User interaction is not allowed".
-  const keyring = options.keyring ?? createDefaultDarwinKeyring({ stateDir, service, log });
+  // Everywhere else, a hardened `@napi-rs/keyring` binding that never masks a
+  // hard keychain failure (e.g. Secret Service down) as a missing key.
+  const keyring =
+    options.keyring ??
+    createDefaultDarwinKeyring({ stateDir, service, log }) ??
+    createHardenedNapiKeyring({ service });
 
   const keystore = createNodeKeyStore({
     store,
     service,
-    ...(keyring ? { keyring } : {}),
+    keyring,
     ...(options.metadata ? { metadata: options.metadata } : { metadataPath }),
   });
 

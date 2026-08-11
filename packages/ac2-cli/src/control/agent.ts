@@ -20,8 +20,10 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startDetached } from '../daemon/manager.js';
-import { daemonLiveness } from '../daemon/liveness.js';
+import { readDaemonPid, startDetached, stopDaemonProcess } from '../daemon/manager.js';
+import { readStartupFailure } from '../daemon/startup-report.js';
+import { daemonLiveness, type DaemonLivenessOptions } from '../daemon/liveness.js';
+import { AC2_DAEMON_VERSION, FALLBACK_DAEMON_VERSION } from '../daemon/version.js';
 import {
   ControlRequestError,
   connectControl,
@@ -76,6 +78,76 @@ export interface EnsureDaemonRunningOptions {
   socketPath?: string;
   /** Overall deadline in milliseconds to reach a listening daemon (default 5000). */
   timeoutMs?: number;
+  /**
+   * Version this build expects the running daemon to be. A reachable daemon
+   * reporting a *different* version is treated as stale and restarted (see
+   * {@link ensureDaemonRunning}). Defaults to {@link AC2_DAEMON_VERSION} — the
+   * version of the CLI THIS process would spawn — so an agent host that was
+   * upgraded transparently refreshes a daemon left running from the older
+   * install. Pass `null` to disable the version check entirely.
+   */
+  expectedVersion?: string | null;
+  /** Line logger for restart notices (default `console.log`). */
+  log?: (message: string) => void;
+}
+
+/**
+ * Decide whether a reachable daemon is running stale code and must be
+ * restarted. Pure so the restart policy is unit-testable without spawning.
+ *
+ * A restart is warranted only when both versions are known and differ. An
+ * unknown running version (an older daemon that predates version reporting)
+ * or an unknown *expected* version (a build whose `package.json` could not be
+ * resolved — see {@link FALLBACK_DAEMON_VERSION}) is left alone rather than
+ * risk cycling a healthy daemon on a comparison we cannot trust.
+ */
+export function isStaleDaemonVersion(
+  runningVersion: string | undefined,
+  expectedVersion: string | null,
+): boolean {
+  if (!runningVersion) return false;
+  if (expectedVersion === null || expectedVersion === FALLBACK_DAEMON_VERSION) return false;
+  return runningVersion !== expectedVersion;
+}
+
+/**
+ * Grace period for a stale daemon to exit after `daemon.stop` before the
+ * restart escalates to signals — a lingering daemon still owns the control
+ * socket, which would make the freshly spawned replacement fail to bind.
+ */
+const STALE_DAEMON_STOP_TIMEOUT_MS = 8_000;
+
+/**
+ * Stop a stale daemon we manage: ask it to stop over the control socket, then
+ * make sure the process is actually gone (escalating to signals) before the
+ * caller spawns its replacement.
+ */
+async function stopStaleDaemon(opts: {
+  env: NodeJS.ProcessEnv;
+  pid: number | null;
+  socketPath?: string;
+}): Promise<void> {
+  try {
+    const clientOptions: ControlClientOptions = { timeoutMs: 1000 };
+    if (opts.socketPath !== undefined) clientOptions.path = opts.socketPath;
+    const client = await connectControl(clientOptions);
+    try {
+      await client.request('daemon.stop', {});
+    } finally {
+      client.close();
+    }
+  } catch {
+    // Socket already gone or unresponsive — the signal path below is the
+    // failsafe that guarantees the old process is not left holding the socket.
+  }
+  if (opts.pid !== null) {
+    await stopDaemonProcess({
+      env: opts.env,
+      pid: opts.pid,
+      force: true,
+      timeoutMs: STALE_DAEMON_STOP_TIMEOUT_MS,
+    });
+  }
 }
 
 /**
@@ -89,18 +161,67 @@ export interface EnsureDaemonRunningOptions {
  * Liveness is decided by the control socket first: a daemon under OS
  * supervision writes no pidfile, and a pidfile-only check used to spawn a
  * redundant second daemon on top of a perfectly healthy supervised one.
+ *
+ * A reachable daemon is additionally checked for staleness: when it reports a
+ * different version than this build ({@link isStaleDaemonVersion}) AND it is a
+ * detached daemon THIS install manages (it wrote a pidfile), it is stopped and
+ * replaced with a fresh one from the current build. This is what makes an
+ * upgraded agent host (e.g. the OpenClaw plugin after `plugins update`) stop
+ * silently talking to a service left running from the previous version instead
+ * of requiring a manual `ac2 service stop`. An OS-supervised daemon (no
+ * pidfile) is owned by its service unit and left for that upgrade path.
  */
 export async function ensureDaemonRunning(options: EnsureDaemonRunningOptions = {}): Promise<void> {
+  // Startup-failure reports are timestamped; only one written during THIS
+  // attempt may fail it (a stale report from an earlier crash is ignored).
+  const attemptStartedAt = Date.now();
   const env = options.env ?? process.env;
   const timeoutMs = options.timeoutMs ?? 5000;
+  const expectedVersion =
+    options.expectedVersion === undefined ? AC2_DAEMON_VERSION : options.expectedVersion;
+  const log = options.log ?? ((message: string) => console.log(message));
 
-  const liveness = await daemonLiveness({
-    env,
-    timeoutMs: 300,
-    ...(options.socketPath !== undefined ? { socketPath: options.socketPath } : {}),
-  });
-  if (liveness.source === 'control-socket') return;
-  if (!liveness.running) {
+  const livenessOptions: DaemonLivenessOptions = { env, timeoutMs: 300 };
+  if (options.socketPath !== undefined) livenessOptions.socketPath = options.socketPath;
+  const liveness = await daemonLiveness(livenessOptions);
+
+  let needSpawn: boolean;
+  if (liveness.source === 'control-socket') {
+    const runningVersion = liveness.status?.version;
+    if (!isStaleDaemonVersion(runningVersion, expectedVersion)) return;
+
+    // Only auto-restart a daemon THIS install manages (a detached child writes
+    // a pidfile). A daemon under OS supervision (launchd/systemd) writes none;
+    // stopping it would just make the supervisor relaunch the same installed
+    // binary, so leave it to the service-unit upgrade path and keep using it.
+    const managedPid = await readDaemonPid({ env });
+    if (managedPid === null) {
+      log(
+        `[ac2] AC2 service is running an older version (${runningVersion}, this build is ` +
+          `${String(expectedVersion)}) but is OS-supervised — restart its service unit ` +
+          '(e.g. `ac2 service stop`) to pick up the upgrade.',
+      );
+      return;
+    }
+
+    log(
+      `[ac2] AC2 service is running an older version (${runningVersion}, this build is ` +
+        `${String(expectedVersion)}) — restarting it to pick up the upgrade…`,
+    );
+    await stopStaleDaemon({
+      env,
+      pid: liveness.status?.pid ?? managedPid,
+      ...(options.socketPath !== undefined ? { socketPath: options.socketPath } : {}),
+    });
+    needSpawn = true;
+  } else {
+    // No live socket: spawn only when nothing is running at all. A pidfile that
+    // is "running" but not yet answering is a daemon still binding — don't pile
+    // a second one on top of it, just poll for it below.
+    needSpawn = !liveness.running;
+  }
+
+  if (needSpawn) {
     await startDetached({
       command: process.execPath,
       args: [resolveOwnCliPath(), 'service', 'run'],
@@ -120,11 +241,24 @@ export async function ensureDaemonRunning(options: EnsureDaemonRunningOptions = 
       return;
     } catch (err) {
       lastError = err as Error;
+      // A daemon that crashed during startup (e.g. the OS keychain is
+      // unavailable on Linux without a Secret Service daemon) reports the
+      // failure through a structured file (see `daemon/startup-report.ts`)
+      // — its own log stays a human artifact the launcher never parses.
+      // Fail fast with the reported cause instead of waiting out the timeout.
+      const failure = await readStartupFailure(env);
+      if (failure !== null && Date.parse(failure.timestamp) >= attemptStartedAt) {
+        throw new Error(
+          `[ac2] daemon (pid ${failure.pid}, version ${failure.version}) failed to start: ` +
+            `${failure.message} — run \`ac2 service logs\` for the full log.`,
+        );
+      }
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
   throw new Error(
-    `[ac2] daemon did not become reachable within ${timeoutMs}ms: ${lastError?.message ?? 'unknown error'}`,
+    `[ac2] daemon did not become reachable within ${timeoutMs}ms: ` +
+      `${lastError?.message ?? 'unknown error'} — run \`ac2 service logs\` for the daemon log.`,
   );
 }
 
