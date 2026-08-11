@@ -26,6 +26,7 @@ import {
   type AgentSession,
 } from '../src/control/agent.js';
 import { FALLBACK_DAEMON_VERSION } from '../src/daemon/version.js';
+import { reportStartupFailure } from '../src/daemon/startup-report.js';
 import { createKeyStoreFixture } from './helpers/keystore.js';
 
 /** Poll until `predicate` holds (or fail after `timeoutMs`). */
@@ -201,6 +202,44 @@ describe('ensureDaemonRunning', () => {
     await expect(ensureDaemonRunning({ env, socketPath, timeoutMs: 300 })).rejects.toThrow(
       /daemon did not become reachable/,
     );
+  });
+
+  it('fails fast with the daemon-reported cause when startup fails (structured report, no log parsing)', async () => {
+    const env = { ...process.env, AC2_HOME: tmpDir };
+    await writeFile(join(tmpDir, 'ac2d.pid'), `${process.pid}\n`);
+    const socketPath = join(tmpDir, 'nobody-listening.sock');
+
+    // While the launcher is polling, the "daemon" crashes during startup and
+    // leaves its structured report (exactly what `service run` does).
+    const pending = ensureDaemonRunning({ env, socketPath, timeoutMs: 10_000 });
+    const reported = (async (): Promise<void> => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await reportStartupFailure(new Error('no Secret Service provider found'), env);
+    })();
+
+    const startedAt = Date.now();
+    await expect(pending).rejects.toThrow(/failed to start: no Secret Service provider found/);
+    await expect(pending).rejects.toThrow(/ac2 service logs/);
+    // The reported cause short-circuits the poll loop instead of waiting out
+    // the full 10s reachability timeout.
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    await reported;
+  });
+
+  it('ignores a stale startup-failure report left over from an earlier crash', async () => {
+    const env = { ...process.env, AC2_HOME: tmpDir };
+    await writeFile(join(tmpDir, 'ac2d.pid'), `${process.pid}\n`);
+    // A report from a PREVIOUS start attempt must not fail this one.
+    await reportStartupFailure(new Error('ancient keystore failure'), env);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const socketPath = join(tmpDir, 'nobody-listening.sock');
+
+    const error = await ensureDaemonRunning({ env, socketPath, timeoutMs: 300 }).then(
+      () => null,
+      (err: unknown) => err as Error,
+    );
+    expect(error?.message).toMatch(/daemon did not become reachable/);
+    expect(error?.message).not.toMatch(/ancient keystore failure/);
   });
 });
 

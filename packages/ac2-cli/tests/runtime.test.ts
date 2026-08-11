@@ -22,11 +22,14 @@ import { InMemoryChannelProvider } from '@algorandfoundation/ac2-sdk/providers/i
 import { runDaemon, type DaemonRunOptions, type RunningDaemon } from '../src/daemon/run.js';
 import { connectControl, type ControlClient } from '../src/control/client.js';
 import { DEFAULT_TARGET_AGENT } from '../src/control/protocol.js';
+import { generateAgentKeyMaterial } from './helpers/identity.js';
 import { createKeyStoreFixture } from './helpers/keystore.js';
 
 const ORIGIN = 'https://debug.liquidauth.com';
 const STUB_CONTROLLER_DID = 'did:key:zStubController';
-const STUB_AGENT_PK = Buffer.from('agent-identity-public-key').toString('base64');
+/** Real Ed25519 identity the fake wallet grants in the bootstrap `KeyResponse`. */
+const AGENT_KEY = generateAgentKeyMaterial();
+const STUB_AGENT_PK = AGENT_KEY.publicKey;
 
 /** Fake wallet: answers the bootstrap `KeyRequest` and exposes its raw transport. */
 class FakeWalletProvider extends InMemoryChannelProvider {
@@ -45,7 +48,7 @@ class FakeWalletProvider extends InMemoryChannelProvider {
               body: {
                 status: 'approved',
                 key_type: 'ed25519',
-                material: Buffer.from('stub-material').toString('base64'),
+                material: AGENT_KEY.material,
                 public_key: STUB_AGENT_PK,
               },
             }),
@@ -64,6 +67,17 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error('waitFor: condition not met in time');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+/** Poll `daemon.status` until the wallet connection reports `connected`. */
+async function waitForConnected(client: ControlClient, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const status = await client.request('daemon.status', {});
+    if (status.connection.state === 'connected') return;
+    if (Date.now() > deadline) throw new Error('waitForConnected: not connected in time');
     await new Promise((r) => setTimeout(r, 10));
   }
 }
@@ -208,6 +222,10 @@ describe('runtime adapters', () => {
 
     await clientA.request('pair.start', {});
     await waitFor(() => wallet?.peerTransport !== undefined);
+    // Speak only once the session is fully connected: the daemon attaches its
+    // raw-message handler after the identity bootstrap completes, and the
+    // in-memory transport drops frames that arrive before a handler exists.
+    await waitForConnected(clientA);
     wallet!.peerTransport!.send('hello from the wallet');
 
     await waitFor(() => inbound.length > 0);

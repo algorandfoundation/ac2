@@ -39,12 +39,20 @@ async function ready(): Promise<Ac2KeyStore> {
 }
 
 
-/** Persist a wallet-granted identity (keyed by `agentDid`). Best-effort. */
+/**
+ * Persist a wallet-granted identity (keyed by `agentDid`).
+ *
+ * Hard-fails on a keystore/keychain error: the wallet delivers the private
+ * material exactly once, so swallowing a persistence failure would silently
+ * discard it and leave an identity that can never sign. Callers must treat a
+ * rejection as "the grant did not happen" — never acknowledge it to the
+ * wallet or persist its metadata.
+ */
 export async function recordAgentIdentity(params: {
   agentDid: string;
   publicKey: string;
   material: string;
-}): Promise<boolean> {
+}): Promise<void> {
   try {
     const store = await ready();
     await store.keystore.import({
@@ -56,9 +64,12 @@ export async function recordAgentIdentity(params: {
       publicKey: new Uint8Array(Buffer.from(params.publicKey, 'base64')),
       privateKey: ed25519SeedFromBase64(params.material),
     });
-    return true;
-  } catch {
-    return false;
+  } catch (err) {
+    throw new Error(
+      `[ac2] failed to persist the wallet-issued identity key for ${params.agentDid}: ` +
+        `${(err as Error).message} — check that the OS keychain is available and unlocked ` +
+        '(on Linux this requires a running Secret Service such as gnome-keyring).',
+    );
   }
 }
 

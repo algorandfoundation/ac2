@@ -21,6 +21,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readDaemonPid, startDetached, stopDaemonProcess } from '../daemon/manager.js';
+import { readStartupFailure } from '../daemon/startup-report.js';
 import { daemonLiveness, type DaemonLivenessOptions } from '../daemon/liveness.js';
 import { AC2_DAEMON_VERSION, FALLBACK_DAEMON_VERSION } from '../daemon/version.js';
 import {
@@ -171,6 +172,9 @@ async function stopStaleDaemon(opts: {
  * pidfile) is owned by its service unit and left for that upgrade path.
  */
 export async function ensureDaemonRunning(options: EnsureDaemonRunningOptions = {}): Promise<void> {
+  // Startup-failure reports are timestamped; only one written during THIS
+  // attempt may fail it (a stale report from an earlier crash is ignored).
+  const attemptStartedAt = Date.now();
   const env = options.env ?? process.env;
   const timeoutMs = options.timeoutMs ?? 5000;
   const expectedVersion =
@@ -237,11 +241,24 @@ export async function ensureDaemonRunning(options: EnsureDaemonRunningOptions = 
       return;
     } catch (err) {
       lastError = err as Error;
+      // A daemon that crashed during startup (e.g. the OS keychain is
+      // unavailable on Linux without a Secret Service daemon) reports the
+      // failure through a structured file (see `daemon/startup-report.ts`)
+      // — its own log stays a human artifact the launcher never parses.
+      // Fail fast with the reported cause instead of waiting out the timeout.
+      const failure = await readStartupFailure(env);
+      if (failure !== null && Date.parse(failure.timestamp) >= attemptStartedAt) {
+        throw new Error(
+          `[ac2] daemon (pid ${failure.pid}, version ${failure.version}) failed to start: ` +
+            `${failure.message} — run \`ac2 service logs\` for the full log.`,
+        );
+      }
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
   throw new Error(
-    `[ac2] daemon did not become reachable within ${timeoutMs}ms: ${lastError?.message ?? 'unknown error'}`,
+    `[ac2] daemon did not become reachable within ${timeoutMs}ms: ` +
+      `${lastError?.message ?? 'unknown error'} — run \`ac2 service logs\` for the daemon log.`,
   );
 }
 

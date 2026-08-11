@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Buffer } from 'node:buffer';
+import { generateKeyPairSync } from 'node:crypto';
 import {
   buildKeyResponse,
   buildSigningRejected,
@@ -63,9 +64,25 @@ import { connectControl } from '@algorandfoundation/ac2-cli/control';
  * session.
  */
 const STUB_CONTROLLER_DID = 'did:key:zStubController';
-/** Stub identity public key returned in the bootstrap `KeyResponse`. */
-const STUB_AGENT_PK = 'AgentIdentityPubKey';
-const STUB_AGENT_DID = `did:key:${STUB_AGENT_PK}`;
+/**
+ * A real Ed25519 keypair the fake wallet grants as the agent identity. The
+ * daemon-backed tests run a real daemon whose keystore hard-fails the session
+ * when the granted material cannot be imported/persisted, so it must be
+ * genuine 32-byte material exactly as a wallet sends it.
+ */
+const AGENT_KEY = ((): { material: string; publicKey: string } => {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const pkcs8 = privateKey.export({ format: 'der', type: 'pkcs8' });
+  const spki = publicKey.export({ format: 'der', type: 'spki' });
+  return {
+    material: Buffer.from(pkcs8.subarray(pkcs8.length - 32)).toString('base64'),
+    publicKey: Buffer.from(spki.subarray(spki.length - 32)).toString('base64'),
+  };
+})();
+/** Identity public key returned in the bootstrap `KeyResponse` (base64). */
+const STUB_AGENT_PK = AGENT_KEY.publicKey;
+/** Canonical `did:key:z…` the daemon derives from `STUB_AGENT_PK`. */
+const STUB_AGENT_DID = publicKeyToDidKey(Buffer.from(AGENT_KEY.publicKey, 'base64'));
 
 /**
  * Standard bootstrap reply: every test channel needs to answer the
@@ -81,10 +98,7 @@ function replyToBootstrap(req: KeyRequestMessage, peer: { send: (s: string) => v
         body: {
           status: 'approved',
           key_type: 'ed25519',
-          // material is the routing-restricted secret; tests don't need
-          // it to be real — it just has to be a non-empty string per
-          // the schema.
-          material: 'stub-material',
+          material: AGENT_KEY.material,
           public_key: STUB_AGENT_PK,
         },
       }),
