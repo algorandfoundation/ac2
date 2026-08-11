@@ -21,9 +21,11 @@ import { CONTROL_PROTOCOL_VERSION } from '../src/control/protocol.js';
 import {
   connectAgentSession,
   ensureDaemonRunning,
+  isStaleDaemonVersion,
   resolveOwnCliPath,
   type AgentSession,
 } from '../src/control/agent.js';
+import { FALLBACK_DAEMON_VERSION } from '../src/daemon/version.js';
 import { createKeyStoreFixture } from './helpers/keystore.js';
 
 /** Poll until `predicate` holds (or fail after `timeoutMs`). */
@@ -81,6 +83,23 @@ describe('resolveOwnCliPath', () => {
   });
 });
 
+describe('isStaleDaemonVersion', () => {
+  it('is stale only when both versions are known and differ', () => {
+    expect(isStaleDaemonVersion('1.0.0-canary.1', '1.0.0-canary.4')).toBe(true);
+    expect(isStaleDaemonVersion('1.0.0-canary.4', '1.0.0-canary.4')).toBe(false);
+  });
+
+  it('never treats an unknown running version as stale (older daemon, no version reported)', () => {
+    expect(isStaleDaemonVersion(undefined, '1.0.0-canary.4')).toBe(false);
+    expect(isStaleDaemonVersion('', '1.0.0-canary.4')).toBe(false);
+  });
+
+  it('never restarts when the expected version is unknown or the check is disabled', () => {
+    expect(isStaleDaemonVersion('1.0.0-canary.1', FALLBACK_DAEMON_VERSION)).toBe(false);
+    expect(isStaleDaemonVersion('1.0.0-canary.1', null)).toBe(false);
+  });
+});
+
 describe('ensureDaemonRunning', () => {
   let tmpDir: string;
 
@@ -105,6 +124,68 @@ describe('ensureDaemonRunning', () => {
       await expect(
         ensureDaemonRunning({ env, socketPath, timeoutMs: 1000 }),
       ).resolves.toBeUndefined();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('does not restart a reachable daemon already on the expected version', async () => {
+    const env = { ...process.env, AC2_HOME: tmpDir };
+    await writeFile(join(tmpDir, 'ac2d.pid'), `${process.pid}\n`);
+
+    const socketPath = join(tmpDir, 'ac2d.sock');
+    let stopRequested = false;
+    const server = createControlServer({
+      path: socketPath,
+      handler: (_client, method) => {
+        if (method === 'daemon.stop') stopRequested = true;
+        return { version: '1.0.0-canary.4', pid: process.pid };
+      },
+    });
+    await server.listen();
+    try {
+      await expect(
+        ensureDaemonRunning({
+          env,
+          socketPath,
+          timeoutMs: 1000,
+          expectedVersion: '1.0.0-canary.4',
+        }),
+      ).resolves.toBeUndefined();
+      expect(stopRequested).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('leaves a stale OS-supervised daemon (no pidfile) alone, with an advisory log', async () => {
+    const env = { ...process.env, AC2_HOME: tmpDir };
+    // Deliberately no pidfile: an OS-supervised daemon writes none, so the
+    // restart must not fire (it would only make the supervisor relaunch the
+    // same old binary).
+    const socketPath = join(tmpDir, 'ac2d.sock');
+    let stopRequested = false;
+    const server = createControlServer({
+      path: socketPath,
+      handler: (_client, method) => {
+        if (method === 'daemon.stop') stopRequested = true;
+        return { version: '1.0.0-canary.1', pid: process.pid };
+      },
+    });
+    await server.listen();
+    const logs: string[] = [];
+    try {
+      await expect(
+        ensureDaemonRunning({
+          env,
+          socketPath,
+          timeoutMs: 1000,
+          expectedVersion: '1.0.0-canary.4',
+          log: (message) => logs.push(message),
+        }),
+      ).resolves.toBeUndefined();
+      expect(stopRequested).toBe(false);
+      expect(logs.some((line) => line.includes('OS-supervised'))).toBe(true);
     } finally {
       await server.close();
     }

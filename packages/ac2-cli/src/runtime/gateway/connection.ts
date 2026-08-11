@@ -44,6 +44,7 @@ interface MinimalWebSocket {
     type: 'close',
     listener: (event: { code: number; reason: string }) => void,
   ): void;
+  addEventListener(type: 'error', listener: (event: { message?: unknown }) => void): void;
 }
 
 type MinimalWebSocketCtor = new (url: string) => MinimalWebSocket;
@@ -68,6 +69,31 @@ export function createWebSocketConnection(url: string): GatewayConnection {
 
   const socket = new WebSocketCtor(url);
 
+  // A connection that FAILS TO ESTABLISH surfaces as an `error` event with NO
+  // `close` event after it: verified against Node 22's undici WebSocket, where
+  // connecting to a port nothing listens on fires only
+  // `error: "Received network error or non-101 status code."`. Funnel both
+  // events into the close callbacks (one-shot) so a consumer's reconnect logic
+  // hears about EVERY dead connection — listening to `close` alone left the
+  // `openclaw-gateway` adapter permanently stuck on its first client when the
+  // daemon started while the gateway was down.
+  const closeCallbacks: Array<(reason: string) => void> = [];
+  let closeNotified = false;
+  function notifyClose(reason: string): void {
+    if (closeNotified) return;
+    closeNotified = true;
+    for (const cb of closeCallbacks) cb(reason);
+  }
+  socket.addEventListener('close', (event) => {
+    notifyClose(
+      event.reason && event.reason.length > 0 ? event.reason : `closed (code ${event.code})`,
+    );
+  });
+  socket.addEventListener('error', (event) => {
+    const message = typeof event.message === 'string' ? event.message : '';
+    notifyClose(message.length > 0 ? message : 'websocket error');
+  });
+
   return {
     send(data: string): void {
       socket.send(data);
@@ -87,9 +113,7 @@ export function createWebSocketConnection(url: string): GatewayConnection {
       });
     },
     onClose(cb: (reason: string) => void): void {
-      socket.addEventListener('close', (event) => {
-        cb(event.reason && event.reason.length > 0 ? event.reason : `closed (code ${event.code})`);
-      });
+      closeCallbacks.push(cb);
     },
     onOpen(cb: () => void): void {
       socket.addEventListener('open', () => cb());

@@ -19,12 +19,6 @@ The wallet connection itself is owned by the separate
 ## Install
 
 ```sh
-npm install -g openclaw @algorandfoundation/ac2-cli@next
-```
-
-Then add the plugin to OpenClaw:
-
-```sh
 openclaw plugins install @algorandfoundation/ac2-open-claw-reference@next
 openclaw plugins enable ac2
 openclaw ac2 setup          # writes the channel + tools into openclaw.json
@@ -36,9 +30,11 @@ both the OpenClaw updater and the plugin-only updater can find newer AC2 canary
 releases. The unversioned package and `@latest` follow stable releases and will
 not pick up canaries.
 
-You need Node.js 22 or newer, an OpenClaw agent already set up, and the `ac2`
-binary from `@algorandfoundation/ac2-cli` on your `PATH`. The native WebRTC and
-keychain dependencies belong to that service, not to this plugin.
+You need Node.js 22 or newer and an OpenClaw agent already set up. The AC2
+service (`@algorandfoundation/ac2-cli`) ships as a dependency of this plugin and
+is started for you from that bundled copy — you do **not** need to install it
+globally or have an `ac2` binary on your `PATH`. The native WebRTC and keychain
+dependencies belong to that bundled service, not to this plugin.
 
 ## Use it
 
@@ -96,8 +92,9 @@ Everything except `pair` and `setup` is read-only and never starts the service.
 ```
 
 Connection settings are read by the process that owns the connection, which is the
-AC2 service, so set them in its environment (before `ac2 service start`, or in the
-unit written by `ac2 service install`):
+AC2 service. The plugin starts that service as a child of the OpenClaw gateway,
+so it inherits the gateway's environment — set these variables wherever the
+gateway runs (e.g. its service unit or shell) and restart the gateway:
 
 | Variable | Purpose |
 | --- | --- |
@@ -126,8 +123,10 @@ different wallet (see the first-controller lock in
 [ARCHITECTURE.md](./ARCHITECTURE.md)). Run `openclaw ac2 forget`, then pair again.
 
 **You upgraded and turns are not running.** A service that was already running
-keeps the runtime it started with. Run `ac2 service stop`, then
-`openclaw ac2 pair`.
+keeps the code and runtime it started with. After `openclaw gateway restart`,
+the next `openclaw ac2 pair` detects a service left running from the previous
+version and restarts it automatically onto the upgraded build, so re-running
+`openclaw ac2 pair` is normally all that is needed.
 
 ## Learn more
 
