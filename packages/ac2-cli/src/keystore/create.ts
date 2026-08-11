@@ -12,7 +12,11 @@
 import { createNodeKeyStore, type KeyStoreState } from '@algorandfoundation/keystore-node';
 import { Store } from '@tanstack/store';
 import { createDefaultDarwinKeyring } from './darwin-keyring.js';
-import { createHardenedNapiKeyring } from './napi-keyring.js';
+import {
+  assertPersistentKeyStorage,
+  createHardenedNapiKeyring,
+  ensureSessionBusAddress,
+} from './napi-keyring.js';
 import { migrateLegacyKeystore } from './migrate.js';
 import { resolveKeychainService, resolveKeystoreStateDir, resolveMetadataPath } from './paths.js';
 import type { Ac2KeyStore, Ac2KeyStoreOptions } from './types.js';
@@ -34,10 +38,20 @@ export function createAc2KeyStore(options: Ac2KeyStoreOptions = {}): Ac2KeyStore
   // SSH) and every access there fails with "User interaction is not allowed".
   // Everywhere else, a hardened `@napi-rs/keyring` binding that never masks a
   // hard keychain failure (e.g. Secret Service down) as a missing key.
-  const keyring =
-    options.keyring ??
-    createDefaultDarwinKeyring({ stateDir, service, log }) ??
-    createHardenedNapiKeyring({ service });
+  let keyring = options.keyring ?? createDefaultDarwinKeyring({ stateDir, service, log });
+  if (!keyring) {
+    // A daemon started outside a desktop login session (SSH, or auto-started
+    // from one) inherits no `DBUS_SESSION_BUS_ADDRESS`, so it cannot see the
+    // Secret Service running under `user@<uid>.service` and would fall back to
+    // the volatile kernel keyring on a machine that HAS a working keychain.
+    const busAddress = ensureSessionBusAddress();
+    if (busAddress !== null) log(`[ac2] using the systemd user session bus at ${busAddress}`);
+    keyring = createHardenedNapiKeyring({ service });
+    // `@napi-rs/keyring` silently falls back to the VOLATILE kernel keyring on
+    // Linux when no Secret Service is reachable; keys stored there are wiped on
+    // logout/reboot. Fail construction instead of storing keys that evaporate.
+    assertPersistentKeyStorage(keyring);
+  }
 
   const keystore = createNodeKeyStore({
     store,
@@ -62,6 +76,12 @@ export function createAc2KeyStore(options: Ac2KeyStoreOptions = {}): Ac2KeyStore
       log(`[ac2] legacy keystore migration failed: ${(err as Error).message}`);
     }
   })();
+  // `ready` starts running eagerly (the engine's own ready check kicks off at
+  // construction). Attach a no-op handler so an early rejection — e.g. "master
+  // key is missing from the keychain" — surfaces to whoever awaits `ready`
+  // (the daemon's startup path, which reports it) instead of killing the
+  // process as an unhandled rejection before that await is reached.
+  ready.catch(() => {});
 
   return {
     keystore,

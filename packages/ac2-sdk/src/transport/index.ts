@@ -122,10 +122,6 @@ export function rtcDataChannelTransport(channel: RtcDataChannelLike): Ac2Transpo
     errorHandler?.(err);
   };
   channel.onmessage = (ev) => {
-    console.log(
-      `[ac2-sdk] transport onmessage channel=${channel.label} type=${typeof ev.data} ` +
-        `hasMessageHandler=${messageHandler != null} hasRawHandler=${rawMessageHandler != null}`,
-    );
     // Binary frames: route to the optional binary hook. Per SPEC.md →
     // WebRTC DataChannel Transport §3, attachments MAY be sent as binary
     // DataChannel messages — so this is NOT an error condition. If no

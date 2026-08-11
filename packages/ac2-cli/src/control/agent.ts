@@ -87,8 +87,26 @@ export interface EnsureDaemonRunningOptions {
    * install. Pass `null` to disable the version check entirely.
    */
   expectedVersion?: string | null;
+  /**
+   * Runtime adapter this caller needs the daemon to be running (see
+   * `../runtime/loader.ts`). A reachable daemon reporting a *different*
+   * adapter is restarted exactly like a stale one, because the adapter is
+   * chosen once at daemon startup and can never be switched in place.
+   *
+   * Defaults to `AC2_RUNTIME` from `env` when set — an agent host that needs
+   * a specific backend sets that variable before calling (the OpenClaw plugin
+   * sets `AC2_RUNTIME=openclaw-gateway` in `ac2 pair`), and the daemon this
+   * function would spawn inherits it, so it is the authoritative statement of
+   * "which adapter this process expects". Pass `null` to disable the check.
+   */
+  expectedRuntimeAdapter?: string | null;
   /** Line logger for restart notices (default `console.log`). */
   log?: (message: string) => void;
+  /**
+   * This process's own pid, used to refuse restarting an IN-PROCESS daemon
+   * ({@link isSelfHostedDaemon}). Test seam only — defaults to `process.pid`.
+   */
+  selfPid?: number;
 }
 
 /**
@@ -108,6 +126,54 @@ export function isStaleDaemonVersion(
   if (!runningVersion) return false;
   if (expectedVersion === null || expectedVersion === FALLBACK_DAEMON_VERSION) return false;
   return runningVersion !== expectedVersion;
+}
+
+/**
+ * Decide whether a reachable daemon is running the wrong runtime adapter and
+ * must be restarted. Pure so the restart policy is unit-testable.
+ *
+ * The adapter is resolved once, at daemon startup (`resolveRuntimeAdapterSpec`
+ * in `daemon/run.ts`), and no control request can swap it afterwards — so a
+ * daemon that came up on the built-in `socket` adapter (e.g. started by a bare
+ * `ac2 service start`, or by an install predating the gateway adapter) keeps
+ * routing wallet frames to a control-socket agent that is not there. The
+ * wallet then pairs and reports "connected" while every turn goes nowhere.
+ * Restarting is the only way to apply the caller's choice.
+ *
+ * Mirrors {@link isStaleDaemonVersion}'s conservative policy: an unknown
+ * running adapter (`null`/absent — e.g. a broken specifier left the daemon
+ * with no adapter attached) or no expectation at all is left alone rather
+ * than risk cycling a daemon on a comparison we cannot trust.
+ */
+export function isRuntimeAdapterMismatch(
+  runningAdapter: string | null | undefined,
+  expectedAdapter: string | null,
+): boolean {
+  if (expectedAdapter === null || expectedAdapter.length === 0) return false;
+  if (runningAdapter === null || runningAdapter === undefined || runningAdapter.length === 0) {
+    return false;
+  }
+  return runningAdapter !== expectedAdapter;
+}
+
+/**
+ * Whether the "daemon" this launcher would restart is in fact hosted INSIDE
+ * the calling process, in which case it must never be stopped: the restart
+ * escalates to signals (see {@link stopStaleDaemon}), so it would kill the
+ * agent host itself rather than a detached child.
+ *
+ * An embedded daemon is a supported arrangement — `runDaemon` is exported and
+ * a host may run one in-process (the OpenClaw plugin's pairing tests do), in
+ * which case the pidfile carries the HOST's pid. Compares both the pid the
+ * daemon reports over the control socket and the one in the pidfile, since
+ * either alone can be missing.
+ */
+export function isSelfHostedDaemon(
+  reportedPid: number | null | undefined,
+  pidfilePid: number | null,
+  selfPid: number,
+): boolean {
+  return reportedPid === selfPid || pidfilePid === selfPid;
 }
 
 /**
@@ -170,6 +236,11 @@ async function stopStaleDaemon(opts: {
  * silently talking to a service left running from the previous version instead
  * of requiring a manual `ac2 service stop`. An OS-supervised daemon (no
  * pidfile) is owned by its service unit and left for that upgrade path.
+ *
+ * The same restart applies when the running daemon uses a different runtime
+ * adapter than this caller needs ({@link isRuntimeAdapterMismatch}) — the
+ * adapter is fixed at startup, so reusing such a daemon leaves the wallet
+ * paired to a service with no live agent behind it.
  */
 export async function ensureDaemonRunning(options: EnsureDaemonRunningOptions = {}): Promise<void> {
   // Startup-failure reports are timestamped; only one written during THIS
@@ -179,6 +250,10 @@ export async function ensureDaemonRunning(options: EnsureDaemonRunningOptions = 
   const timeoutMs = options.timeoutMs ?? 5000;
   const expectedVersion =
     options.expectedVersion === undefined ? AC2_DAEMON_VERSION : options.expectedVersion;
+  const expectedRuntimeAdapter =
+    options.expectedRuntimeAdapter === undefined
+      ? (env['AC2_RUNTIME']?.trim() ?? '') || null
+      : options.expectedRuntimeAdapter;
   const log = options.log ?? ((message: string) => console.log(message));
 
   const livenessOptions: DaemonLivenessOptions = { env, timeoutMs: 300 };
@@ -188,26 +263,36 @@ export async function ensureDaemonRunning(options: EnsureDaemonRunningOptions = 
   let needSpawn: boolean;
   if (liveness.source === 'control-socket') {
     const runningVersion = liveness.status?.version;
-    if (!isStaleDaemonVersion(runningVersion, expectedVersion)) return;
+    const runningAdapter = liveness.status?.runtimeAdapter;
+    const reason = isStaleDaemonVersion(runningVersion, expectedVersion)
+      ? `is running an older version (${runningVersion}, this build is ${String(expectedVersion)})`
+      : isRuntimeAdapterMismatch(runningAdapter, expectedRuntimeAdapter)
+        ? `is running the "${String(runningAdapter)}" runtime adapter, but this host needs ` +
+          `"${String(expectedRuntimeAdapter)}" (the adapter is fixed when the service starts)`
+        : null;
+    if (reason === null) return;
 
     // Only auto-restart a daemon THIS install manages (a detached child writes
     // a pidfile). A daemon under OS supervision (launchd/systemd) writes none;
     // stopping it would just make the supervisor relaunch the same installed
     // binary, so leave it to the service-unit upgrade path and keep using it.
     const managedPid = await readDaemonPid({ env });
+    if (isSelfHostedDaemon(liveness.status?.pid, managedPid, options.selfPid ?? process.pid)) {
+      log(
+        `[ac2] AC2 service ${reason} but is running INSIDE this process — restart the host ` +
+          'to apply the change.',
+      );
+      return;
+    }
     if (managedPid === null) {
       log(
-        `[ac2] AC2 service is running an older version (${runningVersion}, this build is ` +
-          `${String(expectedVersion)}) but is OS-supervised — restart its service unit ` +
-          '(e.g. `ac2 service stop`) to pick up the upgrade.',
+        `[ac2] AC2 service ${reason} but is OS-supervised — restart its service unit ` +
+          '(e.g. `ac2 service stop`) to pick up the change.',
       );
       return;
     }
 
-    log(
-      `[ac2] AC2 service is running an older version (${runningVersion}, this build is ` +
-        `${String(expectedVersion)}) — restarting it to pick up the upgrade…`,
-    );
+    log(`[ac2] AC2 service ${reason} — restarting it to pick up the change…`);
     await stopStaleDaemon({
       env,
       pid: liveness.status?.pid ?? managedPid,

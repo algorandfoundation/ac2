@@ -563,6 +563,51 @@ describe('createOpenClawGatewayAdapter (adapter.ts)', () => {
     return { channel: 'control', payload, controllerDid, requestId: 'req-1' };
   }
 
+  // Reconnects are otherwise driven ONLY by `connection.onClose`, but the
+  // client rejects `ready` on its own connect timeout (or a rejected
+  // `connect`) WITHOUT the socket necessarily closing — a half-open link after
+  // the host suspends, or a gateway restarted mid-handshake. That parked the
+  // adapter on a dead client forever: the wallet still paired and reported
+  // "connected" while every turn failed with `gateway not ready` /
+  // `Sent before connected` until the daemon was restarted BY HAND. Observed
+  // live on a Mac host whose gateway was restarted underneath it.
+  it('retries the handshake when it fails without the socket closing', async () => {
+    const { host, logs } = createFakeHost();
+    const connections: FakeGatewayConnection[] = [];
+    const adapter = createOpenClawGatewayAdapter(host, {
+      __connectionFactory: () => {
+        const connection = new FakeGatewayConnection();
+        connections.push(connection);
+        return connection;
+      },
+      __readOpenClawConfigFile: () => undefined,
+    });
+
+    try {
+      await adapter.start?.();
+      const first = connections[0]!;
+      first.triggerOpen();
+      await waitFor(() => first.sent.some((frame) => frame.method === 'connect'));
+      // Handshake fails; the fake connection deliberately does NOT fire its
+      // close handlers, so only the `ready` rejection can drive recovery.
+      first.respondError('connect', { code: 'unauthorized', message: 'no token' });
+
+      await waitFor(() => logs.some((line) => line.includes('gateway connect failed')));
+      // The dead socket is closed rather than left dangling half-open…
+      await waitFor(() => first.closed);
+      // …and a fresh attempt follows (first backoff step is 1s).
+      await waitFor(() => connections.length === 2, 5000);
+
+      // The retry genuinely recovers the runtime.
+      const second = connections[1]!;
+      second.triggerOpen();
+      await second.emitHelloOk();
+      await waitFor(() => logs.some((line) => line.includes('gateway connected')));
+    } finally {
+      adapter.stop?.();
+    }
+  });
+
   it('emits a preview(thinking) frame immediately, then an agent request with no agentId', async () => {
     const { sends, connection, adapter } = await setup();
 

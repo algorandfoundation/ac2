@@ -300,12 +300,16 @@ export function buildAc2Command(api: OpenClawApi): unknown {
          *     the daemon's `openclaw-gateway` adapter from ITS OWN inherited
          *     env/defaults. There is no host-API gateway lookup in this plugin
          *     to wire up — do not invent one.
-         * (c) This ONLY takes effect on a freshly auto-started daemon: an
-         *     ALREADY-running daemon keeps whatever adapter it was started
-         *     with (auto-start only spawns a process when none is running).
-         *     If the daemon was started before this change (or with
-         *     `AC2_RUNTIME=socket`), stop it first (`ac2 service stop`) and
-         *     re-run `pair` so the new daemon picks up the gateway adapter.
+         * (c) The adapter is fixed when the daemon starts and cannot be
+         *     swapped in place, so an ALREADY-running daemon on a different
+         *     adapter would leave the wallet paired to a service with no live
+         *     agent behind it (it pairs, reports "connected", and every turn
+         *     goes nowhere). `ensureDaemonRunning` therefore compares this
+         *     env var against the running daemon's reported adapter and
+         *     restarts a self-managed daemon that disagrees — a service left
+         *     over from a bare `ac2 service start` (legacy `socket` adapter)
+         *     is recycled automatically. An OS-supervised daemon (no pidfile)
+         *     is only reported: restart its service unit to apply the change.
          * (d) Operators can opt back out at any time with `AC2_RUNTIME=socket`
          *     set before the daemon starts, to roll back to the legacy
          *     in-process-routed adapter.

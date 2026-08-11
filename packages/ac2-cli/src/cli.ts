@@ -107,6 +107,20 @@ async function serviceRun(flags: CliFlags): Promise<number> {
   // failure is handed over as a structured report (and a successful start
   // clears any leftover) — see `daemon/startup-report.ts`. The launcher
   // (`ensureDaemonRunning`) reads the report instead of parsing the log.
+  //
+  // The catch on `runDaemon` below only sees failures of the awaited startup
+  // path. A floating promise that rejects mid-startup (Node kills the process
+  // on unhandled rejections) or a synchronous crash would bypass it and leave
+  // the launcher with nothing but a timeout — report those too, then die with
+  // the same non-zero exit Node's default behavior produces.
+  for (const fatal of ['uncaughtException', 'unhandledRejection'] as const) {
+    process.on(fatal, (err: unknown) => {
+      void reportStartupFailure(err).finally(() => {
+        console.error(err);
+        process.exit(1);
+      });
+    });
+  }
   const daemon = await runDaemon(serviceRunOptions(flags)).catch(async (err: unknown) => {
     await reportStartupFailure(err);
     throw err;

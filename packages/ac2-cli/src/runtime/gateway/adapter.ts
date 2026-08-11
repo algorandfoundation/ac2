@@ -1258,6 +1258,28 @@ export function createOpenClawGatewayAdapter(
       })
       .catch((err: unknown) => {
         host.log(`[ac2][openclaw-gateway] gateway connect failed: ${(err as Error).message}`);
+        // A REJECTED HANDSHAKE DOES NOT IMPLY A CLOSED SOCKET. Reconnects are
+        // otherwise driven only by `connection.onClose` below, but `client.ts`
+        // rejects `ready` on its own connect timeout while the WebSocket is
+        // still open — a half-open link after the host suspends, or a gateway
+        // restarted mid-handshake. Nothing then ever retries: the adapter keeps
+        // a client whose `ready` is permanently rejected, so the wallet still
+        // pairs and every turn fails ("gateway not ready" / "Sent before
+        // connected") until the daemon is restarted by hand. Observed live on
+        // a Mac host after `launchctl kickstart` of the gateway.
+        //
+        // Drop the dead client (inbound turns then take the clean
+        // "gateway unavailable" path) and close it so the socket cannot linger
+        // half-open; `scheduleReconnect` is a no-op if the close callback
+        // already armed the timer.
+        if (client !== gatewayClient) return;
+        client = null;
+        try {
+          gatewayClient.close();
+        } catch {
+          // Already gone; the reconnect below is what matters.
+        }
+        scheduleReconnect();
       });
 
     connection.onClose((reason) => {

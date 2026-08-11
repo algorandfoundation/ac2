@@ -21,6 +21,8 @@ import { CONTROL_PROTOCOL_VERSION } from '../src/control/protocol.js';
 import {
   connectAgentSession,
   ensureDaemonRunning,
+  isRuntimeAdapterMismatch,
+  isSelfHostedDaemon,
   isStaleDaemonVersion,
   resolveOwnCliPath,
   type AgentSession,
@@ -101,6 +103,45 @@ describe('isStaleDaemonVersion', () => {
   });
 });
 
+describe('isRuntimeAdapterMismatch', () => {
+  it('mismatches only when both adapters are known and differ', () => {
+    expect(isRuntimeAdapterMismatch('socket', 'openclaw-gateway')).toBe(true);
+    expect(isRuntimeAdapterMismatch('openclaw-gateway', 'openclaw-gateway')).toBe(false);
+  });
+
+  it('never restarts when the caller expressed no expectation', () => {
+    expect(isRuntimeAdapterMismatch('socket', null)).toBe(false);
+    expect(isRuntimeAdapterMismatch('socket', '')).toBe(false);
+  });
+
+  it('never restarts on an unknown running adapter (none attached / not reported)', () => {
+    expect(isRuntimeAdapterMismatch(null, 'openclaw-gateway')).toBe(false);
+    expect(isRuntimeAdapterMismatch(undefined, 'openclaw-gateway')).toBe(false);
+    expect(isRuntimeAdapterMismatch('', 'openclaw-gateway')).toBe(false);
+  });
+});
+
+describe('isSelfHostedDaemon', () => {
+  it('detects an in-process daemon from either the reported or the pidfile pid', () => {
+    expect(isSelfHostedDaemon(4242, null, 4242)).toBe(true);
+    expect(isSelfHostedDaemon(undefined, 4242, 4242)).toBe(true);
+  });
+
+  it('treats a genuinely detached daemon as restartable', () => {
+    expect(isSelfHostedDaemon(999, 999, 4242)).toBe(false);
+    expect(isSelfHostedDaemon(null, null, 4242)).toBe(false);
+    expect(isSelfHostedDaemon(undefined, null, 4242)).toBe(false);
+  });
+});
+
+/**
+ * A pid that is NOT this process's, for daemons the tests model as a separate
+ * (OS-supervised) process — reporting `process.pid` there would trip the
+ * in-process guard (see `isSelfHostedDaemon`) instead. Never signalled: those
+ * cases return before the restart path.
+ */
+const SUPERVISED_DAEMON_PID = 999_999;
+
 describe('ensureDaemonRunning', () => {
   let tmpDir: string;
 
@@ -163,14 +204,15 @@ describe('ensureDaemonRunning', () => {
     const env = { ...process.env, AC2_HOME: tmpDir };
     // Deliberately no pidfile: an OS-supervised daemon writes none, so the
     // restart must not fire (it would only make the supervisor relaunch the
-    // same old binary).
+    // same old binary). Its reported pid is deliberately NOT this process's,
+    // which would instead be the in-process case below.
     const socketPath = join(tmpDir, 'ac2d.sock');
     let stopRequested = false;
     const server = createControlServer({
       path: socketPath,
       handler: (_client, method) => {
         if (method === 'daemon.stop') stopRequested = true;
-        return { version: '1.0.0-canary.1', pid: process.pid };
+        return { version: '1.0.0-canary.1', pid: SUPERVISED_DAEMON_PID };
       },
     });
     await server.listen();
@@ -187,6 +229,164 @@ describe('ensureDaemonRunning', () => {
       ).resolves.toBeUndefined();
       expect(stopRequested).toBe(false);
       expect(logs.some((line) => line.includes('OS-supervised'))).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('does not restart a reachable daemon already on the expected runtime adapter', async () => {
+    const env = {
+      ...process.env,
+      AC2_HOME: tmpDir,
+      AC2_RUNTIME: 'openclaw-gateway',
+    };
+    await writeFile(join(tmpDir, 'ac2d.pid'), `${process.pid}\n`);
+
+    const socketPath = join(tmpDir, 'ac2d.sock');
+    let stopRequested = false;
+    const server = createControlServer({
+      path: socketPath,
+      handler: (_client, method) => {
+        if (method === 'daemon.stop') stopRequested = true;
+        return {
+          version: '1.0.0-canary.4',
+          pid: process.pid,
+          runtimeAdapter: 'openclaw-gateway',
+        };
+      },
+    });
+    await server.listen();
+    try {
+      await expect(
+        ensureDaemonRunning({
+          env,
+          socketPath,
+          timeoutMs: 1000,
+          expectedVersion: '1.0.0-canary.4',
+        }),
+      ).resolves.toBeUndefined();
+      expect(stopRequested).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('leaves a daemon on another adapter alone when the caller expects none (no AC2_RUNTIME)', async () => {
+    const env: NodeJS.ProcessEnv = { ...process.env, AC2_HOME: tmpDir };
+    delete env['AC2_RUNTIME'];
+    await writeFile(join(tmpDir, 'ac2d.pid'), `${process.pid}\n`);
+
+    const socketPath = join(tmpDir, 'ac2d.sock');
+    let stopRequested = false;
+    const server = createControlServer({
+      path: socketPath,
+      handler: (_client, method) => {
+        if (method === 'daemon.stop') stopRequested = true;
+        return {
+          version: '1.0.0-canary.4',
+          pid: process.pid,
+          runtimeAdapter: 'socket',
+        };
+      },
+    });
+    await server.listen();
+    try {
+      await expect(
+        ensureDaemonRunning({
+          env,
+          socketPath,
+          timeoutMs: 1000,
+          expectedVersion: '1.0.0-canary.4',
+        }),
+      ).resolves.toBeUndefined();
+      expect(stopRequested).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('reports (but does not restart) an OS-supervised daemon on the wrong runtime adapter', async () => {
+    // The wallet-facing symptom this guards: a daemon left on the legacy
+    // `socket` adapter pairs and reports "connected" while no agent is behind
+    // it, so every turn goes nowhere. Without a pidfile it is the service
+    // unit's to restart, so only an advisory is emitted.
+    const env = {
+      ...process.env,
+      AC2_HOME: tmpDir,
+      AC2_RUNTIME: 'openclaw-gateway',
+    };
+    const socketPath = join(tmpDir, 'ac2d.sock');
+    let stopRequested = false;
+    const server = createControlServer({
+      path: socketPath,
+      handler: (_client, method) => {
+        if (method === 'daemon.stop') stopRequested = true;
+        return {
+          version: '1.0.0-canary.4',
+          pid: SUPERVISED_DAEMON_PID,
+          runtimeAdapter: 'socket',
+        };
+      },
+    });
+    await server.listen();
+    const logs: string[] = [];
+    try {
+      await expect(
+        ensureDaemonRunning({
+          env,
+          socketPath,
+          timeoutMs: 1000,
+          expectedVersion: '1.0.0-canary.4',
+          log: (message) => logs.push(message),
+        }),
+      ).resolves.toBeUndefined();
+      expect(stopRequested).toBe(false);
+      expect(logs.some((line) => /"socket" runtime adapter/.test(line))).toBe(true);
+      expect(logs.some((line) => line.includes('OS-supervised'))).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  // A host may run the daemon IN-PROCESS (`runDaemon` is exported, and the
+  // OpenClaw plugin's pairing tests do exactly that). Restarting escalates to
+  // signals, so without this guard the launcher SIGKILLs its own host — which
+  // it did, killing the test worker outright.
+  it('never restarts a daemon hosted inside this process, even on a mismatch', async () => {
+    const env = {
+      ...process.env,
+      AC2_HOME: tmpDir,
+      AC2_RUNTIME: 'openclaw-gateway',
+    };
+    await writeFile(join(tmpDir, 'ac2d.pid'), `${process.pid}\n`);
+
+    const socketPath = join(tmpDir, 'ac2d.sock');
+    let stopRequested = false;
+    const server = createControlServer({
+      path: socketPath,
+      handler: (_client, method) => {
+        if (method === 'daemon.stop') stopRequested = true;
+        return {
+          version: '1.0.0-canary.4',
+          pid: process.pid,
+          runtimeAdapter: 'socket',
+        };
+      },
+    });
+    await server.listen();
+    const logs: string[] = [];
+    try {
+      await expect(
+        ensureDaemonRunning({
+          env,
+          socketPath,
+          timeoutMs: 1000,
+          expectedVersion: '1.0.0-canary.4',
+          log: (message) => logs.push(message),
+        }),
+      ).resolves.toBeUndefined();
+      expect(stopRequested).toBe(false);
+      expect(logs.some((line) => line.includes('INSIDE this process'))).toBe(true);
     } finally {
       await server.close();
     }
