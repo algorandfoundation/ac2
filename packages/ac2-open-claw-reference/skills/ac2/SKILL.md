@@ -149,15 +149,16 @@ The wallet's Ed25519 account key doubles as a **git/GitHub SSH signing key**. Us
 **Signing commits — the required rhythm, before every push:**
 
 ```bash
-git commit -m "..."                 # created unsigned, like any commit
+git commit --no-gpg-sign -m "..."   # created unsigned — bypasses any local auto-signing config
 openclaw ac2 git-resign <repo-dir>  # wallet approval; commit rewritten signed in place
 git push                            # only ever push signed commits
 ```
 
+- **Always pass `--no-gpg-sign`** to `git commit` (and to `git commit --amend`, and rebase via `git rebase -c commit.gpgsign=false` or re-sign after): the machine's git config may auto-sign with the user's own SSH/GPG key, and that key is never the wallet. `git-resign` strips and replaces a foreign signature (with a wallet approval), so a slip-through is recoverable — but creating commits unsigned is the correct path.
 - `git-resign <repo-dir>` signs the tip of `HEAD` in place. The commit hash changes; the ref is moved with a compare-and-swap, so re-sign before anything records the old hash.
 - Made several commits (or a rebase/merge produced a chain)? Sign them all in one pass: `openclaw ac2 git-resign <repo-dir> --base origin/<branch>` — each commit gets its own wallet approval (`Sign git commit: "…"`), oldest first, with parent hashes rewritten along the chain. Tell the user approvals are coming before you run it.
 - `already signed — nothing to do` is a success, not an error.
-- A declined wallet approval aborts with the ref untouched — a normal user decision, don't retry. If it fails with `no active AC2 wallet session`, ask the user to reconnect (`openclaw ac2 pair`) — don't retry in a loop.
+- A declined wallet approval aborts with the ref untouched — a normal user decision, don't retry. If it fails with `no active AC2 wallet session`, **stop the push entirely**: ask the user to connect/pair their wallet (`openclaw ac2 pair`) and only push once `git-resign` has succeeded — don't retry in a loop, and never push while signing is unavailable.
 - Never work around a signing failure by pushing unsigned or substituting a different key — the user's wallet approval is the point. If the user asks why commits show _Unverified_ on GitHub, that's when to point back at the key upload (step 2) and the email match — don't volunteer it otherwise.
 
 `git-resign` is the only git signing surface: never hand-build SSHSIG envelopes or commit objects via `ac2_sign` — a malformed envelope shows as _Unverified_ on GitHub with no local error. (Signed tags are not covered yet.)

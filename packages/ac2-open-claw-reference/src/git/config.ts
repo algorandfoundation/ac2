@@ -7,7 +7,7 @@
 import { decodeAddress } from '@algorandfoundation/algokit-utils/common';
 
 import { loadAc2State } from '@algorandfoundation/ac2-cli/identity';
-import { sessionManager } from '../session/manager.js';
+import { sessionManager, type SessionManager } from '../session/manager.js';
 import {
   controllerDidToAlgorandAddress,
   sessionAlgorandAddress,
@@ -19,10 +19,10 @@ import {
  * SSH signing key directly. Falls back to the persisted bound controller when
  * no session is live (e.g. a fresh CLI process).
  */
-export function resolveWalletSigningPublicKey():
-  | { address: string; publicKey: Uint8Array }
-  | undefined {
-  const active = sessionManager.getActive();
+export function resolveWalletSigningPublicKey(
+  manager: SessionManager = sessionManager,
+): { address: string; publicKey: Uint8Array } | undefined {
+  const active = manager.getActive();
   const boundControllerDid = loadAc2State().identity?.controllerDid;
   const address = active
     ? sessionAlgorandAddress(active)

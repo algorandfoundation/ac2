@@ -1,6 +1,8 @@
 import { Buffer } from 'node:buffer';
 import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 
+import { encodeAddress } from '@algorandfoundation/algokit-utils/common';
+
 import { SessionManager, type ActiveSession } from '../src/session/manager.js';
 
 export interface WalletFixture {
@@ -41,7 +43,9 @@ export function walletFixture(
   manager.setActive({
     transport: {} as never,
     client: client as never,
-    controllerDid: 'did:key:controller',
+    // An Algorand address IS the account's Ed25519 key, so using the fixture
+    // key's address here makes the wallet signing key resolvable in tests.
+    controllerDid: encodeAddress(rawPublicKey),
     agentDid: 'did:key:agent',
     identityGranted: true,
     ...overrides,

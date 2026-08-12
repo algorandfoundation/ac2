@@ -15,7 +15,9 @@ import { spawnSync } from 'node:child_process';
 import type { PluginConfig, ToolContext } from '../session/contracts.js';
 import type { ResolveSignDeps } from '../session/flows.js';
 import { NoActiveSessionError } from '../session/manager.js';
+import { resolveWalletSigningPublicKey } from './config.js';
 import { gitSignFlow, subjectLine } from './sign-flow.js';
+import { buildSshSigSignedData, decodeSshSigArmor, verifyEd25519 } from './sshsig.js';
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
@@ -58,25 +60,35 @@ function isGpgsigStart(line: string): boolean {
 
 /**
  * Remove any `gpgsig` / `gpgsig-sha256` header (and its space-prefixed
- * continuation lines). The result is the exact payload the signature covers.
+ * continuation lines). The result is the exact payload the signature covers;
+ * `armor` is the removed signature block (continuation prefixes stripped).
  */
-export function stripGpgsigHeader(payload: Buffer): { payload: Buffer; hadSignature: boolean } {
+export function stripGpgsigHeader(payload: Buffer): {
+  payload: Buffer;
+  hadSignature: boolean;
+  armor?: string;
+} {
   const { headerLines, message } = splitHeaders(payload);
   const kept: string[] = [];
+  const armorLines: string[] = [];
   let inSignature = false;
   let hadSignature = false;
   for (const line of headerLines) {
     if (isGpgsigStart(line)) {
       inSignature = true;
       hadSignature = true;
+      armorLines.push(line.replace(/^gpgsig(-sha256)? /, ''));
       continue;
     }
-    if (inSignature && line.startsWith(' ')) continue;
+    if (inSignature && line.startsWith(' ')) {
+      armorLines.push(line.slice(1));
+      continue;
+    }
     inSignature = false;
     kept.push(line);
   }
   if (!hadSignature) return { payload, hadSignature: false };
-  return { payload: joinHeaders(kept, message), hadSignature: true };
+  return { payload: joinHeaders(kept, message), hadSignature: true, armor: armorLines.join('\n') };
 }
 
 /**
@@ -124,6 +136,19 @@ export interface GitResignOptions {
   base?: string;
 }
 
+/** True when `armor` is a valid SSHSIG by `walletKey` over `payload` (namespace `git`). */
+function isWalletSignature(armor: string, payload: Buffer, walletKey: Uint8Array): boolean {
+  try {
+    const decoded = decodeSshSigArmor(armor);
+    return (
+      Buffer.from(walletKey).equals(decoded.publicKey) &&
+      verifyEd25519(buildSshSigSignedData(payload), decoded.signature, decoded.publicKey)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export type GitResignResult =
   | {
       status: 'signed';
@@ -166,14 +191,25 @@ export async function resignCommits(
     return { status: 'rejected', reason: 'no_commits_in_range' };
   }
 
+  // The wallet's key decides whether an existing signature counts as "already
+  // signed": a commit signed by any OTHER key (e.g. the machine's own git
+  // signing config auto-signing `git commit`) is stripped and wallet-signed.
+  // When no wallet key is resolvable, fall back to skipping any signed commit.
+  const walletKey = resolveWalletSigningPublicKey(deps.manager)?.publicKey;
+
   const mapping = new Map<string, string>();
   const commits: Array<{ oldSha: string; newSha: string; subject: string }> = [];
   for (const sha of shas) {
     const raw = git(options.repoDir, ['cat-file', 'commit', sha]);
     const withParents = rewriteParentHeaders(raw, mapping);
-    const { payload, hadSignature } = stripGpgsigHeader(withParents);
-    if (hadSignature && withParents === raw) {
-      // Already signed and its parents are untouched: nothing to redo.
+    const { payload, hadSignature, armor } = stripGpgsigHeader(withParents);
+    if (
+      hadSignature &&
+      withParents === raw &&
+      (walletKey === undefined ||
+        (armor !== undefined && isWalletSignature(armor, payload, walletKey)))
+    ) {
+      // Already wallet-signed and its parents are untouched: nothing to redo.
       continue;
     }
 

@@ -180,6 +180,36 @@ describe('resignCommits', () => {
     git(repoDir, ['fsck', '--strict']);
   });
 
+  it('strips and re-signs a tip signed by a foreign key', async () => {
+    // The "machine's own git signing config" case: the tip carries a valid
+    // SSHSIG by some other key — resign must replace it, not skip it.
+    const foreign = walletFixture();
+    const { manager, rawPublicKey, requests } = walletFixture();
+    const repoDir = makeRepo();
+    commit(repoDir, 'feat: locally-signed');
+    const foreignResult = await resignCommits({ repoDir }, {}, { manager: foreign.manager });
+    expect(foreignResult.status).toBe('signed');
+
+    const result = await resignCommits({ repoDir }, {}, { manager });
+    expect(result.status).toBe('signed');
+    expect(requests).toHaveLength(1);
+
+    const raw = git(repoDir, ['cat-file', 'commit', 'HEAD']);
+    const { payload } = stripGpgsigHeader(raw);
+    const lines = raw.toString('utf8').split('\n');
+    const start = lines.findIndex((l) => l.startsWith('gpgsig '));
+    const armorLines = [lines[start]!.slice('gpgsig '.length)];
+    for (let i = start + 1; i < lines.length && lines[i]!.startsWith(' '); i++) {
+      armorLines.push(lines[i]!.slice(1));
+    }
+    const decoded = decodeSshSigArmor(armorLines.join('\n'));
+    expect(decoded.publicKey.equals(rawPublicKey)).toBe(true);
+    expect(decoded.publicKey.equals(foreign.rawPublicKey)).toBe(false);
+    expect(
+      verifyEd25519(buildSshSigSignedData(payload, 'git'), decoded.signature, decoded.publicKey),
+    ).toBe(true);
+  });
+
   it('is a no-op on an already-signed tip', async () => {
     const { manager, requests } = walletFixture();
     const repoDir = makeRepo();
