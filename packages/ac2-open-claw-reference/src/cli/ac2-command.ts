@@ -1,4 +1,9 @@
-/** The `ac2` shell + slash command: `pair`, `status`, `connections`, `forget`. */
+/** The `ac2` shell + slash command: `pair`, `status`, `connections`, `forget`, `github-key`, `git-resign`. */
+
+const GIT_RESIGN_USAGE =
+  'Usage: ac2 git-resign <repo-dir> [--ref <ref>] [--base <ref>]\n' +
+  'Signs the tip commit of <ref> (default HEAD) in place via the paired wallet.\n' +
+  'With --base, re-signs every commit in <base>..<ref>, rewriting the chain.';
 
 import qrcode from 'qrcode-terminal';
 import { Ac2Client } from '@algorandfoundation/ac2-sdk';
@@ -18,6 +23,9 @@ import {
   type ControlEvents,
 } from '@algorandfoundation/ac2-cli/control';
 import { sendNotice } from '../channel/index.js';
+import { resignCommits } from '../git/resign.js';
+import { toAuthorizedKeyLine } from '../git/sshsig.js';
+import { NO_WALLET_KEY_MESSAGE, resolveWalletSigningPublicKey } from '../git/config.js';
 
 /**
  * Banner notice shown when the wallet has not granted the agent an identity
@@ -85,6 +93,21 @@ function webRtcUnavailableInstructions(): string {
     '',
     'If this persists, this platform may not have a published @roamhq/wrtc prebuilt binary.',
   ].join('\n');
+}
+
+/**
+ * Split a raw argument string into tokens, honouring single/double quotes so
+ * values like `--name "Alice Smith"` survive as one token. Agents routinely
+ * quote values; a naive whitespace split mangles them.
+ */
+export function tokenizeArgs(raw: string): string[] {
+  const tokens: string[] = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(raw)) !== null) {
+    tokens.push(match[1] ?? match[2] ?? match[3]!.replace(/^(["'])(.*)\1$/, '$2'));
+  }
+  return tokens;
 }
 
 /** Shown when `pair` could not reach the daemon, even after trying to auto-start it. */
@@ -179,12 +202,16 @@ function daemonNotRunningText(): string {
 export function buildAc2Command(api: OpenClawApi): unknown {
   return {
     name: 'ac2',
-    description: 'AC2 channel control (pair, status, forget).',
+    description:
+      'AC2 channel control: pair | status | connections | forget | github-key | ' +
+      'git-resign <repo-dir> [--ref <ref>] [--base <ref>]. ' +
+      '`github-key` prints the wallet SSH signing key; `git-resign` ' +
+      'signs commits in place via the paired wallet before push.',
     acceptsArgs: true,
     requireAuth: false,
     async handler(ctx: any): Promise<{ text: string; keepAlive?: boolean }> {
       const args = (ctx.args ?? '').trim();
-      const tokens = args.split(/\s+/).filter(Boolean);
+      const tokens = tokenizeArgs(args);
       const sub = tokens[0] ?? 'pair';
 
       if (sub === 'status') {
@@ -280,6 +307,75 @@ export function buildAc2Command(api: OpenClawApi): unknown {
         } finally {
           client.close();
         }
+      }
+
+      if (sub === 'github-key') {
+        const key = resolveWalletSigningPublicKey();
+        if (!key) return { text: NO_WALLET_KEY_MESSAGE };
+        const line = toAuthorizedKeyLine(key.publicKey, `ac2-${key.address.slice(0, 8)}`);
+        return {
+          text: [
+            `Wallet account: ${key.address}`,
+            '',
+            'SSH signing public key (Ed25519):',
+            '',
+            `  ${line}`,
+            '',
+            'Add it on GitHub: Settings → SSH and GPG keys → New SSH key →',
+            'Key type: "Signing Key". Commits signed over AC2 then show as Verified',
+            'when the committer email matches your GitHub account.',
+            '',
+            "Committer identity is your normal git config (`git config user.name` /",
+            '`user.email`); sign commits before pushing with: openclaw ac2 git-resign',
+          ].join('\n'),
+        };
+      }
+
+      if (sub === 'git-resign') {
+        // Sign-after-commit: signs the tip (or a range) of an existing repo
+        // in place via the active session — no git signing config involved.
+        const rest = tokens.slice(1);
+        let repoDir: string | undefined;
+        let ref: string | undefined;
+        let base: string | undefined;
+        for (let i = 0; i < rest.length; i++) {
+          const token = rest[i]!;
+          if (token === '--ref') ref = rest[++i];
+          else if (token === '--base') base = rest[++i];
+          else if (!token.startsWith('--') && repoDir === undefined) repoDir = token;
+          else return { text: `git-resign: unexpected argument '${token}'\n${GIT_RESIGN_USAGE}` };
+        }
+        if (!repoDir) return { text: `git-resign: missing <repo-dir>\n${GIT_RESIGN_USAGE}` };
+
+        const cfg = resolveConfig(api);
+        const result = await resignCommits(
+          { repoDir, ...(ref !== undefined ? { ref } : {}), ...(base !== undefined ? { base } : {}) },
+          cfg,
+        );
+        if (result.status === 'rejected') {
+          if (result.reason === 'no_active_session') {
+            return {
+              text:
+                'git-resign: no active AC2 wallet session — pair the wallet first ' +
+                '(`openclaw ac2 pair`), then retry.',
+            };
+          }
+          if (result.reason === 'already_signed') {
+            return { text: 'git-resign: every commit in range is already signed — nothing to do.' };
+          }
+          return { text: `git-resign: ${result.reason}` };
+        }
+        return {
+          text: [
+            `Re-signed ${result.commits.length} commit(s) on ${result.ref}:`,
+            '',
+            ...result.commits.map(
+              (c) => `  ${c.oldSha.slice(0, 8)} → ${c.newSha.slice(0, 8)}  ${c.subject}`,
+            ),
+            '',
+            `Ref moved: ${result.oldTip.slice(0, 8)} → ${result.newTip.slice(0, 8)}. Push to publish.`,
+          ].join('\n'),
+        };
       }
 
       if (sub === 'pair') {
@@ -489,7 +585,9 @@ export function buildAc2Command(api: OpenClawApi): unknown {
         return { text: await buildInvitationText(pairing), keepAlive: true };
       }
 
-      return { text: `Unknown subcommand: ${sub}. Use 'pair', 'status', or 'forget'.` };
+      return {
+        text: `Unknown subcommand: ${sub}. Use 'pair', 'status', 'connections', 'forget', 'github-key', or 'git-resign'.`,
+      };
     },
   };
 }

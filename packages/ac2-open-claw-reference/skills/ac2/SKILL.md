@@ -1,6 +1,6 @@
 ---
 name: ac2
-description: "How to use the AC2 channel to ask the user's connected wallet to sign bytes over a live WebRTC link. Use this whenever the user asks you to 'sign', 'approve', or 'authorize' something with their wallet — even if they don't say 'AC2'. The agent never holds keys; the wallet does."
+description: "How to use the AC2 channel to ask the user's connected wallet to sign bytes over a live WebRTC link. Use this whenever the user asks you to 'sign', 'approve', or 'authorize' something with their wallet — even if they don't say 'AC2'. ALSO REQUIRED for any git work: before running `git commit` or `git push`, or configuring a git identity, read this skill — commits MUST be signed by the user's AC2 wallet (never with your own or an invented identity), and it documents the required `openclaw ac2 github-key` setup and the commit → `git-resign` → push rhythm. The agent never holds keys; the wallet does."
 metadata:
   {
     'openclaw':
@@ -121,12 +121,54 @@ Important parameters:
 
 Treat `{ status: "rejected" }` as a normal user decision. Do not retry the same payment after a rejection.
 
+## Git commit signing over AC2
+
+The wallet's Ed25519 account key doubles as a **git/GitHub SSH signing key**. Use this flow for **any** git commit/push work on this channel — not just when the user explicitly says "sign my commits". Commits are created normally (unsigned) and then signed **in place** by the user's wallet with `openclaw ac2 git-resign` before every push — there is no git-side signing configuration.
+
+**Non-negotiable: commits are signed by the user's wallet, never by you.** Do not generate, use, or configure any local SSH/GPG key of your own, and do not set `user.name`/`user.email` to an invented identity (e.g. "GitHub Action" / `action@github.com`) — the committer identity must be the user's own name/email collected in setup. And **never push without re-signing first**: nothing in git enforces this model — you do. Every commit must be wallet-signed via `git-resign` before it leaves the machine.
+
+**Before starting — check state first, don't redo setup:**
+
+- The **key upload is once per wallet, not per repo or per commit.** If the user has already been shown the `openclaw ac2 github-key` output and acknowledged adding it to GitHub — in this conversation or a previous one — do not show it or ask about it again unless the user asks. Take their word for it: the worst case is commits show _Unverified_ on GitHub, which is harmless and fixable later.
+- Committer identity is the user's own git config, assumed already set up like their SSH key. Check with `git -C <repo-dir> config user.email` — if it prints a value, identity is done; only if it's empty, cover it in the one-time setup below.
+
+**One-time setup (per repo) — follow these steps IN ORDER:**
+
+1. **Run** `openclaw ac2 github-key` (shell). It prints an `ssh-ed25519 …` line: the public key of the paired AC2 wallet.
+2. **If the user has not previously acknowledged uploading this key**, output the full `ssh-ed25519 …` line in chat and ask them to add it on GitHub under **Settings → SSH and GPG keys → New SSH key**, key type **Signing Key** (not "Authentication Key"). It is a public key — safe and expected to show. Explain that every commit will be signed with this key, held on their AC2 wallet, and GitHub marks commits _Unverified_ until it is registered. Wait for their acknowledgment, then **never bring it up again** unless they ask. If they already acknowledged before, skip this step entirely.
+3. **If they intend to push** to GitHub, push auth is their **own SSH key** (a normal **Authentication Key**, e.g. `~/.ssh/id_ed25519.pub` — separate from the wallet signing key): assume it is already added to their GitHub account, and make sure the repo remote uses the SSH form (`git@github.com:owner/repo.git`, not `https://…`). If they haven't added an SSH key yet, advise them to add it under **Settings → SSH and GPG keys → New SSH key**, key type **Authentication Key**. For local-only work, skip all of this — no auth is required.
+4. **Only if the repo has no committer identity** (`git -C <repo-dir> config user.email` is empty): ask the user for their **GitHub username** and **commit email** — GitHub only shows _Verified_ when the committer email matches their account — and have them set it (or run it with the values they provide, never invented ones):
+
+   ```bash
+   git config user.name <github-username>
+   git config user.email <email>
+   ```
+
+**Adding push access later:** if a repo was set up local-only and the user later wants to push (`git push` fails to authenticate, or they ask you to push), check the remote is the SSH form (`git remote set-url origin git@github.com:owner/repo.git`) and that their own SSH key is added to their GitHub account as an Authentication Key — advise them to add it if not.
+
+**Signing commits — the required rhythm, before every push:**
+
+```bash
+git commit --no-gpg-sign -m "..."   # created unsigned — bypasses any local auto-signing config
+openclaw ac2 git-resign <repo-dir>  # wallet approval; commit rewritten signed in place
+git push                            # only ever push signed commits
+```
+
+- **Always pass `--no-gpg-sign`** to `git commit` (and to `git commit --amend`, and rebase via `git rebase -c commit.gpgsign=false` or re-sign after): the machine's git config may auto-sign with the user's own SSH/GPG key, and that key is never the wallet. `git-resign` strips and replaces a foreign signature (with a wallet approval), so a slip-through is recoverable — but creating commits unsigned is the correct path.
+- `git-resign <repo-dir>` signs the tip of `HEAD` in place. The commit hash changes; the ref is moved with a compare-and-swap, so re-sign before anything records the old hash.
+- Made several commits (or a rebase/merge produced a chain)? Sign them all in one pass: `openclaw ac2 git-resign <repo-dir> --base origin/<branch>` — each commit gets its own wallet approval (`Sign git commit: "…"`), oldest first, with parent hashes rewritten along the chain. Tell the user approvals are coming before you run it.
+- `already signed — nothing to do` is a success, not an error.
+- A declined wallet approval aborts with the ref untouched — a normal user decision, don't retry. If it fails with `no active AC2 wallet session`, **stop the push entirely**: ask the user to connect/pair their wallet (`openclaw ac2 pair`) and only push once `git-resign` has succeeded — don't retry in a loop, and never push while signing is unavailable.
+- Never work around a signing failure by pushing unsigned or substituting a different key — the user's wallet approval is the point. If the user asks why commits show _Unverified_ on GitHub, that's when to point back at the key upload (step 2) and the email match — don't volunteer it otherwise.
+
+`git-resign` is the only git signing surface: never hand-build SSHSIG envelopes or commit objects via `ac2_sign` — a malformed envelope shows as _Unverified_ on GitHub with no local error. (Signed tags are not covered yet.)
+
 ## `sig_hint` catalog (what the core reference defines)
 
 `sig_hint` selects the curve the wallet uses. **Always set it explicitly.** Omitting it falls back to plain Ed25519 over raw bytes.
 
-| `sig_hint`      | `key_type` | Use                                            |
-| --------------- | ---------- | ---------------------------------------------- |
+| `sig_hint`      | `key_type`              | Use                                            |
+| --------------- | ----------------------- | ---------------------------------------------- |
 | `raw-ed25519`   | `account` or `identity` | Ed25519 signature over the raw payload bytes   |
 | `raw-secp256k1` | `account` or `identity` | secp256k1 signature over the raw payload bytes |
 

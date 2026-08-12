@@ -101,7 +101,8 @@
       "tools": [
         "ac2_sign",
         "ac2_capabilities",
-        "ac2_x402_fetch"
+        "ac2_x402_fetch",
+        "ac2_git_sign"
       ],
       "commands": [
         "ac2"

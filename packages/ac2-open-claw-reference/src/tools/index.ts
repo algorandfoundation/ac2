@@ -219,3 +219,4 @@ export function buildCapabilitiesTool(): AnyAgentTool {
   };
   return tool as unknown as AnyAgentTool;
 }
+

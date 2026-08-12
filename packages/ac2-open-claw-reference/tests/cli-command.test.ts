@@ -17,7 +17,7 @@ vi.mock('@algorandfoundation/ac2-cli/control', async (importOriginal) => {
   };
 });
 
-import { buildAc2Command, isMissingWebRtcError } from '../src/cli/ac2-command.js';
+import { buildAc2Command, isMissingWebRtcError, tokenizeArgs } from '../src/cli/ac2-command.js';
 
 /**
  * The daemon owns WebRTC now, so a missing `@roamhq/wrtc` arrives here as a
@@ -128,5 +128,18 @@ describe('ac2 pair command AC2_RUNTIME commitment', () => {
     };
     await command.handler({ args: 'pair' });
     expect(process.env['AC2_RUNTIME']).toBe('socket');
+  });
+});
+
+describe('tokenizeArgs', () => {
+  it('splits on whitespace and honours quotes', () => {
+    expect(tokenizeArgs('git-resign /r --base "origin/main"')).toEqual([
+      'git-resign',
+      '/r',
+      '--base',
+      'origin/main',
+    ]);
+    expect(tokenizeArgs("--name 'Alice Smith'")).toEqual(['--name', 'Alice Smith']);
+    expect(tokenizeArgs('  ')).toEqual([]);
   });
 });
