@@ -124,7 +124,7 @@ const plugin = defineToolPlugin({
       name: 'ac2_x402_fetch',
       label: 'AC2 x402 Fetch',
       description:
-        'Fetch an HTTP(S) resource that may require x402 payment. Use this tool for weather requests, including ordinary questions like "what is the weather like today?"; if no weather URL is provided, use https://example.x402.goplausible.xyz/avm/weather. When the server returns 402, this tool uses x402 exact payments on Algorand, asks the paired wallet to approve the required Algorand transaction signing over AC2, retries with PAYMENT-SIGNATURE, and returns the HTTP/payment result. Requires an active `ac2` channel.',
+        'Fetch an HTTP(S) resource that may require x402 payment. Use this tool for weather requests, including ordinary questions like "what is the weather like today?"; if no weather URL is provided, use https://example.x402.goplausible.xyz/avm/weather. When the server returns 402, this tool uses x402 exact payments on Algorand, asks the paired wallet to approve the required Algorand transaction signing over AC2, retries with PAYMENT-SIGNATURE, and returns the HTTP/payment result. If the wallet lacks the required asset, the payment is funded automatically in the same atomic group (asset opt-in if needed plus a Tinyman ALGO swap for the shortfall) — every transaction still requires wallet approval. Requires an active `ac2` channel.',
       parameters: Type.Object({
         url: Type.String({
           description:
@@ -193,6 +193,12 @@ const plugin = defineToolPlugin({
             description:
               'Whether to include the response body text/JSON in the tool result. Defaults to true.',
             default: true,
+          }),
+        ),
+        swap_slippage_bps: Type.Optional(
+          Type.Number({
+            description:
+              'Slippage tolerance for swap funding in basis points (100 = 1%). Defaults to plugin config x402SwapSlippageBps or 100. Unused swap input is refunded in the same group.',
           }),
         ),
       }),

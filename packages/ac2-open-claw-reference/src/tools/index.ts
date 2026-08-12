@@ -128,12 +128,20 @@ function responseBodyBlock(result: Awaited<ReturnType<typeof x402FetchFlow>>): s
   return '';
 }
 
+function describeSwapFunding(result: Awaited<ReturnType<typeof x402FetchFlow>>): string {
+  if (!('swapFunding' in result) || result.swapFunding === undefined) return '';
+  const swap = result.swapFunding;
+  const algo = (Number(swap.maxAlgoInput) / 1_000_000).toFixed(3);
+  const optIn = swap.optedIn ? ' after opting into the asset' : '';
+  return ` The wallet did not hold the required asset, so it was funded in the same atomic group${optIn} by swapping up to ${algo} ALGO (unused input refunded) — tell the user this.`;
+}
+
 export function describeX402Result(result: Awaited<ReturnType<typeof x402FetchFlow>>): string {
   if (result.status === 'paid') {
     const payment = result.selectedPayment
       ? ` Paid ${result.selectedPayment.amount} of ${result.selectedPayment.asset} on ${result.selectedPayment.network}.`
       : '';
-    return `x402 fetch succeeded with HTTP ${result.http.status}.${payment}${responseBodyBlock(result)}`;
+    return `x402 fetch succeeded with HTTP ${result.http.status}.${payment}${describeSwapFunding(result)}${responseBodyBlock(result)}`;
   }
   if (result.status === 'http_error') {
     return `x402 fetch completed with HTTP ${result.http.status} ${result.http.statusText}.${responseBodyBlock(result)}`;

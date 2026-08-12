@@ -64,9 +64,11 @@
     "@algorandfoundation/ac2-sdk": "workspace:*",
     "@algorandfoundation/algokit-utils": "10.0.0-beta.4",
     "@sinclair/typebox": "^0.32.0",
+    "@tinymanorg/tinyman-js-sdk": "^5.1.4",
     "@x402/avm": "^2.20.0",
     "@x402/core": "^2.20.0",
     "@x402/fetch": "^2.20.0",
+    "algosdk": "^3.6.0",
     "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
