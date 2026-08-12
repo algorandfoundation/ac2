@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.31](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.30...ac2-open-claw-reference@1.0.0-canary.31) (2026-08-12)
+
+
+### Features
+
+* SSH-based git commit signing bridge ([de9f8dd](https://github.com/algorandfoundation/ac2/commit/de9f8ddc0a2886efc7370eef9b10010776663906))
+
 # [ac2-open-claw-reference@1.0.0-canary.30](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.29...ac2-open-claw-reference@1.0.0-canary.30) (2026-08-11)
 
 
