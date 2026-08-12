@@ -73,6 +73,7 @@ Per AC2 SPEC §Capability Identifier Namespacing (three-tier convention):
 | Identifier            | Surface                                                                 |
 | --------------------- | ----------------------------------------------------------------------- |
 | `ac2-ext-x402/fetch`  | x402 exact Algorand paid HTTP fetch via the `ac2_x402_fetch` tool.      |
+| `ac2-ext-git/sign`    | Git SSHSIG signing via the `ac2 git-resign` command.                     |
 
 Downstream wallet plugins MAY add chain-specific `sig_hint`s (e.g.
 `message-algorand`, `transaction-evm`). When such a plugin is loaded, prefer

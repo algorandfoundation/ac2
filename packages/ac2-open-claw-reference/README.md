@@ -4,7 +4,7 @@ The reference [OpenClaw](https://docs.openclaw.ai/) plugin for **AC2**. It lets
 your OpenClaw agent chat with a mobile wallet and ask that wallet to sign things,
 while you keep custody of your keys.
 
-You get three agent tools and one channel:
+You get four agent tools and one channel:
 
 | Tool or channel | What it gives the agent |
 | --- | --- |
@@ -76,9 +76,68 @@ https://example.x402.goplausible.xyz/avm/weather
 | `openclaw ac2 connections` | List remembered wallet connections. |
 | `openclaw ac2 forget` | Drop a pairing and the agent identity bound to it. |
 | `openclaw ac2 setup` | Write or refresh the plugin's `openclaw.json` wiring. |
+| `openclaw ac2 github-key` | Print the wallet's key as a GitHub SSH signing key. |
 | `/ac2 status` | The same status from inside a chat. |
 
-Everything except `pair` and `setup` is read-only and never starts the service.
+Only `pair` and `setup` write state or start the service; `git-resign` never
+starts the service but does rewrite repo refs in place. Everything else is
+read-only.
+
+## Git commit signing over AC2
+
+Git can sign commits with SSH keys (`gpg.format ssh`), and an SSHSIG
+signature is just a raw Ed25519 signature over a locally-constructed
+blob. Since an Algorand address *is* an Ed25519 public key, the paired
+wallet's account key doubles as a GitHub SSH signing key — no new key
+material, no protocol changes, and the private key never leaves the
+wallet.
+
+### One-time setup
+
+```bash
+openclaw ac2 github-key     # print the wallet's key as an ssh-ed25519 line
+```
+
+Add the printed line on GitHub under **Settings → SSH and GPG keys →
+New SSH key**, choosing key type **Signing Key**. Do this **before your
+first signed commit**: commits are signed with the Ed25519 key on your
+AC2 wallet, and GitHub marks them *Unverified* until that key is
+registered.
+
+The committer identity is your normal git config (`git config user.name`
+/ `user.email`) — usually already set up on your machine; GitHub shows
+*Verified* only when the email matches the account. Pushing uses an SSH remote
+(`git@github.com:owner/repo.git`) authenticated by your own GitHub SSH
+key (an Authentication Key, separate from the wallet signing key) —
+local-only work needs no auth at all.
+No git signing settings are configured — signing happens after the
+commit, below.
+
+### How a commit gets signed
+
+Commits are created unsigned and signed **in place** before push:
+
+```bash
+git commit -m "..."
+openclaw ac2 git-resign <repo-dir>   # or --base origin/<branch> for a chain
+git push
+```
+
+1. `git-resign` reads the exact commit payload with
+   `git cat-file commit` — for an unsigned commit this is byte-for-byte
+   the SSHSIG signing input.
+2. It builds the SSHSIG signed-data blob and routes a standard
+   `raw-ed25519` `SigningRequest` to the paired wallet; the user
+   approves it (e.g. `Sign git commit: "feat: …"`).
+3. It verifies the returned signature, inserts the armored
+   `SSH SIGNATURE` block as the commit's `gpgsig` header, writes the new
+   object with `git hash-object`, and moves the ref with a
+   compare-and-swap `git update-ref`. The commit hash changes; with
+   `--base`, a whole chain is re-signed oldest-first with parent hashes
+   rewritten along the way.
+
+Signing requires an active `ac2` session (`openclaw ac2 pair`) — each
+commit is a wallet approval.
 
 ## Configuration
 
