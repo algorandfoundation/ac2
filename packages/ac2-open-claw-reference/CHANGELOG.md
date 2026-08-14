@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.32](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.31...ac2-open-claw-reference@1.0.0-canary.32) (2026-08-14)
+
+
+### Features
+
+* **openclaw:** fund x402 payments via atomic opt-in + Tinyman swap ([#50](https://github.com/algorandfoundation/ac2/issues/50)) ([6227cf1](https://github.com/algorandfoundation/ac2/commit/6227cf1f49dbd64849db97f71846c20755ca7ab3))
+
 # [ac2-open-claw-reference@1.0.0-canary.31](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.30...ac2-open-claw-reference@1.0.0-canary.31) (2026-08-12)
 
 
