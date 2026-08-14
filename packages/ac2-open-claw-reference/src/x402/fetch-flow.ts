@@ -31,11 +31,20 @@ import {
   createAc2AvmSigner,
   type X402PaymentContext,
 } from './ac2-avm-signer.js';
+import {
+  isTestnetCaip2,
+  normalizeSlippageBps,
+  type SwapFundingInfo,
+  type SwapFundingOptions,
+} from './swap.js';
+import { SwapFundingExactAvmScheme } from './swap-scheme.js';
+import { TinymanSwapProvider } from './tinyman.js';
 
 const DEFAULT_MAX_AMOUNT_ATOMIC = '1000000';
 const DEFAULT_ALLOWED_NETWORKS = [ALGORAND_TESTNET_CAIP2, ALGORAND_MAINNET_CAIP2] as const;
 const DEFAULT_ALLOWED_ASSETS = [USDC_TESTNET_ASA_ID, USDC_MAINNET_ASA_ID, 'USDC'] as const;
 const RESPONSE_BODY_LIMIT_BYTES = 128 * 1024;
+const DEFAULT_SWAP_SLIPPAGE_BPS = 100;
 
 /**
  * CAIP-2 caps a chain reference at 32 characters, so `@x402/avm` canonicalises
@@ -85,6 +94,7 @@ export interface X402FetchParams {
   allowed_pay_to?: string[];
   network_preferences?: string[];
   include_response_body?: boolean;
+  swap_slippage_bps?: number;
 }
 
 export interface X402PaymentSelection {
@@ -110,6 +120,7 @@ export type X402FetchResult =
       selectedPayment?: X402PaymentSelection;
       paymentPayload?: PaymentPayload;
       settlement?: SettleResponse;
+      swapFunding?: SwapFundingInfo;
       bodyText?: string;
       bodyJson?: unknown;
     }
@@ -126,6 +137,7 @@ export type X402FetchResult =
       paymentResponse?: HTTPResourceResponse;
       selectedPayment?: X402PaymentSelection;
       paymentPayload?: PaymentPayload;
+      swapFunding?: SwapFundingInfo;
       bodyText?: string;
       bodyJson?: unknown;
       reason: string;
@@ -173,6 +185,35 @@ function resolveAllowedAssets(params: X402FetchParams, config: PluginConfig): st
 function resolveAllowedPayTo(params: X402FetchParams, config: PluginConfig): string[] | undefined {
   const values = params.allowed_pay_to ?? config.x402AllowedPayTo;
   return values ? uniqueStrings(values) : undefined;
+}
+
+function resolveSwapOptions(params: X402FetchParams, config: PluginConfig): SwapFundingOptions {
+  return {
+    slippageBps: normalizeSlippageBps(
+      params.swap_slippage_bps ?? config.x402SwapSlippageBps ?? DEFAULT_SWAP_SLIPPAGE_BPS,
+    ),
+  };
+}
+
+/**
+ * Resolve the Algod override for one network: the network-scoped keys win,
+ * the legacy global keys apply to any network without a scoped override, and
+ * with nothing set the schemes fall back to per-network AlgoNode endpoints.
+ */
+export function resolveAlgodConfig(
+  network: string,
+  config: PluginConfig,
+): { algodUrl?: string; algodToken?: string } {
+  const testnet = isTestnetCaip2(network);
+  const url =
+    (testnet ? config.x402TestnetAlgodUrl : config.x402MainnetAlgodUrl) ?? config.x402AlgodUrl;
+  const token =
+    (testnet ? config.x402TestnetAlgodToken : config.x402MainnetAlgodToken) ??
+    config.x402AlgodToken;
+  return {
+    ...(url !== undefined ? { algodUrl: url } : {}),
+    ...(token !== undefined ? { algodToken: token } : {}),
+  };
 }
 
 function resolveMaxAmount(params: X402FetchParams, config: PluginConfig): bigint {
@@ -333,6 +374,7 @@ export async function x402FetchFlow(
   let paymentContext: X402PaymentContext = {};
   let selectedPayment: X402PaymentSelection | undefined;
   let paymentPayload: PaymentPayload | undefined;
+  let swapFunding: SwapFundingInfo | undefined;
 
   try {
     // Resolving the signer is async now: the payer address and every
@@ -353,13 +395,35 @@ export async function x402FetchFlow(
       params.network_preferences ?? config.x402NetworkPreferences ?? allowedNetworks,
     );
 
+    const swapOptions = resolveSwapOptions(params, config);
+
     const client = new x402Client(buildSelector(networkPreferences));
-    const schemeConfig: ConstructorParameters<typeof ExactAvmScheme>[1] = {
-      ...(config.x402AlgodUrl !== undefined ? { algodUrl: config.x402AlgodUrl } : {}),
-      ...(config.x402AlgodToken !== undefined ? { algodToken: config.x402AlgodToken } : {}),
-    };
-    for (const pattern of uniqueStrings(allowedNetworks.map(networkRegistrationPattern))) {
-      client.register(pattern as Network, new ExactAvmScheme(signer, schemeConfig));
+    const swapProvider = new TinymanSwapProvider({
+      testnet: resolveAlgodConfig(ALGORAND_TESTNET_CAIP2, config),
+      mainnet: resolveAlgodConfig(ALGORAND_MAINNET_CAIP2, config),
+    });
+    // One scheme per network pattern, each with that network's Algod config,
+    // so a URL override for one network never leaks onto the other.
+    const patternNetworks = new Map<string, string>();
+    for (const network of allowedNetworks) {
+      const pattern = networkRegistrationPattern(network);
+      if (!patternNetworks.has(pattern)) patternNetworks.set(pattern, network);
+    }
+    for (const [pattern, network] of patternNetworks) {
+      const schemeConfig: ConstructorParameters<typeof ExactAvmScheme>[1] = resolveAlgodConfig(
+        network,
+        config,
+      );
+      client.register(
+        pattern as Network,
+        new SwapFundingExactAvmScheme(signer, schemeConfig, {
+          provider: swapProvider,
+          swap: swapOptions,
+          onSwapFunded: (info) => {
+            swapFunding = info;
+          },
+        }),
+      );
     }
 
     client.registerPolicy(
@@ -409,6 +473,7 @@ export async function x402FetchFlow(
         ...(paymentResponse !== undefined ? { paymentResponse } : {}),
         ...(selectedPayment !== undefined ? { selectedPayment } : {}),
         ...(paymentPayload !== undefined ? { paymentPayload } : {}),
+        ...(swapFunding !== undefined ? { swapFunding } : {}),
         ...body,
         reason: paymentRequiredReason(paymentRequired),
       };
@@ -429,6 +494,7 @@ export async function x402FetchFlow(
       ...(selectedPayment !== undefined ? { selectedPayment } : {}),
       ...(paymentPayload !== undefined ? { paymentPayload } : {}),
       ...(settlement !== undefined ? { settlement } : {}),
+      ...(swapFunding !== undefined ? { swapFunding } : {}),
       ...body,
     };
   } catch (err) {
@@ -464,6 +530,9 @@ export function normalizeX402FetchParams(params: Record<string, unknown>): X402F
   if (networkPreferences !== undefined) out.network_preferences = networkPreferences;
   if (typeof params.include_response_body === 'boolean') {
     out.include_response_body = params.include_response_body;
+  }
+  if (typeof params.swap_slippage_bps === 'number') {
+    out.swap_slippage_bps = params.swap_slippage_bps;
   }
   return out;
 }

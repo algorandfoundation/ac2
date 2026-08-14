@@ -112,6 +112,8 @@ The tool:
 
 You do **not** need to call `ac2_sign` manually for x402 payments. Prefer `ac2_x402_fetch` so the spend limit, network/asset/payee allow-lists, signing description, and signed transaction packaging stay consistent.
 
+If the wallet does not hold the required asset, the tool funds the payment automatically in the same atomic group (asset opt-in if needed plus an ALGO swap for the shortfall). The group goes to the wallet as one signing request; wallets that don't support group payloads approve each transaction instead. When the result reports this (`swapFunding`), tell the user in one plain sentence — e.g. "your wallet didn't have USDC, so I swapped ~0.13 ALGO to cover it" — before summarizing the fetched content.
+
 Important parameters:
 
 - `url` — absolute HTTP(S) URL.

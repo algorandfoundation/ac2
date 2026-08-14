@@ -67,6 +67,34 @@ endpoint:
 https://example.x402.goplausible.xyz/avm/weather
 ```
 
+### Swap funding (paying without holding the asset)
+
+When the wallet is not opted into the required asset or holds less than the
+requested amount, `ac2_x402_fetch` can fund the payment in the same atomic
+transaction group: an asset opt-in (only if needed), a Tinyman v2
+fixed-output swap of ALGO for exactly the shortfall, and the x402 payment
+itself. The facilitator verifies the payment transaction inside the group and
+simulates the whole group, so settlement stays all-or-nothing — if the swap
+fails, nothing is opted in, swapped, or paid. Unused swap input from the
+slippage headroom is refunded by the pool inside the same group. The whole
+group is sent to the wallet as ONE signing request (schema
+`x402/exact/algorand/v2/transaction-group`: length-prefixed unsigned
+transaction msgpack in, concatenated 64-byte signatures out); wallets that
+don't understand the group payload get one request per transaction instead.
+
+Swap funding is automatic — there is no toggle and no spend ceiling. The
+user acknowledges and signs every transaction in the group on their wallet,
+and that approval is the guardrail. Two mechanical details:
+
+- `swap_slippage_bps` / `x402SwapSlippageBps` — slippage tolerance in basis
+  points (default `100` = 1%).
+- The wallet must hold enough spendable ALGO for the swap input, fees, and
+  the 0.1 ALGO opt-in minimum-balance increase; otherwise the call fails
+  early — before any signing request — since the group could never settle.
+
+Sponsored fees (`extra.feePayer`) are not used on the swap path; the wallet
+pays its own fees since it holds ALGO anyway.
+
 ## Commands
 
 | Command | What it does |

@@ -19,6 +19,11 @@ export interface ResolvedConfig {
   x402NetworkPreferences?: string[];
   x402AlgodUrl?: string;
   x402AlgodToken?: string;
+  x402TestnetAlgodUrl?: string;
+  x402TestnetAlgodToken?: string;
+  x402MainnetAlgodUrl?: string;
+  x402MainnetAlgodToken?: string;
+  x402SwapSlippageBps?: number;
 }
 
 let activeApi: OpenClawApi | null = null;

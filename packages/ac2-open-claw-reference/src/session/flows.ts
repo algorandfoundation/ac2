@@ -332,8 +332,39 @@ export interface SignViaDaemonDeps {
  *
  * Returns `null` only when the daemon is unreachable (so the caller can fall
  * back to any local session).
+ *
+ * `not_connected` rejections are retried for a short window: the daemon
+ * throws that BEFORE anything reaches the wallet, so it is safe to wait out a
+ * transient WebRTC blip while the daemon re-links, instead of failing a
+ * multi-step payment halfway through. Errors after the request was relayed
+ * are NOT retried — the wallet may already be showing the prompt.
  */
+const RELINK_WAIT_MS = 30_000;
+const RELINK_POLL_MS = 1_000;
+
+function isWalletNotConnectedError(err: unknown): boolean {
+  return (err as { code?: string } | undefined)?.code === 'not_connected';
+}
+
 export async function signViaDaemon(
+  params: SignParams,
+  config: PluginConfig,
+  deps: SignViaDaemonDeps = {},
+  context: ToolContext = {},
+): Promise<SignResult | null> {
+  const relinkDeadline = Date.now() + RELINK_WAIT_MS;
+  for (;;) {
+    context.signal?.throwIfAborted();
+    try {
+      return await signViaDaemonOnce(params, config, deps);
+    } catch (err) {
+      if (!isWalletNotConnectedError(err) || Date.now() >= relinkDeadline) throw err;
+      await new Promise((resolve) => setTimeout(resolve, RELINK_POLL_MS));
+    }
+  }
+}
+
+async function signViaDaemonOnce(
   params: SignParams,
   config: PluginConfig,
   deps: SignViaDaemonDeps = {},
@@ -341,24 +372,44 @@ export async function signViaDaemon(
   const connect = deps.connect ?? defaultDaemonConnect;
   const client = await connect();
   if (!client) return null;
+  // The daemon enforces `timeoutMs` on the wallet round trip, but the control
+  // client itself has no deadline — if the daemon wedges mid-relay the request
+  // would pend forever and hang the whole agent turn. Race a client-side
+  // backstop slightly after the daemon's own timeout should have fired.
+  const timeoutMs = config.defaultTimeoutMs ?? 120_000;
+  const backstopMs = timeoutMs + 10_000;
+  let backstop: NodeJS.Timeout | undefined;
   try {
-    const result = await client.request('agent.request', {
-      type: 'ac2/SigningRequest',
-      body: {
-        description: params.description,
-        encoding: 'base64',
-        payload: params.payload_base64,
-        ...(params.schema !== undefined ? { schema: params.schema } : {}),
-        ...(params.sig_hint !== undefined ? { sig_hint: params.sig_hint } : {}),
-        ...(params.display_hint !== undefined ? { display_hint: params.display_hint } : {}),
-        ...(params.key_type !== undefined ? { key_type: params.key_type } : {}),
-      },
-      responseTypes: ['ac2/SigningResponse', 'ac2/SigningRejected'],
-      ...(params.expires_in_seconds !== undefined
-        ? { expires_in_seconds: params.expires_in_seconds }
-        : {}),
-      timeoutMs: config.defaultTimeoutMs ?? 120_000,
-    });
+    const result = await Promise.race([
+      client.request('agent.request', {
+        type: 'ac2/SigningRequest',
+        body: {
+          description: params.description,
+          encoding: 'base64',
+          payload: params.payload_base64,
+          ...(params.schema !== undefined ? { schema: params.schema } : {}),
+          ...(params.sig_hint !== undefined ? { sig_hint: params.sig_hint } : {}),
+          ...(params.display_hint !== undefined ? { display_hint: params.display_hint } : {}),
+          ...(params.key_type !== undefined ? { key_type: params.key_type } : {}),
+        },
+        responseTypes: ['ac2/SigningResponse', 'ac2/SigningRejected'],
+        ...(params.expires_in_seconds !== undefined
+          ? { expires_in_seconds: params.expires_in_seconds }
+          : {}),
+        timeoutMs,
+      }),
+      new Promise<never>((_resolve, reject) => {
+        backstop = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `AC2 signing request did not settle within ${backstopMs}ms — the wallet may not have received it. Check the wallet app and the ac2 daemon.`,
+              ),
+            ),
+          backstopMs,
+        );
+      }),
+    ]);
     // A daemon-side gate (locked / no wallet-issued identity) never reached the
     // wallet — surface it as a rejection with that reason, mirroring the local
     // signing flow's `no_identity` result.
@@ -384,6 +435,7 @@ export async function signViaDaemon(
       thid: thid ?? '',
     };
   } finally {
+    if (backstop !== undefined) clearTimeout(backstop);
     client.close();
   }
 }
@@ -413,7 +465,12 @@ export async function resolveSign(
   if (manager.getActive()) {
     return signFlow(params, config, { manager }, context);
   }
-  const daemon = await signViaDaemon(params, config, deps.connect ? { connect: deps.connect } : {});
+  const daemon = await signViaDaemon(
+    params,
+    config,
+    deps.connect ? { connect: deps.connect } : {},
+    context,
+  );
   if (daemon) return daemon;
   throw new NoActiveSessionError(
     'No AC2 wallet connection. Ask the user to run `openclaw ac2 pair` and connect their wallet first.',

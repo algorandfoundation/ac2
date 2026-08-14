@@ -78,12 +78,41 @@ export const ConfigSchema = Type.Object({
   x402AlgodUrl: Type.Optional(
     Type.String({
       description:
-        'Optional Algod URL override for constructing x402 Algorand payment transactions.',
+        'Optional Algod URL override for constructing x402 Algorand payment transactions. Applies to any allowed network without a network-scoped override; prefer x402TestnetAlgodUrl / x402MainnetAlgodUrl when multiple networks are allowed.',
     }),
   ),
   x402AlgodToken: Type.Optional(
     Type.String({
       description: 'Optional Algod API token used with x402AlgodUrl.',
+    }),
+  ),
+  x402TestnetAlgodUrl: Type.Optional(
+    Type.String({
+      description:
+        'Optional Algod URL override used only for Algorand TestNet x402 payments. Takes precedence over x402AlgodUrl.',
+    }),
+  ),
+  x402TestnetAlgodToken: Type.Optional(
+    Type.String({
+      description: 'Optional Algod API token used with x402TestnetAlgodUrl.',
+    }),
+  ),
+  x402MainnetAlgodUrl: Type.Optional(
+    Type.String({
+      description:
+        'Optional Algod URL override used only for Algorand MainNet x402 payments. Takes precedence over x402AlgodUrl.',
+    }),
+  ),
+  x402MainnetAlgodToken: Type.Optional(
+    Type.String({
+      description: 'Optional Algod API token used with x402MainnetAlgodUrl.',
+    }),
+  ),
+  x402SwapSlippageBps: Type.Optional(
+    Type.Number({
+      description:
+        'Slippage tolerance for x402 swap funding, in basis points (100 = 1%). Defaults to 100. Unused swap input is refunded by the pool in the same group.',
+      default: 100,
     }),
   ),
 });
