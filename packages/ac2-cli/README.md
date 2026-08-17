@@ -15,12 +15,15 @@ npm install -g @algorandfoundation/ac2-cli
 
 Using it with OpenClaw? Don't install this package at all — install the
 [OpenClaw plugin](../ac2-open-claw-reference) instead, which bundles this
-service as a dependency. With OpenClaw already installed, one line sets up
-the rest (the plugin, the bundled service, and wallet pairing):
+service as a dependency. One line sets up the plugin, the bundled service,
+and wallet pairing:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/algorandfoundation/ac2/master/install.sh | bash
 ```
+
+The script requires OpenClaw to already be installed and fails early if it
+is not — install it first with `npm install -g openclaw@latest`.
 
 While AC2 is in pre-release, add the canary tag: `npm install -g
 @algorandfoundation/ac2-cli@next`.
