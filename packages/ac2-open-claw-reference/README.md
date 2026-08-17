@@ -118,28 +118,30 @@ signature is just a raw Ed25519 signature over a locally-constructed
 blob. Since an Algorand address *is* an Ed25519 public key, the paired
 wallet's account key doubles as a git SSH signing key — no new key
 material, no protocol changes, and the private key never leaves the
-wallet.
+wallet. Signing itself needs **no setup**: no git signing settings are
+configured, no SSH agent, no provider account — see "How a commit gets
+signed" below. The committer identity is your normal git config
+(`git config user.name` / `user.email`) — usually already set up on your
+machine.
 
-### One-time setup
+### Before your first push
+
+Registering the wallet key with a git provider only affects whether a
+*pushed* commit shows a verified badge there — it's not needed to sign or
+commit locally, so skip this section until you're about to push.
 
 ```bash
 openclaw ac2 git-key        # print the wallet's key as an ssh-ed25519 line
 ```
 
 Add the printed line as an SSH signing key with your git provider
-(usually under account settings → SSH keys). Do this **before your
-first signed commit**: commits are signed with the Ed25519 key on your
-AC2 wallet, and your git provider marks them unverified until that key
-is registered.
+(usually under account settings → SSH keys). Until that key is
+registered, pushed commits show as unverified — the committer email must
+also match the account for verification to succeed.
 
-The committer identity is your normal git config (`git config user.name`
-/ `user.email`) — usually already set up on your machine; verification
-only succeeds when the email matches the account. Pushing uses an SSH
-remote (e.g. `git@host:owner/repo.git`) authenticated by your own SSH
-key (an Authentication Key, separate from the wallet signing key) —
-local-only work needs no auth at all.
-No git signing settings are configured — signing happens after the
-commit, below.
+Pushing uses an SSH remote (e.g. `git@host:owner/repo.git`) authenticated
+by your own SSH key (an Authentication Key, separate from the wallet
+signing key) — local-only work needs no auth at all.
 
 ### How a commit gets signed
 

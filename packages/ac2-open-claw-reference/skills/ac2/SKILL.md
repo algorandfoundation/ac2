@@ -3,10 +3,10 @@ name: ac2
 description: "How to use the AC2 channel to ask the user's connected wallet to sign bytes over a live WebRTC link. Use this whenever the user asks you to 'sign', 'approve', or 'authorize' something with their wallet — even if they don't say 'AC2'. ALSO REQUIRED for any git work: before running `git commit` or `git push`, or configuring a git identity, read this skill — commits MUST be signed by the user's AC2 wallet (never with your own or an invented identity), and it documents the required `openclaw ac2 git-key` setup and the commit → `git-resign` → push rhythm. The agent never holds keys; the wallet does."
 metadata:
   {
-    'openclaw':
+    "openclaw":
       {
-        'emoji': '🔐',
-        'requires': { 'config': ['plugins.entries.ac2.enabled'] },
+        "emoji": "🔐",
+        "requires": { "config": ["plugins.entries.ac2.enabled"] },
       },
   }
 ---
@@ -129,24 +129,16 @@ The wallet's Ed25519 account key doubles as a **git SSH signing key**. Use this 
 
 **Non-negotiable: commits are signed by the user's wallet, never by you.** Do not generate, use, or configure any local SSH/GPG key of your own, and do not set `user.name`/`user.email` to an invented identity (e.g. "CI Bot" / `bot@example.com`) — the committer identity must be the user's own name/email collected in setup. And **never push without re-signing first**: nothing in git enforces this model — you do. Every commit must be wallet-signed via `git-resign` before it leaves the machine.
 
-**Before starting — check state first, don't redo setup:**
+**Signing needs no setup.** `git-resign` works immediately on any repo — no SSH keys, no key registration, no git provider account. Registering the wallet key with a git provider only controls whether a _pushed_ commit shows a verified badge there; it has no bearing on local commits or on signing itself. **Do not raise key upload, push-auth SSH keys, or provider account details unless the user is actually about to push** (they say so, or `git push` is attempted/fails) **or explicitly asks about verification** — never as part of ordinary committing.
 
-- The **key upload is once per wallet, not per repo or per commit.** If the user has already been shown the `openclaw ac2 git-key` output and acknowledged adding it with their git provider — in this conversation or a previous one — do not show it or ask about it again unless the user asks. Take their word for it: the worst case is commits show as unverified, which is harmless and fixable later.
-- Committer identity is the user's own git config, assumed already set up like their SSH key. Check with `git -C <repo-dir> config user.email` — if it prints a value, identity is done; only if it's empty, cover it in the one-time setup below.
+**Before creating a commit, check only this:**
 
-**One-time setup (per repo) — follow these steps IN ORDER:**
+- Committer identity is the user's own git config, assumed already set up. Check with `git -C <repo-dir> config user.email` — if it prints a value, identity is done. If it's empty, ask the user for their name/email (never invent one) and set it:
 
-1. **Run** `openclaw ac2 git-key` (shell). It prints an `ssh-ed25519 …` line: the public key of the paired AC2 wallet.
-2. **If the user has not previously acknowledged uploading this key**, output the full `ssh-ed25519 …` line in chat and ask them to add it as an SSH signing key with their git provider (account settings → SSH keys, choosing a "Signing Key" type if the provider distinguishes one from an authentication key). It is a public key — safe and expected to show. Explain that every commit will be signed with this key, held on their AC2 wallet, and commits show as unverified until it is registered. Wait for their acknowledgment, then **never bring it up again** unless they ask. If they already acknowledged before, skip this step entirely.
-3. **If they intend to push**, push auth is their **own SSH key** (a normal **Authentication Key**, e.g. `~/.ssh/id_ed25519.pub` — separate from the wallet signing key): assume it is already added with their git provider, and make sure the repo remote uses the SSH form (`git@host:owner/repo.git`, not `https://…`). If they haven't added an SSH key yet, advise them to add it as an authentication/access SSH key with their git provider. For local-only work, skip all of this — no auth is required.
-4. **Only if the repo has no committer identity** (`git -C <repo-dir> config user.email` is empty): ask the user for their **git username** and **commit email** — verification only succeeds when the committer email matches their account — and have them set it (or run it with the values they provide, never invented ones):
-
-   ```bash
-   git config user.name <username>
-   git config user.email <email>
-   ```
-
-**Adding push access later:** if a repo was set up local-only and the user later wants to push (`git push` fails to authenticate, or they ask you to push), check the remote is the SSH form (`git remote set-url origin git@host:owner/repo.git`) and that their own SSH key is added with their git provider as an authentication key — advise them to add it if not.
+  ```bash
+  git config user.name <name>
+  git config user.email <email>
+  ```
 
 **Signing commits — the required rhythm, before every push:**
 
@@ -161,9 +153,16 @@ git push                            # only ever push signed commits
 - Made several commits (or a rebase/merge produced a chain)? Sign them all in one pass: `openclaw ac2 git-resign <repo-dir> --base origin/<branch>` — each commit gets its own wallet approval (`Sign git commit: "…"`), oldest first, with parent hashes rewritten along the chain. Tell the user approvals are coming before you run it.
 - `already signed — nothing to do` is a success, not an error.
 - A declined wallet approval aborts with the ref untouched — a normal user decision, don't retry. If it fails with `no active AC2 wallet session`, **stop the push entirely**: ask the user to connect/pair their wallet (`openclaw ac2 pair`) and only push once `git-resign` has succeeded — don't retry in a loop, and never push while signing is unavailable.
-- Never work around a signing failure by pushing unsigned or substituting a different key — the user's wallet approval is the point. If the user asks why commits show as unverified, that's when to point back at the key upload (step 2) and the email match — don't volunteer it otherwise.
+- Never work around a signing failure by pushing unsigned or substituting a different key — the user's wallet approval is the point. If the user asks why commits show as unverified, that's when to point back at the push-only setup below (key upload) and the email match — don't volunteer it otherwise.
 
 `git-resign` is the only git signing surface: never hand-build SSHSIG envelopes or commit objects via `ac2_sign` — a malformed envelope shows as unverified with no local error. (Signed tags are not covered yet.)
+
+**Push-only setup — only once the user intends to push, never before:**
+
+1. **Key upload (once per wallet, not per repo or commit).** If the user has already been shown the `openclaw ac2 git-key` output and acknowledged adding it with their git provider — in this conversation or a previous one — skip this; take their word for it. Otherwise: run `openclaw ac2 git-key` (shell), output the full `ssh-ed25519 …` line in chat, and ask them to add it as an SSH signing key with their git provider (account settings → SSH keys, choosing a "Signing Key" type if the provider distinguishes one from an authentication key). It is a public key — safe and expected to show. Explain that pushed commits show unverified until it's registered. Wait for their acknowledgment, then **never bring it up again** unless they ask.
+2. **Push auth.** Their **own SSH key** (a normal **Authentication Key**, e.g. `~/.ssh/id_ed25519.pub` — separate from the wallet signing key): assume it is already added with their git provider, and make sure the repo remote uses the SSH form (`git@host:owner/repo.git`, not `https://…`). If they haven't added an SSH key yet, advise them to add it as an authentication/access SSH key with their git provider.
+
+**Adding push access later:** if a repo was set up local-only and the user later wants to push (`git push` fails to authenticate, or they ask you to push), run the push-only setup above.
 
 ## `sig_hint` catalog (what the core reference defines)
 
