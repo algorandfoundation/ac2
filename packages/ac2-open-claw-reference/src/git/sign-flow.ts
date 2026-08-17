@@ -3,7 +3,7 @@
  * locally, ask the connected wallet for a raw Ed25519 signature via the
  * standard `resolveSign` (in-process session when live, otherwise brokered
  * through the daemon that owns the wallet connection), then assemble the
- * armored `SSH SIGNATURE` block that `git` (and GitHub) verify.
+ * armored `SSH SIGNATURE` block that `git` verifies.
  */
 
 import { Buffer } from 'node:buffer';
@@ -45,7 +45,7 @@ export type GitSignResult =
       armored: string;
       /** Base64 raw 32-byte Ed25519 key that signed. */
       public_key: string;
-      /** `ssh-ed25519 AAAA…` form of `public_key` (GitHub Signing Key format). */
+      /** `ssh-ed25519 AAAA…` form of `public_key` (SSH signing-key format). */
       authorized_key: string;
       namespace: string;
       thid: string;
@@ -154,7 +154,7 @@ export async function gitSignFlow(
       status: 'rejected',
       reason:
         'public_key_mismatch: the wallet signed with a different key than expected — ' +
-        'check `openclaw ac2 github-key` and update the signing key on GitHub.',
+        'check `openclaw ac2 git-key` and update the signing key with your git provider.',
       thid: result.thid,
     };
   }

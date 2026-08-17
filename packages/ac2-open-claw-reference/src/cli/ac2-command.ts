@@ -1,4 +1,4 @@
-/** The `ac2` shell + slash command: `pair`, `status`, `connections`, `forget`, `github-key`, `git-resign`. */
+/** The `ac2` shell + slash command: `pair`, `status`, `connections`, `forget`, `git-key`, `git-resign`. */
 
 const GIT_RESIGN_USAGE =
   'Usage: ac2 git-resign <repo-dir> [--ref <ref>] [--base <ref>]\n' +
@@ -203,9 +203,9 @@ export function buildAc2Command(api: OpenClawApi): unknown {
   return {
     name: 'ac2',
     description:
-      'AC2 channel control: pair | status | connections | forget | github-key | ' +
+      'AC2 channel control: pair | status | connections | forget | git-key | ' +
       'git-resign <repo-dir> [--ref <ref>] [--base <ref>]. ' +
-      '`github-key` prints the wallet SSH signing key; `git-resign` ' +
+      '`git-key` prints the wallet SSH signing key; `git-resign` ' +
       'signs commits in place via the paired wallet before push.',
     acceptsArgs: true,
     requireAuth: false,
@@ -309,7 +309,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
         }
       }
 
-      if (sub === 'github-key') {
+      if (sub === 'git-key') {
         const key = resolveWalletSigningPublicKey();
         if (!key) return { text: NO_WALLET_KEY_MESSAGE };
         const line = toAuthorizedKeyLine(key.publicKey, `ac2-${key.address.slice(0, 8)}`);
@@ -321,9 +321,9 @@ export function buildAc2Command(api: OpenClawApi): unknown {
             '',
             `  ${line}`,
             '',
-            'Add it on GitHub: Settings → SSH and GPG keys → New SSH key →',
-            'Key type: "Signing Key". Commits signed over AC2 then show as Verified',
-            'when the committer email matches your GitHub account.',
+            'Add it as an SSH signing key with your git provider (usually under',
+            'account settings → SSH keys). Commits signed over AC2 then show as',
+            'verified there once the committer email matches your account.',
             '',
             "Committer identity is your normal git config (`git config user.name` /",
             '`user.email`); sign commits before pushing with: openclaw ac2 git-resign',
@@ -586,7 +586,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
       }
 
       return {
-        text: `Unknown subcommand: ${sub}. Use 'pair', 'status', 'connections', 'forget', 'github-key', or 'git-resign'.`,
+        text: `Unknown subcommand: ${sub}. Use 'pair', 'status', 'connections', 'forget', 'git-key', or 'git-resign'.`,
       };
     },
   };
