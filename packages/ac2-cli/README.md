@@ -13,10 +13,13 @@ reconnects it, and stores keys in your operating system's keychain.
 npm install -g @algorandfoundation/ac2-cli
 ```
 
-Using it with OpenClaw? Install both:
+Using it with OpenClaw? Don't install this package at all — install the
+[OpenClaw plugin](../ac2-open-claw-reference) instead, which bundles this
+service as a dependency. With OpenClaw already installed, one line sets up
+the rest (the plugin, the bundled service, and wallet pairing):
 
 ```sh
-npm install -g openclaw @algorandfoundation/ac2-cli
+curl -fsSL https://raw.githubusercontent.com/algorandfoundation/ac2/master/install.sh | bash
 ```
 
 While AC2 is in pre-release, add the canary tag: `npm install -g

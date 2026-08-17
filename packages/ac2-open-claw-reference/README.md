@@ -18,6 +18,16 @@ The wallet connection itself is owned by the separate
 
 ## Install
 
+With OpenClaw already installed, the quickest path is the setup script, which
+installs this plugin, wires it up, restarts the gateway, and starts wallet
+pairing:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/algorandfoundation/ac2/master/install.sh | bash
+```
+
+Or do the same by hand:
+
 ```sh
 openclaw plugins install @algorandfoundation/ac2-open-claw-reference@next
 openclaw plugins enable ac2
