@@ -104,7 +104,7 @@ pays its own fees since it holds ALGO anyway.
 | `openclaw ac2 connections` | List remembered wallet connections. |
 | `openclaw ac2 forget` | Drop a pairing and the agent identity bound to it. |
 | `openclaw ac2 setup` | Write or refresh the plugin's `openclaw.json` wiring. |
-| `openclaw ac2 github-key` | Print the wallet's key as a GitHub SSH signing key. |
+| `openclaw ac2 git-key` | Print the wallet's key as a git SSH signing key. |
 | `/ac2 status` | The same status from inside a chat. |
 
 Only `pair` and `setup` write state or start the service; `git-resign` never
@@ -116,26 +116,26 @@ read-only.
 Git can sign commits with SSH keys (`gpg.format ssh`), and an SSHSIG
 signature is just a raw Ed25519 signature over a locally-constructed
 blob. Since an Algorand address *is* an Ed25519 public key, the paired
-wallet's account key doubles as a GitHub SSH signing key — no new key
+wallet's account key doubles as a git SSH signing key — no new key
 material, no protocol changes, and the private key never leaves the
 wallet.
 
 ### One-time setup
 
 ```bash
-openclaw ac2 github-key     # print the wallet's key as an ssh-ed25519 line
+openclaw ac2 git-key        # print the wallet's key as an ssh-ed25519 line
 ```
 
-Add the printed line on GitHub under **Settings → SSH and GPG keys →
-New SSH key**, choosing key type **Signing Key**. Do this **before your
+Add the printed line as an SSH signing key with your git provider
+(usually under account settings → SSH keys). Do this **before your
 first signed commit**: commits are signed with the Ed25519 key on your
-AC2 wallet, and GitHub marks them *Unverified* until that key is
-registered.
+AC2 wallet, and your git provider marks them unverified until that key
+is registered.
 
 The committer identity is your normal git config (`git config user.name`
-/ `user.email`) — usually already set up on your machine; GitHub shows
-*Verified* only when the email matches the account. Pushing uses an SSH remote
-(`git@github.com:owner/repo.git`) authenticated by your own GitHub SSH
+/ `user.email`) — usually already set up on your machine; verification
+only succeeds when the email matches the account. Pushing uses an SSH
+remote (e.g. `git@host:owner/repo.git`) authenticated by your own SSH
 key (an Authentication Key, separate from the wallet signing key) —
 local-only work needs no auth at all.
 No git signing settings are configured — signing happens after the
