@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.34](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.33...ac2-open-claw-reference@1.0.0-canary.34) (2026-08-18)
+
+
+### Features
+
+* simplify git signing ([#56](https://github.com/algorandfoundation/ac2/issues/56)) ([81d92c4](https://github.com/algorandfoundation/ac2/commit/81d92c4876aa272b3a47e515c655e353a50111be))
+
 # [ac2-open-claw-reference@1.0.0-canary.33](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.32...ac2-open-claw-reference@1.0.0-canary.33) (2026-08-18)
 
 
