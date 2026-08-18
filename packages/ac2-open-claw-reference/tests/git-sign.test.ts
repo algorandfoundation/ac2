@@ -10,10 +10,10 @@ import { SessionManager } from '../src/session/manager.js';
 import { walletFixture } from './wallet-fixture.js';
 import {
   insertGpgsigHeader,
-  resignCommits,
+  signCommits,
   rewriteParentHeaders,
   stripGpgsigHeader,
-} from '../src/git/resign.js';
+} from '../src/git/sign.js';
 import {
   buildSshSigSignedData,
   decodeSshSigArmor,
@@ -45,7 +45,7 @@ function git(repoDir: string, args: string[], input?: Buffer): Buffer {
 
 /** A fresh repo with signing off and a deterministic identity. */
 function makeRepo(): string {
-  const repoDir = mkdtempSync(join(tmpdir(), 'ac2-resign-'));
+  const repoDir = mkdtempSync(join(tmpdir(), 'ac2-git-sign-'));
   git(repoDir, ['init', '-q', '-b', 'main']);
   git(repoDir, ['config', 'user.name', 'Ada']);
   git(repoDir, ['config', 'user.email', 'ada@example.com']);
@@ -107,13 +107,13 @@ describe('gpgsig header helpers', () => {
   });
 });
 
-describe('resignCommits', () => {
+describe('signCommits', () => {
   it('signs HEAD in place with a verifiable SSHSIG and moves the branch', async () => {
     const { manager, rawPublicKey } = walletFixture();
     const repoDir = makeRepo();
     const oldSha = commit(repoDir, 'feat: one');
 
-    const result = await resignCommits({ repoDir }, {}, { manager });
+    const result = await signCommits({ repoDir }, {}, { manager });
     expect(result.status).toBe('signed');
     if (result.status !== 'signed') return;
     expect(result.oldTip).toBe(oldSha);
@@ -145,7 +145,7 @@ describe('resignCommits', () => {
     const repoDir = makeRepo();
     commit(repoDir, 'feat: verified');
 
-    const result = await resignCommits({ repoDir }, {}, { manager });
+    const result = await signCommits({ repoDir }, {}, { manager });
     expect(result.status).toBe('signed');
 
     const signersPath = join(repoDir, 'allowed_signers');
@@ -158,20 +158,20 @@ describe('resignCommits', () => {
     git(repoDir, ['verify-commit', 'HEAD']);
   });
 
-  it('re-signs a range oldest-first, rewriting the parent chain', async () => {
+  it('signs a range oldest-first, rewriting the parent chain', async () => {
     const { manager } = walletFixture();
     const repoDir = makeRepo();
     const base = commit(repoDir, 'feat: base');
     const first = commit(repoDir, 'feat: first');
     const second = commit(repoDir, 'feat: second');
 
-    const result = await resignCommits({ repoDir, base }, {}, { manager });
+    const result = await signCommits({ repoDir, base }, {}, { manager });
     expect(result.status).toBe('signed');
     if (result.status !== 'signed') return;
     expect(result.commits.map((c) => c.oldSha)).toEqual([first, second]);
     expect(result.commits.map((c) => c.subject)).toEqual(['feat: first', 'feat: second']);
 
-    // The new tip's parent is the re-signed first commit, and both carry sigs.
+    // The new tip's parent is the signed first commit, and both carry sigs.
     const newFirst = result.commits[0]!.newSha;
     const tip = git(repoDir, ['cat-file', 'commit', 'HEAD']).toString('utf8');
     expect(tip).toContain(`parent ${newFirst}`);
@@ -182,15 +182,15 @@ describe('resignCommits', () => {
 
   it('strips and re-signs a tip signed by a foreign key', async () => {
     // The "machine's own git signing config" case: the tip carries a valid
-    // SSHSIG by some other key — resign must replace it, not skip it.
+    // SSHSIG by some other key — signing must replace it, not skip it.
     const foreign = walletFixture();
     const { manager, rawPublicKey, requests } = walletFixture();
     const repoDir = makeRepo();
     commit(repoDir, 'feat: locally-signed');
-    const foreignResult = await resignCommits({ repoDir }, {}, { manager: foreign.manager });
+    const foreignResult = await signCommits({ repoDir }, {}, { manager: foreign.manager });
     expect(foreignResult.status).toBe('signed');
 
-    const result = await resignCommits({ repoDir }, {}, { manager });
+    const result = await signCommits({ repoDir }, {}, { manager });
     expect(result.status).toBe('signed');
     expect(requests).toHaveLength(1);
 
@@ -214,10 +214,10 @@ describe('resignCommits', () => {
     const { manager, requests } = walletFixture();
     const repoDir = makeRepo();
     commit(repoDir, 'feat: once');
-    await resignCommits({ repoDir }, {}, { manager });
+    await signCommits({ repoDir }, {}, { manager });
     const signedTip = git(repoDir, ['rev-parse', 'HEAD']).toString('utf8').trim();
 
-    const again = await resignCommits({ repoDir }, {}, { manager });
+    const again = await signCommits({ repoDir }, {}, { manager });
     expect(again).toEqual({ status: 'rejected', reason: 'already_signed' });
     expect(git(repoDir, ['rev-parse', 'HEAD']).toString('utf8').trim()).toBe(signedTip);
     expect(requests).toHaveLength(1);
@@ -231,7 +231,7 @@ describe('resignCommits', () => {
     const repoDir = makeRepo();
     const sha = commit(repoDir, 'feat: declined');
 
-    const result = await resignCommits({ repoDir }, {}, { manager });
+    const result = await signCommits({ repoDir }, {}, { manager });
     expect(result).toEqual({ status: 'rejected', reason: 'user_declined' });
     expect(git(repoDir, ['rev-parse', 'HEAD']).toString('utf8').trim()).toBe(sha);
   });
@@ -239,7 +239,7 @@ describe('resignCommits', () => {
   it('rejects with no_active_session when no wallet is paired and no daemon runs', async () => {
     const repoDir = makeRepo();
     commit(repoDir, 'feat: offline');
-    const result = await resignCommits(
+    const result = await signCommits(
       { repoDir },
       {},
       { manager: new SessionManager(), connect: async () => undefined },
@@ -270,7 +270,7 @@ describe('resignCommits', () => {
 
     const repoDir = makeRepo();
     commit(repoDir, 'feat: daemon-signed');
-    const result = await resignCommits(
+    const result = await signCommits(
       { repoDir },
       {},
       { manager: new SessionManager(), connect: async () => daemon as never },
@@ -294,8 +294,8 @@ describe('resignCommits', () => {
 
   it('rejects on a directory that is not a git repo', async () => {
     const { manager } = walletFixture();
-    const dir = mkdtempSync(join(tmpdir(), 'ac2-resign-notrepo-'));
-    const result = await resignCommits({ repoDir: dir }, {}, { manager });
+    const dir = mkdtempSync(join(tmpdir(), 'ac2-git-sign-notrepo-'));
+    const result = await signCommits({ repoDir: dir }, {}, { manager });
     expect(result.status).toBe('rejected');
     if (result.status === 'rejected') expect(result.reason).toMatch(/^git_error:/);
   });

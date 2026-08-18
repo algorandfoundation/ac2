@@ -1,6 +1,6 @@
 /**
  * Resolve the wallet's git signing key. Signing itself needs no git
- * configuration — see `./resign.ts`; committer identity is the user's own
+ * configuration — see `./sign.ts`; committer identity is the user's own
  * `git config user.name`/`user.email`.
  */
 

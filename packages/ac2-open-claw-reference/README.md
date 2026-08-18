@@ -110,10 +110,10 @@ pays its own fees since it holds ALGO anyway.
 | `openclaw ac2 forget` | Drop a pairing and the agent identity bound to it. |
 | `openclaw ac2 setup` | Write or refresh the plugin's `openclaw.json` wiring. |
 | `openclaw ac2 git-key` | Print the wallet's key as a git SSH signing key. |
-| `openclaw ac2 git-resign <repo-dir>` | Sign the latest commit (or a chain with `--base`) in place with the wallet key. |
+| `openclaw ac2 git-sign <repo-dir>` | Sign the latest commit (or a chain with `--base`) in place with the wallet key. |
 | `/ac2 status` | The same status from inside a chat. |
 
-Only `pair` and `setup` write state or start the service; `git-resign` never
+Only `pair` and `setup` write state or start the service; `git-sign` never
 starts the service but does rewrite repo refs in place. Everything else is
 read-only.
 
@@ -155,11 +155,11 @@ Commits are created unsigned and signed **in place** before push:
 
 ```bash
 git commit -m "..."
-openclaw ac2 git-resign <repo-dir>   # or --base origin/<branch> for a chain
+openclaw ac2 git-sign <repo-dir>   # or --base origin/<branch> for a chain
 git push
 ```
 
-1. `git-resign` reads the exact commit payload with
+1. `git-sign` reads the exact commit payload with
    `git cat-file commit` — for an unsigned commit this is byte-for-byte
    the SSHSIG signing input.
 2. It builds the SSHSIG signed-data blob and routes a standard
@@ -169,7 +169,7 @@ git push
    `SSH SIGNATURE` block as the commit's `gpgsig` header, writes the new
    object with `git hash-object`, and moves the ref with a
    compare-and-swap `git update-ref`. The commit hash changes; with
-   `--base`, a whole chain is re-signed oldest-first with parent hashes
+   `--base`, a whole chain is signed oldest-first with parent hashes
    rewritten along the way.
 
 Signing requires an active `ac2` session (`openclaw ac2 pair`) — each

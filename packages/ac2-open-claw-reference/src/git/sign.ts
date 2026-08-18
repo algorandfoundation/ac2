@@ -3,8 +3,8 @@
  * rewritten in place. An unsigned commit's raw payload IS the SSHSIG
  * signed-data input, so no git-side signing configuration is needed.
  *
- * Trade-offs: commits exist unsigned until re-signed (nothing in git enforces
- * the re-sign — the skill instructions do), and rewriting a parent changes
+ * Trade-offs: commits exist unsigned until signed (nothing in git enforces
+ * the signing step — the skill instructions do), and rewriting a parent changes
  * every descendant hash, so ranges are signed oldest first with parent headers
  * rewritten along the way.
  */
@@ -106,7 +106,7 @@ export function insertGpgsigHeader(payload: Buffer, armored: string): Buffer {
   return joinHeaders([...headerLines, ...sigLines], message);
 }
 
-/** Rewrite `parent <sha>` headers through an old→new mapping (chain re-sign). */
+/** Rewrite `parent <sha>` headers through an old→new mapping (chain signing). */
 export function rewriteParentHeaders(
   payload: Buffer,
   mapping: ReadonlyMap<string, string>,
@@ -124,13 +124,13 @@ export function rewriteParentHeaders(
   return changed ? joinHeaders(rewritten, message) : payload;
 }
 
-export interface GitResignOptions {
+export interface SignCommitsOptions {
   /** Absolute path to the git repository. */
   repoDir: string;
-  /** Ref whose tip to re-sign; defaults to `HEAD`. */
+  /** Ref whose tip to sign; defaults to `HEAD`. */
   ref?: string;
   /**
-   * When set, re-sign every commit in `base..ref` (oldest first), rewriting
+   * When set, sign every commit in `base..ref` (oldest first), rewriting
    * parent hashes along the chain. Without it only the tip commit is signed.
    */
   base?: string;
@@ -149,28 +149,28 @@ function isWalletSignature(armor: string, payload: Buffer, walletKey: Uint8Array
   }
 }
 
-export type GitResignResult =
+export type SignCommitsResult =
   | {
       status: 'signed';
       ref: string;
       oldTip: string;
       newTip: string;
-      /** Old→new sha per re-signed commit, oldest first. */
+      /** Old→new sha per signed commit, oldest first. */
       commits: Array<{ oldSha: string; newSha: string; subject: string }>;
     }
   | { status: 'rejected'; reason: string };
 
 /**
- * Re-sign the commit(s) at `ref` via the active AC2 session and move the ref
+ * Sign the commit(s) at `ref` via the active AC2 session and move the ref
  * to the rewritten tip. One wallet approval per commit; a rejection aborts
  * before any ref is touched (loose objects already written are harmless).
  */
-export async function resignCommits(
-  options: GitResignOptions,
+export async function signCommits(
+  options: SignCommitsOptions,
   config: PluginConfig,
   deps: ResolveSignDeps = {},
   context: ToolContext = {},
-): Promise<GitResignResult> {
+): Promise<SignCommitsResult> {
   const ref = options.ref ?? 'HEAD';
   let oldTip: string;
   let shas: string[];
@@ -231,8 +231,12 @@ export async function resignCommits(
       return { status: 'rejected', reason: signed.reason };
     }
 
-    const resigned = insertGpgsigHeader(payload, signed.armored);
-    const newSha = git(options.repoDir, ['hash-object', '-t', 'commit', '-w', '--stdin'], resigned)
+    const signedPayload = insertGpgsigHeader(payload, signed.armored);
+    const newSha = git(
+      options.repoDir,
+      ['hash-object', '-t', 'commit', '-w', '--stdin'],
+      signedPayload,
+    )
       .toString('utf8')
       .trim();
     mapping.set(sha, newSha);
@@ -248,7 +252,7 @@ export async function resignCommits(
   // never clobbered. `update-ref HEAD` follows the symbolic ref to the
   // underlying branch (and works detached), so `ref` is passed as given.
   try {
-    git(options.repoDir, ['update-ref', '-m', 'ac2 git-resign', ref, newTip, oldTip]);
+    git(options.repoDir, ['update-ref', '-m', 'ac2 git-sign', ref, newTip, oldTip]);
   } catch (err) {
     return { status: 'rejected', reason: `git_error: ${(err as Error).message}` };
   }

@@ -121,7 +121,7 @@ async function runAc2SlashCommand(ctx: { args?: string }): Promise<{ text: strin
       '  openclaw ac2 forget       Clear the saved pairing record.',
       '  openclaw ac2 setup        Print/update channel configuration.',
       '  openclaw ac2 git-key      Print the wallet key as a git SSH signing key.',
-      '  openclaw ac2 git-resign <repo-dir> [--ref r] [--base r]',
+      '  openclaw ac2 git-sign <repo-dir> [--ref r] [--base r]',
       '                            Sign commits in place via the AC2 wallet before pushing.',
     ].join('\n'),
   };

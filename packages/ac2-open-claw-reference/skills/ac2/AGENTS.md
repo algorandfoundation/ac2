@@ -204,7 +204,7 @@ This reference plugin additionally exposes `ac2_x402_fetch` as
 message: x402 Algorand payments still use ordinary `ac2/SigningRequest`
 messages for wallet approval.
 
-It also exposes the `ac2 git-resign` command (which signs existing commits
+It also exposes the `ac2 git-sign` command (which signs existing commits
 in place after `git commit`) as `ac2-ext-git/sign`.
 This too is a tool capability, not a wire extension: the SSHSIG signed-data
 blob is built locally and signed with an ordinary `ac2/SigningRequest` using

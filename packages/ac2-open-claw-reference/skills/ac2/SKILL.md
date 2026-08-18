@@ -1,6 +1,6 @@
 ---
 name: ac2
-description: "How to use the AC2 channel to ask the user's connected wallet to sign bytes over a live WebRTC link. Use this whenever the user asks you to 'sign', 'approve', or 'authorize' something with their wallet — even if they don't say 'AC2'. ALSO REQUIRED for any git work: before running `git commit` or `git push`, or configuring a git identity, read this skill — commits MUST be signed by the user's AC2 wallet (never with your own or an invented identity), and it documents the required `openclaw ac2 git-key` setup and the commit → `git-resign` → push rhythm. The agent never holds keys; the wallet does."
+description: "How to use the AC2 channel to ask the user's connected wallet to sign bytes over a live WebRTC link. Use this whenever the user asks you to 'sign', 'approve', or 'authorize' something with their wallet — even if they don't say 'AC2'. ALSO REQUIRED for any git work: before running `git commit` or `git push`, or configuring a git identity, read this skill — commits MUST be signed by the user's AC2 wallet (never with your own or an invented identity), and it documents the required `openclaw ac2 git-key` setup and the commit → `git-sign` → push rhythm. The agent never holds keys; the wallet does."
 metadata:
   {
     "openclaw":
@@ -125,11 +125,11 @@ Treat `{ status: "rejected" }` as a normal user decision. Do not retry the same 
 
 ## Git commit signing over AC2
 
-The wallet's Ed25519 account key doubles as a **git SSH signing key**. Use this flow for **any** git commit/push work on this channel — not just when the user explicitly says "sign my commits". Commits are created normally (unsigned) and then signed **in place** by the user's wallet with `openclaw ac2 git-resign` before every push — there is no git-side signing configuration.
+The wallet's Ed25519 account key doubles as a **git SSH signing key**. Use this flow for **any** git commit/push work on this channel — not just when the user explicitly says "sign my commits". Commits are created normally (unsigned) and then signed **in place** by the user's wallet with `openclaw ac2 git-sign` before every push — there is no git-side signing configuration.
 
-**Non-negotiable: commits are signed by the user's wallet, never by you.** Do not generate, use, or configure any local SSH/GPG key of your own, and do not set `user.name`/`user.email` to an invented identity (e.g. "CI Bot" / `bot@example.com`) — the committer identity must be the user's own name/email collected in setup. And **never push without re-signing first**: nothing in git enforces this model — you do. Every commit must be wallet-signed via `git-resign` before it leaves the machine.
+**Non-negotiable: commits are signed by the user's wallet, never by you.** Do not generate, use, or configure any local SSH/GPG key of your own, and do not set `user.name`/`user.email` to an invented identity (e.g. "CI Bot" / `bot@example.com`) — the committer identity must be the user's own name/email collected in setup. And **never push without signing first**: nothing in git enforces this model — you do. Every commit must be wallet-signed via `git-sign` before it leaves the machine.
 
-**Signing needs no setup.** `git-resign` works immediately on any repo — no SSH keys, no key registration, no git provider account. Registering the wallet key with a git provider only controls whether a _pushed_ commit shows a verified badge there; it has no bearing on local commits or on signing itself. **Do not raise key upload, push-auth SSH keys, or provider account details unless the user is actually about to push** (they say so, or `git push` is attempted/fails) **or explicitly asks about verification** — never as part of ordinary committing.
+**Signing needs no setup.** `git-sign` works immediately on any repo — no SSH keys, no key registration, no git provider account. Registering the wallet key with a git provider only controls whether a _pushed_ commit shows a verified badge there; it has no bearing on local commits or on signing itself. **Do not raise key upload, push-auth SSH keys, or provider account details unless the user is actually about to push** (they say so, or `git push` is attempted/fails) **or explicitly asks about verification** — never as part of ordinary committing.
 
 **Before creating a commit, check only this:**
 
@@ -144,18 +144,18 @@ The wallet's Ed25519 account key doubles as a **git SSH signing key**. Use this 
 
 ```bash
 git commit --no-gpg-sign -m "..."   # created unsigned — bypasses any local auto-signing config
-openclaw ac2 git-resign <repo-dir>  # wallet approval; commit rewritten signed in place
+openclaw ac2 git-sign <repo-dir>  # wallet approval; commit rewritten signed in place
 git push                            # only ever push signed commits
 ```
 
-- **Always pass `--no-gpg-sign`** to `git commit` (and to `git commit --amend`, and rebase via `git rebase -c commit.gpgsign=false` or re-sign after): the machine's git config may auto-sign with the user's own SSH/GPG key, and that key is never the wallet. `git-resign` strips and replaces a foreign signature (with a wallet approval), so a slip-through is recoverable — but creating commits unsigned is the correct path.
-- `git-resign <repo-dir>` signs the tip of `HEAD` in place. The commit hash changes; the ref is moved with a compare-and-swap, so re-sign before anything records the old hash.
-- Made several commits (or a rebase/merge produced a chain)? Sign them all in one pass: `openclaw ac2 git-resign <repo-dir> --base origin/<branch>` — each commit gets its own wallet approval (`Sign git commit: "…"`), oldest first, with parent hashes rewritten along the chain. Tell the user approvals are coming before you run it.
+- **Always pass `--no-gpg-sign`** to `git commit` (and to `git commit --amend`, and rebase via `git rebase -c commit.gpgsign=false` or re-sign after): the machine's git config may auto-sign with the user's own SSH/GPG key, and that key is never the wallet. `git-sign` strips and replaces a foreign signature (with a wallet approval), so a slip-through is recoverable — but creating commits unsigned is the correct path.
+- `git-sign <repo-dir>` signs the tip of `HEAD` in place. The commit hash changes; the ref is moved with a compare-and-swap, so sign before anything records the old hash.
+- Made several commits (or a rebase/merge produced a chain)? Sign them all in one pass: `openclaw ac2 git-sign <repo-dir> --base origin/<branch>` — each commit gets its own wallet approval (`Sign git commit: "…"`), oldest first, with parent hashes rewritten along the chain. Tell the user approvals are coming before you run it.
 - `already signed — nothing to do` is a success, not an error.
-- A declined wallet approval aborts with the ref untouched — a normal user decision, don't retry. If it fails with `no active AC2 wallet session`, **stop the push entirely**: ask the user to connect/pair their wallet (`openclaw ac2 pair`) and only push once `git-resign` has succeeded — don't retry in a loop, and never push while signing is unavailable.
+- A declined wallet approval aborts with the ref untouched — a normal user decision, don't retry. If it fails with `no active AC2 wallet session`, **stop the push entirely**: ask the user to connect/pair their wallet (`openclaw ac2 pair`) and only push once `git-sign` has succeeded — don't retry in a loop, and never push while signing is unavailable.
 - Never work around a signing failure by pushing unsigned or substituting a different key — the user's wallet approval is the point. If the user asks why commits show as unverified, that's when to point back at the push-only setup below (key upload) and the email match — don't volunteer it otherwise.
 
-`git-resign` is the only git signing surface: never hand-build SSHSIG envelopes or commit objects via `ac2_sign` — a malformed envelope shows as unverified with no local error. (Signed tags are not covered yet.)
+`git-sign` is the only git signing surface: never hand-build SSHSIG envelopes or commit objects via `ac2_sign` — a malformed envelope shows as unverified with no local error. (Signed tags are not covered yet.)
 
 **Push-only setup — only once the user intends to push, never before:**
 
