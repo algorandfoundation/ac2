@@ -14,8 +14,7 @@ You get four agent tools and one channel:
 | `ac2_x402_fetch` | Fetch an HTTP resource that charges with x402 on Algorand, paying with wallet approval. |
 | Channel `ac2` | The wallet becomes a chat channel: you message your agent from your phone. |
 
-It also turns the connected wallet into a git SSH signing key, so `git commit` /
-`git push` can be signed with the same approval flow — see
+It also turns the connected wallet into a git SSH signing key, so `git commit` can be signed with the same approval flow — see
 [Git commit signing over AC2](#git-commit-signing-over-ac2).
 
 The wallet connection itself is owned by the separate
@@ -125,22 +124,22 @@ blob. Since an Algorand address *is* an Ed25519 public key, the paired
 wallet's account key doubles as a git SSH signing key — no new key
 material, no protocol changes, and the private key never leaves the
 wallet. Signing itself needs **no setup**: no git signing settings are
-configured, no SSH agent, no provider account — see "How a commit gets
+configured, no SSH agent, no git platform account — see "How a commit gets
 signed" below. The committer identity is your normal git config
 (`git config user.name` / `user.email`) — usually already set up on your
 machine.
 
-### Before your first push
+### Before your first push (optional)
 
-Registering the wallet key with a git provider only affects whether a
+Registering the wallet key with a git platform only affects whether a
 *pushed* commit shows a verified badge there — it's not needed to sign or
-commit locally, so skip this section until you're about to push.
+commit locally, so skip this section until you're about to push and want your commits to show as verified.
 
 ```bash
 openclaw ac2 git-key        # print the wallet's key as an ssh-ed25519 line
 ```
 
-Add the printed line as an SSH signing key with your git provider
+Add the printed line as an SSH signing key with your git platform
 (usually under account settings → SSH keys). Until that key is
 registered, pushed commits show as unverified — the committer email must
 also match the account for verification to succeed.
@@ -151,12 +150,11 @@ signing key) — local-only work needs no auth at all.
 
 ### How a commit gets signed
 
-Commits are created unsigned and signed **in place** before push:
+Commits are created unsigned and signed **in place**:
 
 ```bash
 git commit -m "..."
 openclaw ac2 git-sign <repo-dir>   # or --base origin/<branch> for a chain
-git push
 ```
 
 1. `git-sign` reads the exact commit payload with
