@@ -154,7 +154,7 @@ export async function gitSignFlow(
       status: 'rejected',
       reason:
         'public_key_mismatch: the wallet signed with a different key than expected — ' +
-        'check `openclaw ac2 git-key` and update the signing key with your git provider.',
+        'check `openclaw ac2 git-key` and update the signing key with your git platform.',
       thid: result.thid,
     };
   }

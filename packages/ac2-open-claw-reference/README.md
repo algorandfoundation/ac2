@@ -129,11 +129,11 @@ signed" below. The committer identity is your normal git config
 (`git config user.name` / `user.email`) — usually already set up on your
 machine.
 
-### Before your first push (optional)
+### Verified badges on a git platform (optional)
 
 Registering the wallet key with a git platform only affects whether a
-*pushed* commit shows a verified badge there — it's not needed to sign or
-commit locally, so skip this section until you're about to push and want your commits to show as verified.
+commit shows a verified badge there — it is not needed to sign or commit,
+so skip this section unless you want that badge.
 
 ```bash
 openclaw ac2 git-key        # print the wallet's key as an ssh-ed25519 line
@@ -141,19 +141,15 @@ openclaw ac2 git-key        # print the wallet's key as an ssh-ed25519 line
 
 Add the printed line as an SSH signing key with your git platform
 (usually under account settings → SSH keys). Until that key is
-registered, pushed commits show as unverified — the committer email must
+registered, commits show as unverified there — the committer email must
 also match the account for verification to succeed.
-
-Pushing uses an SSH remote (e.g. `git@host:owner/repo.git`) authenticated
-by your own SSH key (an Authentication Key, separate from the wallet
-signing key) — local-only work needs no auth at all.
 
 ### How a commit gets signed
 
 Commits are created unsigned and signed **in place**:
 
 ```bash
-git commit -m "..."
+git commit --no-gpg-sign -m "..."
 openclaw ac2 git-sign <repo-dir>   # or --base origin/<branch> for a chain
 ```
 

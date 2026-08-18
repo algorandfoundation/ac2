@@ -206,7 +206,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
       'AC2 channel control: pair | status | connections | forget | git-key | ' +
       'git-sign <repo-dir> [--ref <ref>] [--base <ref>]. ' +
       '`git-key` prints the wallet SSH signing key; `git-sign` ' +
-      'signs commits in place via the paired wallet before push.',
+      'signs commits in place via the paired wallet after each commit.',
     acceptsArgs: true,
     requireAuth: false,
     async handler(ctx: any): Promise<{ text: string; keepAlive?: boolean }> {
@@ -321,12 +321,12 @@ export function buildAc2Command(api: OpenClawApi): unknown {
             '',
             `  ${line}`,
             '',
-            'Add it as an SSH signing key with your git provider (usually under',
+            'Add it as an SSH signing key with your git platform (usually under',
             'account settings → SSH keys). Commits signed over AC2 then show as',
             'verified there once the committer email matches your account.',
             '',
             "Committer identity is your normal git config (`git config user.name` /",
-            '`user.email`); sign commits before pushing with: openclaw ac2 git-sign',
+            '`user.email`); sign commits with: openclaw ac2 git-sign',
           ].join('\n'),
         };
       }
@@ -373,7 +373,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
               (c) => `  ${c.oldSha.slice(0, 8)} → ${c.newSha.slice(0, 8)}  ${c.subject}`,
             ),
             '',
-            `Ref moved: ${result.oldTip.slice(0, 8)} → ${result.newTip.slice(0, 8)}. Push to publish.`,
+            `Ref moved: ${result.oldTip.slice(0, 8)} → ${result.newTip.slice(0, 8)}.`,
           ].join('\n'),
         };
       }
