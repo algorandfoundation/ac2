@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.33](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.32...ac2-open-claw-reference@1.0.0-canary.33) (2026-08-18)
+
+
+### Bug Fixes
+
+* rename `ac2 git-resign` to `ac2 git-sign` ([#55](https://github.com/algorandfoundation/ac2/issues/55)) ([962bd3b](https://github.com/algorandfoundation/ac2/commit/962bd3b1066c2cb722dd6e0b4e4c5f334d538660))
+
 # [ac2-open-claw-reference@1.0.0-canary.32](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.31...ac2-open-claw-reference@1.0.0-canary.32) (2026-08-14)
 
 
