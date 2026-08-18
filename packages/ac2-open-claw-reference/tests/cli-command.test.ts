@@ -133,8 +133,8 @@ describe('ac2 pair command AC2_RUNTIME commitment', () => {
 
 describe('tokenizeArgs', () => {
   it('splits on whitespace and honours quotes', () => {
-    expect(tokenizeArgs('git-resign /r --base "origin/main"')).toEqual([
-      'git-resign',
+    expect(tokenizeArgs('git-sign /r --base "origin/main"')).toEqual([
+      'git-sign',
       '/r',
       '--base',
       'origin/main',
