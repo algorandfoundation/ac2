@@ -1,8 +1,9 @@
 # `@algorandfoundation/ac2-open-claw-reference`
 
 The reference [OpenClaw](https://docs.openclaw.ai/) plugin for **AC2**. It lets
-your OpenClaw agent chat with a mobile wallet and ask that wallet to sign things,
-while you keep custody of your keys.
+your OpenClaw agent chat with a mobile wallet and ask that wallet to sign
+things — payloads, x402 payments, even your git commits — while you keep
+custody of your keys.
 
 You get four agent tools and one channel:
 
@@ -12,6 +13,10 @@ You get four agent tools and one channel:
 | `ac2_sign` | Ask the wallet to sign a payload; the user approves on their phone. |
 | `ac2_x402_fetch` | Fetch an HTTP resource that charges with x402 on Algorand, paying with wallet approval. |
 | Channel `ac2` | The wallet becomes a chat channel: you message your agent from your phone. |
+
+It also turns the connected wallet into a git SSH signing key, so `git commit` /
+`git push` can be signed with the same approval flow — see
+[Git commit signing over AC2](#git-commit-signing-over-ac2).
 
 The wallet connection itself is owned by the separate
 [AC2 service](../ac2-cli/README.md), which this plugin starts for you.
@@ -105,6 +110,7 @@ pays its own fees since it holds ALGO anyway.
 | `openclaw ac2 forget` | Drop a pairing and the agent identity bound to it. |
 | `openclaw ac2 setup` | Write or refresh the plugin's `openclaw.json` wiring. |
 | `openclaw ac2 git-key` | Print the wallet's key as a git SSH signing key. |
+| `openclaw ac2 git-resign <repo-dir>` | Sign the latest commit (or a chain with `--base`) in place with the wallet key. |
 | `/ac2 status` | The same status from inside a chat. |
 
 Only `pair` and `setup` write state or start the service; `git-resign` never
