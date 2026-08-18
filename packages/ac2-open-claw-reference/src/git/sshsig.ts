@@ -1,7 +1,7 @@
 /**
  * SSHSIG (OpenSSH `PROTOCOL.sshsig`) encoding for Ed25519 keys and
  * signatures. This is the format `git` produces/consumes when
- * `gpg.format = ssh`, and the format git hosting providers verify for SSH
+ * `gpg.format = ssh`, and the format git hosting platforms verify for SSH
  * signing keys.
  *
  * The crucial property exploited by the AC2 git-signing flow: an SSHSIG
@@ -60,12 +60,12 @@ function assertPublicKey(publicKey: Uint8Array): Buffer {
   return buf;
 }
 
-/** SSH wire encoding of an Ed25519 public key (what git providers store as your signing key). */
+/** SSH wire encoding of an Ed25519 public key (what git platforms store as your signing key). */
 export function encodeSshEd25519PublicKey(publicKey: Uint8Array): Buffer {
   return Buffer.concat([sshString(KEY_TYPE), sshString(assertPublicKey(publicKey))]);
 }
 
-/** `ssh-ed25519 AAAA… comment` line the user adds to their git provider as a signing key. */
+/** `ssh-ed25519 AAAA… comment` line the user adds to their git platform as a signing key. */
 export function toAuthorizedKeyLine(publicKey: Uint8Array, comment = 'ac2-wallet'): string {
   const blob = encodeSshEd25519PublicKey(publicKey).toString('base64');
   return comment.length > 0 ? `${KEY_TYPE} ${blob} ${comment}` : `${KEY_TYPE} ${blob}`;
