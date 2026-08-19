@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.35](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.34...ac2-open-claw-reference@1.0.0-canary.35) (2026-08-19)
+
+
+### Bug Fixes
+
+* use `public key` over `wallet address` in git signing context ([#57](https://github.com/algorandfoundation/ac2/issues/57)) ([efa0bf0](https://github.com/algorandfoundation/ac2/commit/efa0bf05f1d7637a2868a4391050f279e3d65491))
+
 # [ac2-open-claw-reference@1.0.0-canary.34](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.33...ac2-open-claw-reference@1.0.0-canary.34) (2026-08-18)
 
 
