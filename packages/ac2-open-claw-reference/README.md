@@ -14,7 +14,7 @@ You get four agent tools and one channel:
 | `ac2_x402_fetch` | Fetch an HTTP resource that charges with x402 on Algorand, paying with wallet approval. |
 | Channel `ac2` | The wallet becomes a chat channel: you message your agent from your phone. |
 
-It also turns the connected wallet into a git SSH signing key, so `git commit` can be signed with the same approval flow — see
+It also exposes the paired account's public key as a git SSH signing key, so `git commit` can be signed with the same approval flow — see
 [Git commit signing over AC2](#git-commit-signing-over-ac2).
 
 The wallet connection itself is owned by the separate
@@ -108,8 +108,8 @@ pays its own fees since it holds ALGO anyway.
 | `openclaw ac2 connections` | List remembered wallet connections. |
 | `openclaw ac2 forget` | Drop a pairing and the agent identity bound to it. |
 | `openclaw ac2 setup` | Write or refresh the plugin's `openclaw.json` wiring. |
-| `openclaw ac2 git-key` | Print the wallet's key as a git SSH signing key. |
-| `openclaw ac2 git-sign <repo-dir>` | Sign the latest commit (or a chain with `--base`) in place with the wallet key. |
+| `openclaw ac2 git-key` | Print the SSH signing public key for git. |
+| `openclaw ac2 git-sign <repo-dir>` | Sign the latest commit (or a chain with `--base`) in place with the paired account's key. |
 | `/ac2 status` | The same status from inside a chat. |
 
 Only `pair` and `setup` write state or start the service; `git-sign` never
@@ -121,7 +121,7 @@ read-only.
 Git can sign commits with SSH keys (`gpg.format ssh`), and an SSHSIG
 signature is just a raw Ed25519 signature over a locally-constructed
 blob. Since an Algorand address *is* an Ed25519 public key, the paired
-wallet's account key doubles as a git SSH signing key — no new key
+account's public key doubles as a git SSH signing public key — no new key
 material, no protocol changes, and the private key never leaves the
 wallet. Signing itself needs **no setup**: no git signing settings are
 configured, no SSH agent, no git platform account — see "How a commit gets
@@ -131,16 +131,16 @@ machine.
 
 ### Verified badges on a git platform (optional)
 
-Registering the wallet key with a git platform only affects whether a
+Registering that public key with a git platform only affects whether a
 commit shows a verified badge there — it is not needed to sign or commit,
 so skip this section unless you want that badge.
 
 ```bash
-openclaw ac2 git-key        # print the wallet's key as an ssh-ed25519 line
+openclaw ac2 git-key        # print the signing public key (SSH format)
 ```
 
 Add the printed line as an SSH signing key with your git platform
-(usually under account settings → SSH keys). Until that key is
+(usually under account settings → SSH keys). Until that public key is
 registered, commits show as unverified there — the committer email must
 also match the account for verification to succeed.
 

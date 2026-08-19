@@ -205,7 +205,7 @@ export function buildAc2Command(api: OpenClawApi): unknown {
     description:
       'AC2 channel control: pair | status | connections | forget | git-key | ' +
       'git-sign <repo-dir> [--ref <ref>] [--base <ref>]. ' +
-      '`git-key` prints the wallet SSH signing key; `git-sign` ' +
+      '`git-key` prints the public key (in SSH format); `git-sign` ' +
       'signs commits in place via the paired wallet after each commit.',
     acceptsArgs: true,
     requireAuth: false,
@@ -315,15 +315,15 @@ export function buildAc2Command(api: OpenClawApi): unknown {
         const line = toAuthorizedKeyLine(key.publicKey, `ac2-${key.address.slice(0, 8)}`);
         return {
           text: [
-            `Wallet account: ${key.address}`,
+            `Signing account: ${key.address}  (paired AC2 account)`,
             '',
             'SSH signing public key (Ed25519):',
             '',
             `  ${line}`,
             '',
-            'Add it as an SSH signing key with your git platform (usually under',
-            'account settings → SSH keys). Commits signed over AC2 then show as',
-            'verified there once the committer email matches your account.',
+            'Add the public key above as an SSH signing key with your git platform',
+            '(usually under account settings → SSH keys). Commits signed over AC2',
+            'then show as verified there once the committer email matches your account.',
             '',
             "Committer identity is your normal git config (`git config user.name` /",
             '`user.email`); sign commits with: openclaw ac2 git-sign',

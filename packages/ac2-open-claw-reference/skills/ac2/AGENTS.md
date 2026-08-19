@@ -208,4 +208,4 @@ It also exposes the `ac2 git-sign` command (which signs existing commits
 in place after `git commit`) as `ac2-ext-git/sign`.
 This too is a tool capability, not a wire extension: the SSHSIG signed-data
 blob is built locally and signed with an ordinary `ac2/SigningRequest` using
-`sig_hint: raw-ed25519` over the wallet's account key.
+`sig_hint: raw-ed25519` over the paired account's Ed25519 key.
