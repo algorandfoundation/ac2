@@ -33,11 +33,14 @@ jobs:
         run: pnpm run release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Rebase main onto release
+      # Carry the release commits (CHANGELOG, version bumps) back to master.
+      # Merge instead of rebase: a rebase rewrites any commits master gained
+      # since the promotion, making the push non-fast-forward.
+      - name: Merge release back into master
         if: github.ref == 'refs/heads/release' && steps.release.outputs.released == 'true'
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
-          git checkout main
-          git rebase release
-          git push origin main
+          git checkout master
+          git merge --no-edit release
+          git push origin master
