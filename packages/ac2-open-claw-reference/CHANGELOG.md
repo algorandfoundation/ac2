@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.37](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.36...ac2-open-claw-reference@1.0.0-canary.37) (2026-08-25)
+
+
+### Bug Fixes
+
+* prep for clawhub ([#58](https://github.com/algorandfoundation/ac2/issues/58)) ([7780e00](https://github.com/algorandfoundation/ac2/commit/7780e0060e566aed5baff41985597db338b3dc88))
+
 # [ac2-open-claw-reference@1.0.0-canary.36](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.35...ac2-open-claw-reference@1.0.0-canary.36) (2026-08-25)
 
 
