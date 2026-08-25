@@ -1,0 +1,638 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { Ac2Transport } from '@algorandfoundation/ac2-sdk/transport';
+
+import {
+  awaitSignalConnect,
+  awaitSignalingUp,
+  closeAwareTransport,
+  closeRtcDataChannel,
+  cookiePairsFromSetCookie,
+  resolveHeartbeatTimeoutMs,
+  sanitizeHeartbeatTimeoutMs,
+  shouldCloseOnHeartbeatTimeout,
+  shouldTeardownOnRemoteOffer,
+  withSignalingHealthGuard,
+} from '../src/providers/liquid-auth.js';
+
+function makeBaseTransport(): Ac2Transport & { emitBaseClose: () => void; closes: () => number } {
+  let closeHandler: (() => void) | undefined;
+  let closes = 0;
+  return {
+    send: () => { },
+    onMessage: () => { },
+    onError: () => { },
+    onOpen: () => { },
+    onClose: (handler) => {
+      closeHandler = handler;
+    },
+    close: () => {
+      closes += 1;
+    },
+    get isOpen() {
+      return true;
+    },
+    emitBaseClose: () => closeHandler?.(),
+    closes: () => closes,
+  };
+}
+
+describe('awaitSignalConnect', () => {
+  function makeFakeSignalClient(): {
+    on: (event: string, listener: (...args: any[]) => void) => void;
+    emit: (event: string, ...args: any[]) => void;
+  } {
+    const listeners: Record<string, Array<(...args: any[]) => void>> = {};
+    return {
+      on(event, listener) {
+        (listeners[event] ??= []).push(listener);
+      },
+      emit(event, ...args) {
+        for (const listener of listeners[event] ?? []) listener(...args);
+      },
+    };
+  }
+
+  it('resolves when the signaling socket connects', async () => {
+    const client = makeFakeSignalClient();
+    let failures = 0;
+    const pending = awaitSignalConnect(client, {
+      timeoutMs: 1_000,
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    client.emit('connect');
+    await expect(pending).resolves.toBeUndefined();
+    expect(failures).toBe(0);
+  });
+
+  it('rejects and tears down the socket when connect never arrives in time', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeFakeSignalClient();
+      let failures = 0;
+      const pending = awaitSignalConnect(client, {
+        timeoutMs: 1_000,
+        onFailure: () => {
+          failures += 1;
+        },
+      });
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await assertion;
+      expect(failures).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects immediately when the abort signal is already aborted', async () => {
+    const client = makeFakeSignalClient();
+    const controller = new AbortController();
+    controller.abort();
+    let failures = 0;
+    const pending = awaitSignalConnect(client, {
+      timeoutMs: 1_000,
+      signal: controller.signal,
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' });
+    expect(failures).toBe(1);
+  });
+
+  it('rejects and tears down when the abort signal fires before connect', async () => {
+    const client = makeFakeSignalClient();
+    const controller = new AbortController();
+    let failures = 0;
+    const pending = awaitSignalConnect(client, {
+      timeoutMs: 5_000,
+      signal: controller.signal,
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' });
+    expect(failures).toBe(1);
+  });
+
+  it('does not tear down or reject after a successful connect', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeFakeSignalClient();
+      let failures = 0;
+      const pending = awaitSignalConnect(client, {
+        timeoutMs: 1_000,
+        onFailure: () => {
+          failures += 1;
+        },
+      });
+      client.emit('connect');
+      await expect(pending).resolves.toBeUndefined();
+      // The timer must have been cleared and duplicate connects are no-ops.
+      await vi.advanceTimersByTimeAsync(5_000);
+      client.emit('connect');
+      expect(failures).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('withSignalingHealthGuard', () => {
+  function makeFakeSocket(initialConnected = true): {
+    on: (event: string, listener: (...args: any[]) => void) => void;
+    off: (event: string, listener: (...args: any[]) => void) => void;
+    connected: boolean;
+    emit: (event: string, ...args: any[]) => void;
+  } {
+    const listeners: Record<string, Set<(...args: any[]) => void>> = {};
+    return {
+      connected: initialConnected,
+      on(event, listener) {
+        (listeners[event] ??= new Set()).add(listener);
+      },
+      off(event, listener) {
+        listeners[event]?.delete(listener);
+      },
+      emit(event, ...args) {
+        for (const listener of listeners[event] ?? []) listener(...args);
+      },
+    };
+  }
+
+  it('resolves with the wrapped promise value when it settles first', async () => {
+    const sock = makeFakeSocket();
+    let failures = 0;
+    const pending = withSignalingHealthGuard(Promise.resolve('peer-channel'), sock, {
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    await expect(pending).resolves.toBe('peer-channel');
+    expect(failures).toBe(0);
+  });
+
+  it('passes through a rejection from the wrapped promise unchanged', async () => {
+    const sock = makeFakeSocket();
+    let failures = 0;
+    const boom = new Error('peer negotiation failed');
+    const pending = withSignalingHealthGuard(Promise.reject(boom), sock, {
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    await expect(pending).rejects.toBe(boom);
+    expect(failures).toBe(0);
+  });
+
+  it('never fires on elapsed time alone while the socket stays connected (slow human)', async () => {
+    vi.useFakeTimers();
+    try {
+      const sock = makeFakeSocket();
+      let failures = 0;
+      let resolveLate: (value: string) => void = () => { };
+      const humanIsSlow = new Promise<string>((resolve) => {
+        resolveLate = resolve;
+      });
+      const pending = withSignalingHealthGuard(humanIsSlow, sock, {
+        onFailure: () => {
+          failures += 1;
+        },
+      });
+      // A human can take minutes to scan the QR and approve — with the socket
+      // healthy throughout, no amount of elapsed time may fail the handshake.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      resolveLate('approved');
+      await expect(pending).resolves.toBe('approved');
+      expect(failures).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails the handshake as soon as the socket disconnects, even if it reconnects', async () => {
+    // socket.io drops pending acks on `onclose` (`_clearAcks`; a plain ack has
+    // no `withError`, so it is not even notified) and the server tears down the
+    // `link` subscription with the old session — a reconnect cannot resume the
+    // rendezvous, it must be re-armed by the caller.
+    const sock = makeFakeSocket();
+    let failures = 0;
+    const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    const assertion = expect(pending).rejects.toMatchObject({
+      code: 'signaling-dropped',
+      reconnectable: true,
+    });
+    sock.emit('disconnect', 'transport close');
+    sock.emit('connect');
+    await assertion;
+    // The socket itself is reusable, so the guard must not tear it down.
+    expect(failures).toBe(0);
+  });
+
+  it('fails immediately (reconnectably) when the socket is already disconnected', async () => {
+    const sock = makeFakeSocket(false);
+    let failures = 0;
+    const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    await expect(pending).rejects.toMatchObject({
+      code: 'signaling-dropped',
+      reconnectable: true,
+    });
+    expect(failures).toBe(0);
+  });
+
+  it('reports a server-initiated disconnect as not reconnectable and tears down', async () => {
+    const sock = makeFakeSocket();
+    let failures = 0;
+    const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    const assertion = expect(pending).rejects.toMatchObject({
+      code: 'signaling-dropped',
+      reconnectable: false,
+    });
+    // 'io server disconnect' will never auto-reconnect — the socket is dead,
+    // so the guard tears down and hands off to the caller's re-pair loop.
+    sock.emit('disconnect', 'io server disconnect');
+    await assertion;
+    expect(failures).toBe(1);
+  });
+
+  it('rejects immediately when the abort signal is already aborted', async () => {
+    const sock = makeFakeSocket();
+    const controller = new AbortController();
+    controller.abort();
+    let failures = 0;
+    const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+      signal: controller.signal,
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' });
+    expect(failures).toBe(1);
+  });
+
+  it('rejects and tears down when the abort signal fires mid-handshake', async () => {
+    const sock = makeFakeSocket();
+    const controller = new AbortController();
+    let failures = 0;
+    const pending = withSignalingHealthGuard(new Promise<never>(() => { }), sock, {
+      signal: controller.signal,
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' });
+    expect(failures).toBe(1);
+  });
+
+  it('ignores a late settle once the guard has already failed', async () => {
+    const sock = makeFakeSocket();
+    let resolveLate: (value: string) => void = () => { };
+    const late = new Promise<string>((resolve) => {
+      resolveLate = resolve;
+    });
+    const pending = withSignalingHealthGuard(late, sock, {});
+    const assertion = expect(pending).rejects.toMatchObject({ code: 'signaling-dropped' });
+    sock.emit('disconnect');
+    await assertion;
+    resolveLate('too-late');
+  });
+});
+
+describe('awaitSignalingUp', () => {
+  function makeFakeSocket(initialConnected = true): {
+    on: (event: string, listener: (...args: any[]) => void) => void;
+    off: (event: string, listener: (...args: any[]) => void) => void;
+    connected: boolean;
+    emit: (event: string, ...args: any[]) => void;
+  } {
+    const listeners: Record<string, Set<(...args: any[]) => void>> = {};
+    return {
+      connected: initialConnected,
+      on(event, listener) {
+        (listeners[event] ??= new Set()).add(listener);
+      },
+      off(event, listener) {
+        listeners[event]?.delete(listener);
+      },
+      emit(event, ...args) {
+        for (const listener of listeners[event] ?? []) listener(...args);
+      },
+    };
+  }
+
+  it('resolves immediately when the socket is already connected', async () => {
+    const sock = makeFakeSocket();
+    await expect(awaitSignalingUp(sock, 1_000)).resolves.toBeUndefined();
+  });
+
+  it('resolves as soon as socket.io reconnects', async () => {
+    const sock = makeFakeSocket(false);
+    let failures = 0;
+    const pending = awaitSignalingUp(sock, 1_000, {
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    sock.connected = true;
+    sock.emit('connect');
+    await expect(pending).resolves.toBeUndefined();
+    expect(failures).toBe(0);
+  });
+
+  it('rejects and tears down once the socket stays down past the bound', async () => {
+    vi.useFakeTimers();
+    try {
+      const sock = makeFakeSocket(false);
+      let failures = 0;
+      const pending = awaitSignalingUp(sock, 1_000, {
+        onFailure: () => {
+          failures += 1;
+        },
+      });
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'timeout' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await assertion;
+      expect(failures).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects and tears down when the abort signal fires while waiting', async () => {
+    const sock = makeFakeSocket(false);
+    const controller = new AbortController();
+    let failures = 0;
+    const pending = awaitSignalingUp(sock, 5_000, {
+      signal: controller.signal,
+      onFailure: () => {
+        failures += 1;
+      },
+    });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' });
+    expect(failures).toBe(1);
+  });
+});
+
+describe('LiquidAuthChannelProvider heartbeat timeout', () => {
+  it('defaults to the standard heartbeat timeout', () => {
+    expect(resolveHeartbeatTimeoutMs()).toBe(50_000);
+    expect(resolveHeartbeatTimeoutMs('')).toBe(50_000);
+  });
+
+  it('accepts timeout overrides at or above two heartbeat intervals', () => {
+    expect(resolveHeartbeatTimeoutMs('40000')).toBe(40_000);
+    expect(resolveHeartbeatTimeoutMs('900000')).toBe(900_000);
+  });
+
+  it('falls back for invalid or too-small overrides', () => {
+    expect(resolveHeartbeatTimeoutMs('not-a-number')).toBe(50_000);
+    expect(resolveHeartbeatTimeoutMs('39999')).toBe(50_000);
+  });
+
+  it('sanitizes numeric option values with the same floor as the env path', () => {
+    // Valid values pass through untouched.
+    expect(sanitizeHeartbeatTimeoutMs(40_000)).toBe(40_000);
+    expect(sanitizeHeartbeatTimeoutMs(60_000)).toBe(60_000);
+    // Sub-minimum values would derive a hard window (4×) below the 20s ping
+    // cadence — they fall back to the default instead.
+    expect(sanitizeHeartbeatTimeoutMs(3_000)).toBe(50_000);
+    expect(sanitizeHeartbeatTimeoutMs(39_999)).toBe(50_000);
+    expect(sanitizeHeartbeatTimeoutMs(0)).toBe(50_000);
+    expect(sanitizeHeartbeatTimeoutMs(-1)).toBe(50_000);
+    expect(sanitizeHeartbeatTimeoutMs(Number.NaN)).toBe(50_000);
+    expect(sanitizeHeartbeatTimeoutMs(Number.POSITIVE_INFINITY)).toBe(50_000);
+  });
+
+  it('keeps the derived hard window above the ping cadence for any option value', () => {
+    const hardFactor = 4;
+    for (const requested of [1, 3_000, 19_999, 40_000, 120_000]) {
+      const sanitized = sanitizeHeartbeatTimeoutMs(requested);
+      expect(sanitized * hardFactor).toBeGreaterThanOrEqual(160_000);
+    }
+  });
+});
+
+describe('shouldCloseOnHeartbeatTimeout', () => {
+  it('does NOT close on a heartbeat timeout while the signaling socket is up', () => {
+    // Presence is the authority while signaling is connected; a backgrounded
+    // controller may quietly suspend its heartbeat without having left, so the
+    // slow data-channel timeout must not tear the still-present link down.
+    expect(
+      shouldCloseOnHeartbeatTimeout({ staleForTooLong: true, signalingConnected: true }),
+    ).toBe(false);
+  });
+
+  it('closes on a heartbeat timeout only when the signaling socket is down', () => {
+    // No connection to the signaling server means no presence to trust, so the
+    // heartbeat becomes the authoritative gone-peer signal again.
+    expect(
+      shouldCloseOnHeartbeatTimeout({ staleForTooLong: true, signalingConnected: false }),
+    ).toBe(true);
+  });
+
+  it('never closes before the heartbeat has actually gone stale', () => {
+    expect(
+      shouldCloseOnHeartbeatTimeout({ staleForTooLong: false, signalingConnected: false }),
+    ).toBe(false);
+    expect(
+      shouldCloseOnHeartbeatTimeout({ staleForTooLong: false, signalingConnected: true }),
+    ).toBe(false);
+  });
+
+  it('escalates past the hard window even while signaling (and presence) says the peer is there', () => {
+    // Presence can be stuck: a wallet whose data path died while its native
+    // service kept the socket in the room is counted forever. Deferring to it
+    // indefinitely left the stale peer in place and the wallet reconnecting
+    // into the void, so the second tier overrides it.
+    expect(
+      shouldCloseOnHeartbeatTimeout({
+        staleForTooLong: true,
+        signalingConnected: true,
+        staleForFarTooLong: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('keeps deferring to presence inside the hard window', () => {
+    expect(
+      shouldCloseOnHeartbeatTimeout({
+        staleForTooLong: true,
+        signalingConnected: true,
+        staleForFarTooLong: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('shouldTeardownOnRemoteOffer', () => {
+  it('tears the stale peer down when an offer arrives on a supposedly live link', () => {
+    // The wallet only offers when it wants a NEW peer session, so this is proof
+    // our peer is stale even though presence still reports two devices.
+    expect(
+      shouldTeardownOnRemoteOffer({ connected: true, negotiating: false, closed: false }),
+    ).toBe(true);
+  });
+
+  it('ignores an offer while a negotiation is already armed', () => {
+    // The pending `client.peer(...)` is what must consume that offer; tearing
+    // down mid-handshake nulls its `peerClient`.
+    expect(
+      shouldTeardownOnRemoteOffer({ connected: true, negotiating: true, closed: false }),
+    ).toBe(false);
+    expect(
+      shouldTeardownOnRemoteOffer({ connected: false, negotiating: true, closed: false }),
+    ).toBe(false);
+  });
+
+  it('ignores an offer when there is no live peer to replace', () => {
+    expect(
+      shouldTeardownOnRemoteOffer({ connected: false, negotiating: false, closed: false }),
+    ).toBe(false);
+  });
+
+  it('never re-triggers once already closed', () => {
+    expect(
+      shouldTeardownOnRemoteOffer({ connected: true, negotiating: false, closed: true }),
+    ).toBe(false);
+  });
+});
+
+describe('cookiePairsFromSetCookie', () => {
+  it('returns undefined for missing headers', () => {
+    expect(cookiePairsFromSetCookie(undefined)).toBeUndefined();
+    expect(cookiePairsFromSetCookie(null)).toBeUndefined();
+    expect(cookiePairsFromSetCookie('')).toBeUndefined();
+  });
+
+  it('extracts the name=value pair from a single set-cookie string', () => {
+    expect(cookiePairsFromSetCookie('connect.sid=s%3Aabc.def; Path=/; HttpOnly; SameSite=Lax')).toBe(
+      'connect.sid=s%3Aabc.def',
+    );
+  });
+
+  it('joins multiple cookies from an array of set-cookie strings', () => {
+    expect(
+      cookiePairsFromSetCookie([
+        'connect.sid=abc; Path=/; HttpOnly',
+        'other=xyz; Path=/; Secure',
+      ]),
+    ).toBe('connect.sid=abc; other=xyz');
+  });
+
+  it('splits a comma-joined header without mangling Expires dates', () => {
+    // A single cookie whose Expires attribute contains a comma must not be
+    // split into two "cookies"; only the name=value pair is kept anyway.
+    expect(
+      cookiePairsFromSetCookie(
+        'connect.sid=abc; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Path=/',
+      ),
+    ).toBe('connect.sid=abc');
+  });
+
+  it('splits two comma-joined cookies at their boundary', () => {
+    expect(cookiePairsFromSetCookie('a=1; Path=/, b=2; Path=/')).toBe('a=1; b=2');
+  });
+});
+
+describe('closeRtcDataChannel', () => {
+  it('closes non-closed DataChannels', () => {
+    let closed = false;
+    closeRtcDataChannel({
+      readyState: 'open',
+      close: () => {
+        closed = true;
+      },
+    });
+    expect(closed).toBe(true);
+  });
+
+  it('ignores absent, already closed, or throwing channels', () => {
+    expect(() => closeRtcDataChannel(undefined)).not.toThrow();
+    expect(() =>
+      closeRtcDataChannel({
+        readyState: 'closed',
+        close: () => {
+          throw new Error('should not be called');
+        },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      closeRtcDataChannel({
+        readyState: 'closing',
+        close: () => {
+          throw new Error('already closing');
+        },
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe('closeAwareTransport', () => {
+  it('notifies every close listener when the base transport closes', () => {
+    const base = makeBaseTransport();
+    const { transport } = closeAwareTransport(base);
+    const seen: string[] = [];
+
+    transport.onClose(() => seen.push('client'));
+    transport.onClose(() => seen.push('session-loop'));
+    base.emitBaseClose();
+
+    expect(seen).toEqual(['client', 'session-loop']);
+  });
+
+  it('emits close when the provider closes the transport even if the base does not', () => {
+    const base = makeBaseTransport();
+    const { transport, emitClose } = closeAwareTransport(base);
+    const seen: string[] = [];
+
+    transport.onClose(() => seen.push('session-loop'));
+    emitClose();
+    emitClose();
+
+    expect(seen).toEqual(['session-loop']);
+  });
+
+  it('emits close from transport.close for native transports that do not emit onclose', () => {
+    const base = makeBaseTransport();
+    const { transport } = closeAwareTransport(base);
+    let closed = 0;
+
+    transport.onClose(() => {
+      closed += 1;
+    });
+    transport.close();
+
+    expect(base.closes()).toBe(1);
+    expect(closed).toBe(1);
+  });
+
+  it('immediately calls listeners registered after close emission', () => {
+    const base = makeBaseTransport();
+    const { transport, emitClose } = closeAwareTransport(base);
+    let closed = 0;
+
+    emitClose();
+    transport.onClose(() => {
+      closed += 1;
+    });
+
+    expect(closed).toBe(1);
+  });
+});

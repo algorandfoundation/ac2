@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AC2 Pairing</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    max-width: 560px; margin: 2rem auto; padding: 0 1rem;
+    text-align: center;
+  }
+  h1 { font-size: 1.3rem; }
+  #qr { display: inline-block; padding: 16px; background: #fff; border-radius: 12px; min-height: 100px; }
+  #qr img, #qr canvas { display: block; }
+  .status { margin: 1rem 0; font-size: .95rem; opacity: .85; }
+  .countdown { font-variant-numeric: tabular-nums; font-weight: 600; }
+  button {
+    font: inherit; padding: .55rem 1.1rem; margin: .25rem;
+    border-radius: 8px; border: 1px solid #8884; cursor: pointer;
+  }
+  button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .error { color: #dc2626; white-space: pre-wrap; }
+  details { text-align: left; margin-top: 1.5rem; font-size: .8rem; }
+  pre { overflow-x: auto; background: #8881; padding: .5rem; border-radius: 6px; }
+</style>
+</head>
+<body>
+  <h1>AC2 Pairing</h1>
+  <div id="qr"></div>
+  <div class="status" id="status">Loading…</div>
+  <div>
+    <button class="primary" id="startBtn">Start pairing session</button>
+    <button id="forgetBtn">Forget pairing</button>
+  </div>
+  <details id="debugLog" hidden>
+    <summary>Debug log</summary>
+    <pre id="log"></pre>
+  </details>
+
+<script>
+(function () {
+  const token = new URLSearchParams(location.search).get('token') || '';
+  const $ = (id) => document.getElementById(id);
+  let qrWidget = null;
+  let lastPayload = null;
+
+  function api(path, opts) {
+    const sep = path.includes('?') ? '&' : '?';
+    return fetch(path + sep + 'token=' + encodeURIComponent(token), opts).then(r => r.json());
+  }
+
+  function renderQr(payload) {
+    if (payload === lastPayload) return;
+    lastPayload = payload;
+    $('qr').innerHTML = '';
+    qrWidget = null;
+    if (payload) {
+      qrWidget = new QRCode($('qr'), {
+        text: payload, width: 280, height: 280, correctLevel: QRCode.CorrectLevel.M,
+      });
+    }
+  }
+
+  function fmtRemaining(ms) {
+    if (ms <= 0) return '0:00';
+    const s = Math.floor(ms / 1000);
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  let current = null;
+
+  function paint() {
+    if (!current) return;
+    const st = $('status');
+    switch (current.state) {
+      case 'idle':
+        renderQr(null);
+        st.textContent = 'No active pairing session. Press "Start pairing session".';
+        break;
+      case 'starting':
+        renderQr(null);
+        st.textContent = 'Starting pairing session, generating QR…';
+        break;
+      case 'waiting': {
+        renderQr(current.qrPayload);
+        const remaining = current.expiresAt - (Date.now() - drift);
+        st.innerHTML = (current.paired
+          ? '✅ Paired — channel active. '
+          : 'Scan the QR code with your AC2 Controller / wallet. ')
+          + 'Session expires in <span class="countdown">' + fmtRemaining(remaining) + '</span>';
+        break;
+      }
+      case 'expired':
+        renderQr(null);
+        st.textContent = 'Session expired. Start a new pairing session.';
+        break;
+      case 'error':
+        renderQr(null);
+        st.innerHTML = '<span class="error">' + (current.lastError
+          ? 'Error: ' + current.lastError
+          : 'Pairing failed. Check server logs for details.') + '</span>';
+        break;
+    }
+  }
+
+  let drift = 0;
+  async function poll() {
+    try {
+      const s = await api('/api/session');
+      current = s;
+      drift = Date.now() - s.now; // client/server clock drift
+      if (s.logTail) {
+        $('log').textContent = s.logTail.join('\n');
+        $('debugLog').hidden = false;
+      } else {
+        $('debugLog').hidden = true;
+      }
+      paint();
+    } catch (e) {
+      $('status').innerHTML = '<span class="error">Cannot reach pair-manager (' + e + ')</span>';
+    }
+  }
+
+  $('startBtn').addEventListener('click', async () => {
+    $('status').textContent = 'Starting…';
+    await api('/api/pair', { method: 'POST' });
+    poll();
+  });
+
+  $('forgetBtn').addEventListener('click', async () => {
+    if (!confirm('Forget the current pairing (clears session, state, and agent identities)?')) return;
+    $('status').textContent = 'Forgetting…';
+    await api('/api/forget', { method: 'POST' });
+    poll();
+  });
+
+  poll();
+  setInterval(poll, 2000);
+  setInterval(paint, 1000); // smooth countdown
+})();
+</script>
+</body>
+</html>

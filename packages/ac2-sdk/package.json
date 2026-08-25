@@ -1,0 +1,98 @@
+{
+  "name": "@algorandfoundation/ac2-sdk",
+  "version": "1.0.0-canary.7",
+  "description": "TypeScript SDK for the AC2 (Agentic Communication and Control) protocol.",
+  "keywords": [
+    "ac2",
+    "algorand",
+    "didcomm",
+    "webrtc",
+    "agent",
+    "wallet",
+    "signing"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/algorandfoundation/ac2/tree/main/packages/ac2-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/algorandfoundation/ac2/issues"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/algorandfoundation/ac2.git",
+    "directory": "packages/ac2-sdk"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema/index.d.ts",
+      "default": "./dist/schema/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol/index.d.ts",
+      "default": "./dist/protocol/index.js"
+    },
+    "./transport": {
+      "types": "./dist/transport/index.d.ts",
+      "default": "./dist/transport/index.js"
+    },
+    "./signaling": {
+      "types": "./dist/signaling/index.d.ts",
+      "default": "./dist/signaling/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "default": "./dist/runtime/index.js"
+    },
+    "./providers/in-memory": {
+      "types": "./dist/providers/in-memory.d.ts",
+      "default": "./dist/providers/in-memory.js"
+    },
+    "./providers/liquid-auth": {
+      "types": "./dist/providers/liquid-auth.d.ts",
+      "default": "./dist/providers/liquid-auth.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run --globals",
+    "test:watch": "vitest --globals",
+    "docs": "typedoc",
+    "docs:watch": "typedoc --watch",
+    "release": "package-releaser",
+    "release:dry-run": "package-releaser --dry-run"
+  },
+  "release": null,
+  "dependencies": {
+    "ajv": "^8.17.1"
+  },
+  "optionalDependencies": {
+    "@algorandfoundation/liquid-client": "1.0.0-canary.8",
+    "@roamhq/wrtc": "^0.10.0",
+    "socket.io-client": "^4.7.5"
+  },
+  "devDependencies": {
+    "@algorandfoundation/package-releaser": "workspace:*",
+    "@types/node": "^22.0.0",
+    "typedoc": "^0.28.19",
+    "typescript": "~5.8.3",
+    "vitest": "^3.2.0"
+  }
+}

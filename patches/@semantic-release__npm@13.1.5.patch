@@ -1,0 +1,78 @@
+diff --git a/lib/set-npmrc-auth.js b/lib/set-npmrc-auth.js
+index a8534ca7712c46c2bd430c3aadab7e2beca8e3d3..b9235beb2af0fedfc43edb3b5d783caeee1260ee 100644
+--- a/lib/set-npmrc-auth.js
++++ b/lib/set-npmrc-auth.js
+@@ -21,18 +21,19 @@ export default async function (npmrc, registry, { cwd, env: { NPM_TOKEN, NPM_CON
+ 
+   const currentConfig = configs ? (await Promise.all(configs.map((config) => fs.readFile(config)))).join("\n") : "";
+ 
+-  if (getAuthToken(registry, { npmrc: rcConfig })) {
+-    await fs.outputFile(npmrc, currentConfig);
+-    return;
+-  }
+-
+   if (NPM_TOKEN) {
+     await fs.outputFile(
+       npmrc,
+-      `${currentConfig ? `${currentConfig}\n` : ""}${nerfDart(registry)}:_authToken = \${NPM_TOKEN}`
++      `${currentConfig ? `${currentConfig}\n` : ""}${nerfDart(registry)}:_authToken = ${NPM_TOKEN}`
+     );
+-    logger.log(`Wrote NPM_TOKEN to ${npmrc}`);
+-  } else {
+-    throw new AggregateError([getError("ENONPMTOKEN", { registry })]);
++    logger.log(`Wrote literal token to ${npmrc}`);
++    return;
+   }
++
++  if (getAuthToken(registry, { npmrc: rcConfig })) {
++    await fs.outputFile(npmrc, currentConfig);
++    return;
++  }
++
++  throw new AggregateError([getError("ENONPMTOKEN", { registry })]);
+ }
+diff --git a/lib/trusted-publishing/oidc-context.js b/lib/trusted-publishing/oidc-context.js
+index 0427ae9de9da75861b5db715420c9e82a727fbb3..40c553d543c1ac97141acd9171ab9f077eb4d045 100644
+--- a/lib/trusted-publishing/oidc-context.js
++++ b/lib/trusted-publishing/oidc-context.js
+@@ -2,5 +2,18 @@ import { OFFICIAL_REGISTRY } from "../definitions/constants.js";
+ import exchangeToken from "./token-exchange.js";
+ 
+ export default async function oidcContextEstablished(registry, pkg, context) {
+-  return OFFICIAL_REGISTRY === registry && !!(await exchangeToken(pkg, context));
++  if (OFFICIAL_REGISTRY !== registry) {
++    return false;
++  }
++
++  const token = await exchangeToken(pkg, context);
++
++  if (token) {
++    context.env.NPM_TOKEN = token;
++    process.env.NPM_TOKEN = token;
++    context.logger.log(`OIDC token obtained and set as NPM_TOKEN`);
++    return true;
++  }
++
++  return false;
+ }
+diff --git a/lib/verify-auth.js b/lib/verify-auth.js
+index d09933760e43b54383b470de4b320eb5a1c1c119..30098fef48d07739ea5c22a8628c6d5d8935af62 100644
+--- a/lib/verify-auth.js
++++ b/lib/verify-auth.js
+@@ -83,11 +83,13 @@ async function verifyTokenAuth(registry, npmrc, context, pkgRoot) {
+ export default async function (npmrc, pkg, { pkgRoot }, context) {
+   const registry = getRegistry(pkg, context);
+ 
+-  if (await oidcContextEstablished(registry, pkg, context)) {
+-    return;
+-  }
++  const isOidc = await oidcContextEstablished(registry, pkg, context);
+ 
+   await setNpmrcAuth(npmrc, registry, context);
+ 
++  if (isOidc) {
++    return;
++  }
++
+   await verifyTokenAuth(registry, npmrc, context, pkgRoot);
+ }

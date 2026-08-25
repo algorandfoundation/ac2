@@ -1,0 +1,17 @@
+packages:
+  - "packages/*"
+  - "build"
+
+catalog:
+  semantic-release: ^25.0.3
+  "@semantic-release/changelog": ^6.0.3
+  "@semantic-release/git": ^10.0.1
+  typescript: ~5.8.3
+  "@types/node": ^22.0.0
+
+patchedDependencies:
+  "@semantic-release/npm@13.1.5": patches/@semantic-release__npm@13.1.5.patch
+
+onlyBuiltDependencies:
+  - "@napi-rs/keyring"
+  - "@roamhq/wrtc"

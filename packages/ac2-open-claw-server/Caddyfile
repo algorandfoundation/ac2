@@ -1,0 +1,7 @@
+{$DOMAIN} {
+	# Self-signed cert: Cloudflare's SSL/TLS mode must be "Full" (not
+	# "Full (strict)"), since Full doesn't validate the origin cert's CA chain.
+	tls internal
+
+	reverse_proxy openclaw-gateway:8377
+}

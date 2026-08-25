@@ -1,0 +1,27 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": [
+    "src/index.ts",
+    "src/schema/index.ts",
+    "src/protocol/index.ts",
+    "src/transport/index.ts",
+    "src/signaling/index.ts"
+  ],
+  "entryPointStrategy": "expand",
+  "out": "docs",
+  "tsconfig": "tsconfig.json",
+  "readme": "README.md",
+  "name": "@algorandfoundation/ac2-sdk",
+  "includeVersion": true,
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "excludeExternals": true,
+  "navigationLinks": {
+    "Spec": "https://github.com/algorandfoundation/ac2-fresh/blob/main/SPEC.md"
+  },
+  "categorizeByGroup": true,
+  "sort": ["source-order"],
+  "githubPages": false,
+  "hideGenerator": true,
+  "intentionallyNotExported": ["AC2BaseMessageSchema", "SigningRejectedBody", "EnvelopeFields"]
+}

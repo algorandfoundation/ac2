@@ -1,0 +1,97 @@
+{
+  "name": "@algorandfoundation/ac2-open-claw-reference",
+  "version": "1.0.0-canary.37",
+  "description": "Reference OpenClaw plugin for the AC2 protocol. Implements signing, chat, and x402 Algorand paid fetch over Liquid Auth.",
+  "keywords": [
+    "ac2",
+    "algorand",
+    "openclaw",
+    "openclaw-plugin",
+    "didcomm",
+    "webrtc",
+    "liquid-auth",
+    "wallet",
+    "signing",
+    "x402",
+    "payments",
+    "git"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/algorandfoundation/ac2/tree/main/packages/ac2-open-claw-reference#readme",
+  "bugs": {
+    "url": "https://github.com/algorandfoundation/ac2/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/algorandfoundation/ac2.git",
+    "directory": "packages/ac2-open-claw-reference"
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "skills",
+    "README.md",
+    "ARCHITECTURE.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts",
+    "dist:pack:selfcontained": "node scripts/pack-selfcontained.mjs",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "release": "package-releaser",
+    "release:dry-run": "package-releaser --dry-run",
+    "install:plugin": "node scripts/bundle.mjs && tsc -p tsconfig.build.json && node scripts/bundle.mjs --flatten-dts && TGZ=\"$(node scripts/pack-plugin.mjs --pack-destination /tmp | tail -n1)\" && openclaw plugins install \"file:$TGZ\" --dangerously-force-unsafe-install --force && openclaw plugins enable ac2",
+    "uninstall:plugin": "openclaw plugins uninstall ac2"
+  },
+  "release": null,
+  "dependencies": {
+    "@algorandfoundation/ac2-cli": "workspace:*",
+    "@algorandfoundation/ac2-sdk": "workspace:*",
+    "@algorandfoundation/algokit-utils": "10.0.0-beta.4",
+    "@sinclair/typebox": "^0.32.0",
+    "@tinymanorg/tinyman-js-sdk": "^5.1.4",
+    "@x402/avm": "^2.20.0",
+    "@x402/core": "^2.20.0",
+    "@x402/fetch": "^2.20.0",
+    "algosdk": "^3.6.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@algorandfoundation/package-releaser": "workspace:*",
+    "@types/node": "^22.0.0",
+    "@types/qrcode-terminal": "^0.12.2",
+    "esbuild": "^0.25.12",
+    "openclaw": "2026.7.1-2",
+    "typescript": "~5.8.3",
+    "vitest": "^3.2.0"
+  },
+  "openclaw": {
+    "compat": {
+      "pluginApi": ">=2026.7.1-2",
+      "minGatewayVersion": "2026.7.1-2"
+    },
+    "build": {
+      "openclawVersion": "2026.7.1-2",
+      "pluginSdkVersion": "2026.7.1-2"
+    },
+    "extensions": [
+      "./dist/entry.js"
+    ]
+  }
+}
