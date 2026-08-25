@@ -22,17 +22,26 @@ The wallet connection itself is owned by the separate
 
 ## Install
 
+With OpenClaw already installed, the quickest path is the setup script, which
+installs this plugin, wires it up, restarts the gateway, and starts wallet
+pairing:
+
 ```sh
-openclaw plugins install @algorandfoundation/ac2-open-claw-reference@next
+curl -fsSL https://raw.githubusercontent.com/algorandfoundation/ac2/master/install.sh | bash
+```
+
+Or do the same by hand:
+
+```sh
+openclaw plugins install @algorandfoundation/ac2-open-claw-reference
 openclaw plugins enable ac2
 openclaw ac2 setup          # writes the channel + tools into openclaw.json
 openclaw gateway restart
 ```
 
-Keep the `@next` tag and do not add `--pin`: OpenClaw records that moving spec, so
-both the OpenClaw updater and the plugin-only updater can find newer AC2 canary
-releases. The unversioned package and `@latest` follow stable releases and will
-not pick up canaries.
+Do not add `--pin`: OpenClaw records the moving spec, so both the OpenClaw
+updater and the plugin-only updater can find newer stable releases. To follow
+canary pre-releases instead, install with the `@next` tag.
 
 You need Node.js 22 or newer and an OpenClaw agent already set up. The AC2
 service (`@algorandfoundation/ac2-cli`) ships as a dependency of this plugin and
@@ -194,7 +203,7 @@ gateway runs (e.g. its service unit or shell) and restart the gateway:
 ## Update and remove
 
 ```sh
-openclaw update                     # updates OpenClaw and @next plugins together
+openclaw update                     # updates OpenClaw and its plugins together
 openclaw plugins update ac2         # AC2 only
 openclaw gateway restart
 ```

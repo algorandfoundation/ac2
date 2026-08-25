@@ -1,3 +1,10 @@
+# [ac2-open-claw-reference@1.0.0-canary.36](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.35...ac2-open-claw-reference@1.0.0-canary.36) (2026-08-25)
+
+
+### Features
+
+* single-line install script for OpenClaw + AC2 plugin ([#51](https://github.com/algorandfoundation/ac2/issues/51)) ([183cbd1](https://github.com/algorandfoundation/ac2/commit/183cbd178076f6adec579b54afb5387b280b5428))
+
 # [ac2-open-claw-reference@1.0.0-canary.35](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0-canary.34...ac2-open-claw-reference@1.0.0-canary.35) (2026-08-19)
 
 

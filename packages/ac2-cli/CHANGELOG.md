@@ -1,3 +1,10 @@
+# [ac2-cli@1.0.0-canary.8](https://github.com/algorandfoundation/ac2/compare/ac2-cli@1.0.0-canary.7...ac2-cli@1.0.0-canary.8) (2026-08-25)
+
+
+### Features
+
+* single-line install script for OpenClaw + AC2 plugin ([#51](https://github.com/algorandfoundation/ac2/issues/51)) ([183cbd1](https://github.com/algorandfoundation/ac2/commit/183cbd178076f6adec579b54afb5387b280b5428))
+
 # [ac2-cli@1.0.0-canary.7](https://github.com/algorandfoundation/ac2/compare/ac2-cli@1.0.0-canary.6...ac2-cli@1.0.0-canary.7) (2026-08-11)
 
 

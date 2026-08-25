@@ -13,19 +13,25 @@ reconnects it, and stores keys in your operating system's keychain.
 npm install -g @algorandfoundation/ac2-cli
 ```
 
-Using it with OpenClaw? Install both:
+Using it with OpenClaw? Don't install this package at all — install the
+[OpenClaw plugin](../ac2-open-claw-reference) instead, which bundles this
+service as a dependency. One line sets up the plugin, the bundled service,
+and wallet pairing:
 
 ```sh
-npm install -g openclaw @algorandfoundation/ac2-cli
+curl -fsSL https://raw.githubusercontent.com/algorandfoundation/ac2/master/install.sh | bash
 ```
 
-While AC2 is in pre-release, add the canary tag: `npm install -g
-@algorandfoundation/ac2-cli@next`.
+The script requires OpenClaw to already be installed and fails early if it
+is not — install it first with `npm install -g openclaw@latest`.
+
+To follow canary pre-releases instead of stable releases, add the `@next`
+tag: `npm install -g @algorandfoundation/ac2-cli@next`.
 
 To try it without installing anything:
 
 ```sh
-npx @algorandfoundation/ac2-cli@next --help
+npx @algorandfoundation/ac2-cli --help
 ```
 
 Requirements: Node.js 22 or newer, and an OS keychain (macOS Keychain, Linux
@@ -154,7 +160,7 @@ it.
 earlier: the command detected "was I run directly?" by comparing paths in a way
 that never matched the `node_modules/.bin/ac2` symlink npm, pnpm and `npx`
 install (and never matched on Windows at all), so it exited silently with status
-0. Upgrade — `npm install -g @algorandfoundation/ac2-cli@next`.
+0. Upgrade — `npm install -g @algorandfoundation/ac2-cli`.
 
 **A supervised service ignores `AC2_STATE_DIR`.** Fixed: the units written by
 `ac2 service install` used to forward `AC2_HOME` only, so the state directory

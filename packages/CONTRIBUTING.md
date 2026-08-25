@@ -102,13 +102,13 @@ pnpm docs             # typedoc
 1. Fork and create a feature branch.
 2. Add or update tests for any behavior change.
 3. Run `pnpm -r build && pnpm -r test` locally.
-4. Open a PR against `main`. Describe the change, link any related issues, and call out spec impact if any.
+4. Open a PR against `master`. Describe the change, link any related issues, and call out spec impact if any.
 
 ## Releasing
 
-Releases are automated by `.github/workflows/release.yml` on pushes to `main` / `release`. Maintainers should:
+Releases are automated by `.github/workflows/release.yml` on pushes to `master` / `release`. Maintainers should:
 
-- Land changes on `main` via PR.
+- Land changes on `master` via PR.
 - Promote `release` when ready to cut a version.
 - The workflow runs `pnpm install`, `pnpm run --if-present build`, and `pnpm run release`, then publishes with npm provenance (`publishConfig.provenance: true`).
 
