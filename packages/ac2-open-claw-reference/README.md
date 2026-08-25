@@ -22,15 +22,24 @@ The wallet connection itself is owned by the separate
 
 ## Install
 
-With OpenClaw already installed, the quickest path is the setup script, which
-installs this plugin, wires it up, restarts the gateway, and starts wallet
-pairing:
+**Prerequisites:** Node.js 22 or newer and an OpenClaw agent already set up. The AC2
+service (`@algorandfoundation/ac2-cli`) ships as a dependency of this plugin and
+is started for you from that bundled copy — you do **not** need to install it
+globally or have an `ac2` binary on your `PATH`. The native WebRTC and keychain
+dependencies belong to that bundled service, not to this plugin.
+
+### Automated installation
+
+The quickest path is the setup script, which installs this plugin, wires it up,
+restarts the gateway, and starts wallet pairing:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/algorandfoundation/ac2/master/install.sh | bash
 ```
 
-Or do the same by hand:
+### Manual installation
+
+Run these commands to install and configure the plugin:
 
 ```sh
 openclaw plugins install @algorandfoundation/ac2-open-claw-reference
@@ -39,15 +48,11 @@ openclaw ac2 setup          # writes the channel + tools into openclaw.json
 openclaw gateway restart
 ```
 
+### Installation notes
+
 Do not add `--pin`: OpenClaw records the moving spec, so both the OpenClaw
 updater and the plugin-only updater can find newer stable releases. To follow
 canary pre-releases instead, install with the `@next` tag.
-
-You need Node.js 22 or newer and an OpenClaw agent already set up. The AC2
-service (`@algorandfoundation/ac2-cli`) ships as a dependency of this plugin and
-is started for you from that bundled copy — you do **not** need to install it
-globally or have an `ac2` binary on your `PATH`. The native WebRTC and keychain
-dependencies belong to that bundled service, not to this plugin.
 
 ## Use it
 

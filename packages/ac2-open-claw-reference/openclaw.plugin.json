@@ -3,18 +3,9 @@
   "name": "AC2 Reference",
   "description": "Reference OpenClaw plugin for the AC2 protocol. The `ac2` channel owns pairing over Liquid Auth + WebRTC; signing, capabilities, and x402 paid fetch tools route through the active channel session.",
   "channels": ["ac2"],
-  "channelEnvVars": [
-    {
-      "name": "AC2_LIQUID_AUTH_SERVER",
-      "description": "Liquid Auth signaling server origin. Overrides the `liquidAuthServer` channel config at runtime. Defaults to https://debug.liquidauth.com when neither is set.",
-      "required": false
-    },
-    {
-      "name": "AC2_HEARTBEAT_TIMEOUT_MS",
-      "description": "Milliseconds without inbound ac2-heartbeat traffic before the plugin closes the channel. Defaults to 50000.",
-      "required": false
-    }
-  ],
+  "channelEnvVars": {
+    "ac2": ["AC2_LIQUID_AUTH_SERVER"]
+  },
   "skills": ["./skills"],
   "activation": {
     "onCommands": ["ac2"]
@@ -75,8 +66,7 @@
     "x402AlgodToken": { "label": "x402 Algod Token" }
   },
   "contracts": {
-    "tools": ["ac2_sign", "ac2_capabilities", "ac2_x402_fetch"],
-    "commands": ["ac2"]
+    "tools": ["ac2_sign", "ac2_capabilities", "ac2_x402_fetch"]
   },
   "toolMetadata": {
     "ac2_sign": {
