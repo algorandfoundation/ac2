@@ -92,6 +92,7 @@
     },
     "extensions": [
       "./dist/entry.js"
-    ]
+    ],
+    "setupEntry": "./dist/setup.index.js"
   }
 }

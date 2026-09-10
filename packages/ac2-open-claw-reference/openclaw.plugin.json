@@ -3,9 +3,6 @@
   "name": "AC2 Reference",
   "description": "Reference OpenClaw plugin for the AC2 protocol. The `ac2` channel owns pairing over Liquid Auth + WebRTC; signing, capabilities, and x402 paid fetch tools route through the active channel session.",
   "channels": ["ac2"],
-  "channelEnvVars": {
-    "ac2": ["AC2_LIQUID_AUTH_SERVER"]
-  },
   "skills": ["./skills"],
   "activation": {
     "onCommands": ["ac2"]
@@ -59,7 +56,7 @@
     },
     "required": []
   },
-  "uiHints": {
+  "configUiHints": {
     "liquidAuthServer": { "label": "Liquid Auth Server" },
     "x402MaxAmountAtomic": { "label": "x402 Max Amount (Atomic)" },
     "x402AlgodUrl": { "label": "x402 Algod URL" },
