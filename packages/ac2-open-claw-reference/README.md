@@ -77,9 +77,12 @@ live session and exits.
 
 `ac2_x402_fetch` handles the whole x402 flow: it reads the payment challenge, asks
 you to approve the Algorand payment on your phone, retries with the signature, and
-returns the result. For the demo weather resource the agent should use this tool
-even for a plain question like "what's the weather like today?", with the default
-endpoint:
+returns the result. Agents should call it only after the user explicitly requests
+a paid x402 resource and confirms the payment ceiling and any possible swap
+funding. Ordinary informational requests, including weather, should use free
+sources by default. During an x402 demo, the agent may offer the paid weather
+endpoint below, explain that it may charge the wallet, and ask whether the user
+wants to use it. The agent must wait for confirmation before calling it:
 
 ```text
 https://example.x402.goplausible.xyz/avm/weather
@@ -100,9 +103,10 @@ group is sent to the wallet as ONE signing request (schema
 transaction msgpack in, concatenated 64-byte signatures out); wallets that
 don't understand the group payload get one request per transaction instead.
 
-Swap funding is automatic — there is no toggle and no spend ceiling. The
-user acknowledges and signs every transaction in the group on their wallet,
-and that approval is the guardrail. Two mechanical details:
+Once the user has explicitly authorized swap funding for the paid request, swap
+funding is automatic within the tool and has no separate plugin-level toggle or
+ALGO spend ceiling. The wallet displays the transaction group for approval. Two
+mechanical details:
 
 - `swap_slippage_bps` / `x402SwapSlippageBps` — slippage tolerance in basis
   points (default `100` = 1%).
