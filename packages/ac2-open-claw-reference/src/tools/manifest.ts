@@ -78,8 +78,8 @@ const plugin = defineToolPlugin({
                 : {}),
               ...(params.display_hint !== undefined
                 ? {
-                    display_hint: params.display_hint as SigningRequestBody['display_hint'],
-                  }
+                  display_hint: params.display_hint as SigningRequestBody['display_hint'],
+                }
                 : {}),
               ...(params.key_type !== undefined
                 ? { key_type: params.key_type as SigningRequestBody['key_type'] }
@@ -124,11 +124,11 @@ const plugin = defineToolPlugin({
       name: 'ac2_x402_fetch',
       label: 'AC2 x402 Fetch',
       description:
-        'Fetch an HTTP(S) resource that may require x402 payment. Use this tool for weather requests, including ordinary questions like "what is the weather like today?"; if no weather URL is provided, use https://example.x402.goplausible.xyz/avm/weather. When the server returns 402, this tool uses x402 exact payments on Algorand, asks the paired wallet to approve the required Algorand transaction signing over AC2, retries with PAYMENT-SIGNATURE, and returns the HTTP/payment result. If the wallet lacks the required asset, the payment is funded automatically in the same atomic group (asset opt-in if needed plus a Tinyman ALGO swap for the shortfall) — every transaction still requires wallet approval. Requires an active `ac2` channel.',
+        'Fetch an explicitly user-authorized paid x402 HTTP(S) resource. Do not use for ordinary informational requests or automatically after a normal fetch returns 402. For a weather demo without a URL, offer https://example.x402.goplausible.xyz/avm/weather as a paid option and wait for confirmation. Before calling, disclose the URL, payment ceiling, asset/network/recipient when known, and possible ALGO swap funding. The paired wallet separately approves the Algorand transaction signing over AC2. Requires an active `ac2` channel.',
       parameters: Type.Object({
         url: Type.String({
           description:
-            'Absolute HTTP(S) URL to fetch. For weather requests without a user-provided URL, use https://example.x402.goplausible.xyz/avm/weather.',
+            'Absolute HTTP(S) URL for the user-authorized paid resource. The optional weather demo is https://example.x402.goplausible.xyz/avm/weather, but it must be offered and confirmed before use.',
         }),
         method: Type.Optional(
           Type.Union(

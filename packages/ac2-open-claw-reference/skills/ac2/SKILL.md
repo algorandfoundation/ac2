@@ -1,6 +1,6 @@
 ---
 name: ac2
-description: "How to use the AC2 channel to ask the user's connected wallet to sign bytes over a live WebRTC link. Use this whenever the user asks you to 'sign', 'approve', or 'authorize' something with their wallet — even if they don't say 'AC2'. ALSO REQUIRED for any git work: before running `git commit` read this skill — commits MUST be signed by the user's AC2 wallet (never with your own or an invented identity), and it documents the commit → `git-sign` rhythm. The agent never holds keys; the wallet does."
+description: "How to use the AC2 channel to ask the user's connected wallet to sign bytes over a live WebRTC link. Use this whenever the user asks you to 'sign', 'approve', or 'authorize' something with their wallet — even if they don't say 'AC2'. In a conversation where an AC2 wallet session is connected, also read this before you create or amend a git commit: commits made in that session are signed by the user's AC2 wallet (never with your own or an invented identity), and it documents the commit → `git-sign` rhythm. With no connected session, git behaves normally and there is no signing step. The agent never holds keys; the wallet does."
 metadata:
   {
     "openclaw":
@@ -98,9 +98,21 @@ Concretely:
 
 ## Paid HTTP with x402 on Algorand
 
-Use **`ac2_x402_fetch`** when the user asks you to call a paid API/resource that uses x402, when a normal fetch returns an x402 `402 Payment Required` response, or when the user asks an ordinary weather question such as "what's the weather like today?"
+Use **`ac2_x402_fetch`** for a paid x402 resource in two situations: the user explicitly asks to access one, or a normal fetch comes back `402 Payment Required` and the user then authorizes the payment. Either way the user must authorize a payment limit for that request before the call. Never infer payment intent from an ordinary informational request, including weather. Prefer free or already-authorized resources when the user has not specifically requested a paid x402 resource.
 
-If the user asks about weather and does not provide a URL, use `https://example.x402.goplausible.xyz/avm/weather`. Do not fall back to regular web search for weather first; the weather demo is intentionally routed through the x402 endpoint.
+If a normal fetch returns `402 Payment Required`, do not automatically retry. Tell the user that the resource requires payment, identify the URL and proposed maximum charge, and ask whether they want to proceed. A general request to fetch or research something is not payment authorization. Once they authorize it, `ac2_x402_fetch` is how you complete that request — it is the paid-fetch path, so do not hand-roll the payment with `ac2_sign` or drop the request.
+
+When demonstrating x402 with a weather request and the user has not supplied a URL, you may offer `https://example.x402.goplausible.xyz/avm/weather` as the paid demo endpoint. Clearly say that using it may charge their wallet and ask whether they want to use it. Do not call the endpoint until the user confirms and authorizes the payment limit.
+
+Before calling the tool, disclose:
+
+- the resource URL and why it is being accessed;
+- the maximum payment amount and asset;
+- the allowed network and recipient, when known;
+- that the wallet will show a separate approval request; and
+- whether the call may swap ALGO for the payment asset and incur swap costs.
+
+Proceed only after the user explicitly confirms that paid request. Scope the call with the narrowest available `max_amount_atomic`, `allowed_networks`, `allowed_assets`, and `allowed_pay_to` values. Do not treat wallet approval as a substitute for obtaining payment intent in the conversation.
 
 The tool:
 
@@ -112,7 +124,7 @@ The tool:
 
 You do **not** need to call `ac2_sign` manually for x402 payments. Prefer `ac2_x402_fetch` so the spend limit, network/asset/payee allow-lists, signing description, and signed transaction packaging stay consistent.
 
-If the wallet does not hold the required asset, the tool funds the payment automatically in the same atomic group (asset opt-in if needed plus an ALGO swap for the shortfall). The group goes to the wallet as one signing request; wallets that don't support group payloads approve each transaction instead. When the result reports this (`swapFunding`), tell the user in one plain sentence — e.g. "your wallet didn't have USDC, so I swapped ~0.13 ALGO to cover it" — before summarizing the fetched content.
+If swap funding is possible, obtain explicit authorization for it before calling the tool. The tool may fund the payment automatically in the same atomic group when the wallet does not hold the required asset (asset opt-in if needed plus an ALGO swap for the shortfall). The group goes to the wallet as one signing request; wallets that don't support group payloads approve each transaction instead. When the result reports this (`swapFunding`), tell the user in one plain sentence — e.g. "your wallet didn't have USDC, so the approved group swapped up to ~0.13 ALGO to cover it" — before summarizing the fetched content.
 
 Important parameters:
 
@@ -125,9 +137,9 @@ Treat `{ status: "rejected" }` as a normal user decision. Do not retry the same 
 
 ## Git commit signing over AC2
 
-The paired account's Ed25519 **public key** doubles as a **git SSH signing public key**. Use this flow for **any** git commit work on this channel — not just when the user explicitly says "sign my commits". Commits are created normally (unsigned) and then signed **in place** by the user's wallet with `openclaw ac2 git-sign`; there is no git-side signing configuration.
+The paired account's Ed25519 **public key** doubles as a **git SSH signing public key**. This applies to the **current AC2 session only**: while a wallet is connected on the `ac2` channel in this conversation, commits you create or amend here get wallet-signed. It is not a global git policy — with no connected session, git behaves normally and there is no `git-sign` step. Do not change the repo's git config to make it permanent. Commits are created normally (unsigned) and then signed **in place** by the user's wallet with `openclaw ac2 git-sign`; there is no git-side signing configuration.
 
-**Non-negotiable: commits are signed by the user's wallet, never by you.** Do not generate, use, or configure any local SSH/GPG key of your own: nothing in git enforces this model — you do. Every commit gets wallet-signed via `git-sign` right after it is created.
+**Non-negotiable: commits are signed by the user's wallet, never by you.** Do not generate, use, or configure any local SSH/GPG key of your own: nothing in git enforces this model — you do. Every commit **you create in this session** gets wallet-signed via `git-sign` right after it is created.
 
 **Signing needs no setup.** `git-sign` works immediately on any repo — no SSH keys, no key registration, no git platform account. Registering that public key with a git platform only controls whether a commit shows a verified badge there; it has no bearing on local commits or on signing itself. **Do not raise key upload, SSH keys, or git platform account details unless the user explicitly asks about verification** — never as part of ordinary committing.
 
@@ -140,7 +152,8 @@ openclaw ac2 git-sign <repo-dir>    # wallet approval; commit rewritten signed i
 
 - **Always pass `--no-gpg-sign`** to `git commit` (and to `git commit --amend`, and rebase via `git rebase -c commit.gpgsign=false` or re-sign after): the machine's git config may auto-sign with the user's own SSH/GPG key, and that key is never the AC2 signing key. `git-sign` strips and replaces a foreign signature (with a wallet approval), so a slip-through is recoverable — but creating commits unsigned is the correct path.
 - `git-sign <repo-dir>` signs the tip of `HEAD` in place. The commit hash changes; the ref is moved with a compare-and-swap, so sign before anything records the old hash.
-- Made several commits (or a rebase/merge produced a chain)? Sign them all in one pass: `openclaw ac2 git-sign <repo-dir> --base origin/<branch>` — each commit gets its own wallet approval (`Sign git commit: "…"`), oldest first, with parent hashes rewritten along the chain. Tell the user approvals are coming before you run it.
+- Made several commits in this session? Sign them in one pass: `openclaw ac2 git-sign <repo-dir> --base <first-commit-you-made>^` — the base is the **parent of the first commit you created here**. `--base` rewrites *every* commit in `<base>..HEAD`, so any base reaching further back re-signs pre-existing local or merged commits you did not create; `origin/<branch>` is correct only when it is exactly that parent. Each commit gets its own wallet approval (`Sign git commit: "…"`), oldest first, with parent hashes rewritten along the chain. Tell the user approvals are coming before you run it.
+- A merge commit you just created is signed **tip-only**: `openclaw ac2 git-sign <repo-dir>` with no `--base`. A range spanning a merge includes the merged branch's commits, which are not yours to re-sign.
 - `already signed — nothing to do` is a success, not an error.
 - A declined wallet approval aborts with the ref untouched — a normal user decision, don't retry. If it fails with `no active AC2 wallet session`, ask the user to connect/pair their wallet (`openclaw ac2 pair`) — don't retry in a loop.
 - Never work around a signing failure by substituting a different key — the user's wallet approval is the point. If the user asks why commits show as unverified, that's when to mention `openclaw ac2 git-key` (registering that public key with their git platform) and the committer email match — don't volunteer it otherwise.
