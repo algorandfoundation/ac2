@@ -1,3 +1,14 @@
+# [ac2-open-claw-reference@1.0.1-canary.1](https://github.com/algorandfoundation/ac2/compare/ac2-open-claw-reference@1.0.0...ac2-open-claw-reference@1.0.1-canary.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **openclaw:** base git-sign ranges on session-created commits ([5243b59](https://github.com/algorandfoundation/ac2/commit/5243b59ffd4dd3b5ad6ab84893a434c6ac34519e))
+* **openclaw:** keep 402 responses routed to ac2_x402_fetch ([7c2848f](https://github.com/algorandfoundation/ac2/commit/7c2848fb767973316d7b540d10ca62a859796f6a))
+* **openclaw:** migrate plugin setup metadata ([2eea5a9](https://github.com/algorandfoundation/ac2/commit/2eea5a900488c226c9e438213fe5f9fd50ac24b5))
+* **openclaw:** require consent for x402 demos ([4b274a1](https://github.com/algorandfoundation/ac2/commit/4b274a11f6fd6e51c49d083213c373593544a37b))
+* **openclaw:** scope git commit signing to the session ([919ca3b](https://github.com/algorandfoundation/ac2/commit/919ca3bfd81e466e780e25ad535636ae0a3f7a2d))
+
 # ac2-open-claw-reference@1.0.0 (2026-08-25)
 
 
