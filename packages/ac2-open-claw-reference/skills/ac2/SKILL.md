@@ -98,9 +98,9 @@ Concretely:
 
 ## Paid HTTP with x402 on Algorand
 
-Use **`ac2_x402_fetch`** only when the user explicitly asks to access a paid x402 API/resource and authorizes a payment limit for that request. Never infer payment intent from an ordinary informational request, including weather. Prefer free or already-authorized resources when the user has not specifically requested a paid x402 resource.
+Use **`ac2_x402_fetch`** for a paid x402 resource in two situations: the user explicitly asks to access one, or a normal fetch comes back `402 Payment Required` and the user then authorizes the payment. Either way the user must authorize a payment limit for that request before the call. Never infer payment intent from an ordinary informational request, including weather. Prefer free or already-authorized resources when the user has not specifically requested a paid x402 resource.
 
-If a normal fetch returns `402 Payment Required`, do not automatically retry with `ac2_x402_fetch`. Tell the user that the resource requires payment, identify the URL and proposed maximum charge, and ask whether they want to proceed. A general request to fetch or research something is not payment authorization.
+If a normal fetch returns `402 Payment Required`, do not automatically retry. Tell the user that the resource requires payment, identify the URL and proposed maximum charge, and ask whether they want to proceed. A general request to fetch or research something is not payment authorization. Once they authorize it, `ac2_x402_fetch` is how you complete that request — it is the paid-fetch path, so do not hand-roll the payment with `ac2_sign` or drop the request.
 
 When demonstrating x402 with a weather request and the user has not supplied a URL, you may offer `https://example.x402.goplausible.xyz/avm/weather` as the paid demo endpoint. Clearly say that using it may charge their wallet and ask whether they want to use it. Do not call the endpoint until the user confirms and authorizes the payment limit.
 
